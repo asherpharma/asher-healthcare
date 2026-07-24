@@ -1,86 +1,35 @@
-import {
-  Baby,
-  HeartPulse,
-  ShieldPlus,
-  Stethoscope,
-  Activity,
-  Heart,
-} from "lucide-react";
+import { Activity, Baby, Heart, HeartHandshake, Microscope, ShieldPlus, Sparkles, Stethoscope } from "lucide-react";
 
 const services = [
-  {
-    title: "Obstetrics & Gynaecology",
-    description:
-      "Complete women's healthcare including pregnancy, infertility and routine checkups.",
-    icon: Heart,
-  },
-  {
-    title: "Pregnancy Care",
-    description:
-      "Comprehensive antenatal and postnatal care for a healthy pregnancy journey.",
-    icon: HeartPulse,
-  },
-  {
-    title: "Pediatrics",
-    description:
-      "Complete healthcare for newborns, infants, children and adolescents.",
-    icon: Baby,
-  },
-  {
-    title: "Vaccination",
-    description:
-      "Routine immunizations following the latest national vaccination schedule.",
-    icon: ShieldPlus,
-  },
-  {
-    title: "Women's Wellness",
-    description:
-      "Preventive health checkups, menstrual care and menopause management.",
-    icon: Activity,
-  },
-  {
-    title: "Child Development",
-    description:
-      "Growth monitoring, nutrition advice and developmental assessments.",
-    icon: Stethoscope,
-  },
+  { icon: Baby, title: "Pediatric Care", text: "Thoughtful consultations for newborns, infants, children and adolescents." },
+  { icon: ShieldPlus, title: "Vaccinations", text: "Age-appropriate immunisation guidance with clear follow-up schedules." },
+  { icon: Activity, title: "Allergy & Asthma", text: "Specialist assessment and long-term care plans for respiratory and allergic conditions." },
+  { icon: Heart, title: "Pregnancy Care", text: "Personal antenatal and postnatal support throughout your pregnancy journey." },
+  { icon: Stethoscope, title: "Women's Health", text: "Routine gynaecology, menstrual health, PCOS and preventive wellness care." },
+  { icon: Sparkles, title: "Fertility Support", text: "Sensitive infertility evaluation, counselling and coordinated treatment planning." },
+  { icon: Microscope, title: "Laparoscopic Care", text: "Evaluation and surgical guidance with a minimally invasive approach where suitable." },
+  { icon: HeartHandshake, title: "Growth & Nutrition", text: "Growth monitoring, developmental review and practical nutrition guidance for children." },
 ];
 
 export default function Services() {
   return (
-    <section id="services" className="bg-white py-24">
-      <div className="mx-auto max-w-7xl px-6">
-        <div className="text-center">
-          <h2 className="text-4xl font-bold text-[#233A59]">
-            Our Services
-          </h2>
-
-          <p className="mt-4 text-slate-600">
-            Comprehensive healthcare services for women and children.
-          </p>
+    <section id="services" className="section section-soft">
+      <div className="site-shell">
+        <div className="section-heading split-heading">
+          <div><span className="section-kicker">Care for every chapter</span><h2>Specialist services, under one roof.</h2></div>
+          <p>From a newborn&apos;s first check-up to a woman&apos;s lifelong wellness, our clinic is designed around continuity, clarity and comfort.</p>
         </div>
-
-        <div className="mt-14 grid gap-8 md:grid-cols-2 lg:grid-cols-3">
-          {services.map((service) => {
+        <div className="service-grid">
+          {services.map((service, index) => {
             const Icon = service.icon;
-
             return (
-              <div
-                key={service.title}
-                className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm transition-all duration-300 hover:-translate-y-2 hover:shadow-xl"
-              >
-                <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-[#233A59]/10">
-                  <Icon className="h-8 w-8 text-[#233A59]" />
-                </div>
-
-                <h3 className="text-xl font-semibold text-[#233A59]">
-                  {service.title}
-                </h3>
-
-                <p className="mt-4 leading-7 text-slate-600">
-                  {service.description}
-                </p>
-              </div>
+              <article className="service-card" key={service.title}>
+                <span className="service-number">{String(index + 1).padStart(2, "0")}</span>
+                <div className="service-icon"><Icon /></div>
+                <h3>{service.title}</h3>
+                <p>{service.text}</p>
+                <a href="#appointment">Book this service <span>→</span></a>
+              </article>
             );
           })}
         </div>
