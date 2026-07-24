@@ -118,7 +118,7 @@ function PatientRegister() {
     return onSnapshot(patientsQuery, (snapshot) => {
       setPatients(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Patient));
     });
-  }, []);
+  }, [db]);
 
   const selectedPatient = useMemo(
     () => patients.find((patient) => patient.id === selectedId) ?? null,
@@ -139,7 +139,7 @@ function PatientRegister() {
       subscribe<PregnancyRecord>("pregnancyRecords", setPregnancyRecords),
     ];
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
-  }, [selectedId]);
+  }, [db, selectedId]);
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();

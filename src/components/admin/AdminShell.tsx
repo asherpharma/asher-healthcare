@@ -45,7 +45,7 @@ function StaffChrome({ children }: { children: ReactNode }) {
             {navigation.map((item) => {
               const Icon = item.icon;
               const active = pathname === item.href;
-              return <Link key={item.href} href={item.href} className={"flex items-center justify-center gap-2 rounded-xl px-3 py-3 text-sm font-bold transition lg:justify-start " + (active ? "bg-white text-[#233A59]" : "text-white/80 hover:bg-white/10 hover:text-white")}><Icon size={18} />{item.label}</Link>;
+              return <Link key={item.href} href={item.href} style={active ? { color: "#233A59" } : undefined} className={"flex items-center justify-center gap-2 rounded-xl px-3 py-3 text-sm font-bold transition lg:justify-start " + (active ? "bg-white" : "text-white/80 hover:bg-white/10 hover:text-white")}><Icon size={18} />{item.label}</Link>;
             })}
           </nav>
         </aside>
