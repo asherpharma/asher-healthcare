@@ -1,6 +1,103 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function staffProfile() {
+      return get(/databases/$(database)/documents/staff/$(request.auth.uid));
+    }
+
+    function isStaff() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/staff/$(request.auth.uid))
+        && staffProfile().data.active == true
+        && staffProfile().data.role in ['admin', 'doctor', 'reception'];
+    }
+
+    function isAdmin() {
+      return isStaff() && staffProfile().data.role == 'admin';
+    }
+
+    function validAppointment() {
+      return request.resource.data.keys().hasOnly([
+          'patientName', 'phone', 'doctorId', 'preferredDate', 'preferredTime',
+          'reason', 'status', 'source', 'privacyAccepted', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.patientName is string
+        && request.resource.data.patientName.size() >= 2
+        && request.resource.data.patientName.size() <= 80
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() >= 10
+        && request.resource.data.phone.size() <= 20
+        && request.resource.data.doctorId in ['pediatrics', 'obg']
+        && request.resource.data.preferredDate is string
+        && request.resource.data.preferredDate.size() == 10
+        && request.resource.data.preferredTime in ['morning', 'afternoon', 'evening']
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() <= 500
+        && request.resource.data.status == 'requested'
+        && request.resource.data.source == 'website'
+        && request.resource.data.privacyAccepted == true
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    match /appointments/{appointmentId} {
+      allow create: if validAppointment();
+      allow read: if isStaff();
+      allow update: if isStaff()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+        && request.resource.data.status in ['requested', 'confirmed', 'completed', 'cancelled']
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if isAdmin();
+    }
+
+    match /staff/{staffId} {
+      allow read: if signedIn() && (request.auth.uid == staffId || isAdmin());
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /patients/{patientId} {
+      allow read: if isStaff();
+      allow create: if isStaff()
+        && request.resource.data.keys().hasOnly([
+          'fullName', 'phone', 'dateOfBirth', 'gender', 'address', 'allergies',
+          'medicalHistory', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.fullName is string
+        && request.resource.data.fullName.size() >= 2
+        && request.resource.data.fullName.size() <= 100
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() >= 10
+        && request.resource.data.phone.size() <= 20
+        && request.resource.data.dateOfBirth is string
+        && request.resource.data.dateOfBirth.size() == 10
+        && request.resource.data.gender in ['female', 'male', 'other']
+        && request.resource.data.address is string
+        && request.resource.data.address.size() <= 300
+        && request.resource.data.allergies is string
+        && request.resource.data.allergies.size() <= 500
+        && request.resource.data.medicalHistory is string
+        && request.resource.data.medicalHistory.size() <= 1000
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if isStaff() && request.resource.data.updatedAt == request.time;
+      allow delete: if isAdmin();
+
+      match /visits/{visitId} {
+        allow read, create, update: if isStaff();
+        allow delete: if isAdmin();
+      }
+
+      match /prescriptions/{prescriptionId} {
+        allow read, create, update: if isStaff();
+        allow delete: if isAdmin();
+      }
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
