@@ -44,6 +44,20 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time;
     }
 
+    function validClinicalCreate() {
+      return isStaff()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    function validClinicalUpdate() {
+      return isStaff()
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time;
+    }
+
     match /appointments/{appointmentId} {
       allow create: if validAppointment();
       allow read: if isStaff();
@@ -63,9 +77,11 @@ service cloud.firestore {
       allow read: if isStaff();
       allow create: if isStaff()
         && request.resource.data.keys().hasOnly([
-          'fullName', 'phone', 'dateOfBirth', 'gender', 'address', 'allergies',
-          'medicalHistory', 'createdBy', 'createdAt', 'updatedAt'
+          'patientNumber', 'fullName', 'phone', 'dateOfBirth', 'gender', 'address',
+          'allergies', 'medicalHistory', 'createdBy', 'createdAt', 'updatedAt'
         ])
+        && request.resource.data.patientNumber is string
+        && request.resource.data.patientNumber.size() <= 20
         && request.resource.data.fullName is string
         && request.resource.data.fullName.size() >= 2
         && request.resource.data.fullName.size() <= 100
@@ -84,16 +100,39 @@ service cloud.firestore {
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.createdAt == request.time
         && request.resource.data.updatedAt == request.time;
-      allow update: if isStaff() && request.resource.data.updatedAt == request.time;
+      allow update: if isStaff()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'fullName', 'phone', 'dateOfBirth', 'gender', 'address', 'allergies',
+          'medicalHistory', 'updatedAt'
+        ])
+        && request.resource.data.updatedAt == request.time;
       allow delete: if isAdmin();
 
       match /visits/{visitId} {
-        allow read, create, update: if isStaff();
+        allow read: if isStaff();
+        allow create: if validClinicalCreate();
+        allow update: if validClinicalUpdate();
         allow delete: if isAdmin();
       }
 
       match /prescriptions/{prescriptionId} {
-        allow read, create, update: if isStaff();
+        allow read: if isStaff();
+        allow create: if validClinicalCreate();
+        allow update: if validClinicalUpdate();
+        allow delete: if isAdmin();
+      }
+
+      match /vaccinations/{vaccinationId} {
+        allow read: if isStaff();
+        allow create: if validClinicalCreate();
+        allow update: if validClinicalUpdate();
+        allow delete: if isAdmin();
+      }
+
+      match /pregnancyRecords/{pregnancyRecordId} {
+        allow read: if isStaff();
+        allow create: if validClinicalCreate();
+        allow update: if validClinicalUpdate();
         allow delete: if isAdmin();
       }
     }
