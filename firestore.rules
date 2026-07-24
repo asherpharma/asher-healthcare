@@ -135,6 +135,13 @@ service cloud.firestore {
         allow update: if validClinicalUpdate();
         allow delete: if isAdmin();
       }
+
+      match /reports/{reportId} {
+        allow read: if isStaff();
+        allow create: if validClinicalCreate();
+        allow update: if validClinicalUpdate();
+        allow delete: if isAdmin();
+      }
     }
 
     match /{document=**} {

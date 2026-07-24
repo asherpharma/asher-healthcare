@@ -2,7 +2,8 @@
 
 import AdminShell from "@/components/admin/AdminShell";
 import { useStaff } from "@/components/admin/StaffGuard";
-import { firestore } from "@/firebase/config";
+import { firestore, storage } from "@/firebase/config";
+import { downloadPrescriptionPdf } from "@/lib/prescription-pdf";
 import {
   addDoc,
   collection,
@@ -16,13 +17,18 @@ import {
   updateDoc,
   type Timestamp,
 } from "firebase/firestore";
+import { getBlob, ref, uploadBytes } from "firebase/storage";
 import {
   Activity,
   Baby,
   CalendarClock,
   ChevronRight,
   ClipboardPlus,
+  Download,
+  ExternalLink,
   FileHeart,
+  FileText,
+  FileUp,
   LoaderCircle,
   NotebookTabs,
   Plus,
@@ -83,7 +89,16 @@ type PregnancyRecord = BaseRecord & {
   nextVisitDate: string;
   notes: string;
 };
-type TabKey = "overview" | "visits" | "prescriptions" | "vaccinations" | "pregnancy";
+type ReportRecord = BaseRecord & {
+  fileName: string;
+  storagePath: string;
+  contentType: string;
+  size: number;
+  category: string;
+  reportDate: string;
+  notes: string;
+};
+type TabKey = "overview" | "visits" | "prescriptions" | "vaccinations" | "pregnancy" | "reports";
 
 const inputClass = "mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 font-normal text-slate-900 outline-none transition focus:border-[#233A59] focus:ring-2 focus:ring-[#233A59]/10";
 const labelClass = "text-sm font-bold text-slate-700";
@@ -97,9 +112,15 @@ function formatCreatedAt(value?: Timestamp) {
   return value ? value.toDate().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "Just now";
 }
 
+function formatFileSize(bytes: number) {
+  if (bytes < 1024 * 1024) return Math.max(1, Math.round(bytes / 1024)) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+
 function PatientRegister() {
   const { user, profile } = useStaff();
   const db = firestore!;
+  const files = storage!;
   const [patients, setPatients] = useState<Patient[]>([]);
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
@@ -112,6 +133,9 @@ function PatientRegister() {
   const [prescriptions, setPrescriptions] = useState<PrescriptionRecord[]>([]);
   const [vaccinations, setVaccinations] = useState<VaccinationRecord[]>([]);
   const [pregnancyRecords, setPregnancyRecords] = useState<PregnancyRecord[]>([]);
+  const [reports, setReports] = useState<ReportRecord[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [reportActionId, setReportActionId] = useState<string | null>(null);
 
   useEffect(() => {
     const patientsQuery = query(collection(db, "patients"), orderBy("createdAt", "desc"), limit(100));
@@ -137,6 +161,7 @@ function PatientRegister() {
       subscribe<PrescriptionRecord>("prescriptions", setPrescriptions),
       subscribe<VaccinationRecord>("vaccinations", setVaccinations),
       subscribe<PregnancyRecord>("pregnancyRecords", setPregnancyRecords),
+      subscribe<ReportRecord>("reports", setReports),
     ];
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
   }, [db, selectedId]);
@@ -226,12 +251,89 @@ function PatientRegister() {
     }
   }
 
+
+
+  async function uploadReport(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedPatient) return;
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const file = form.get("reportFile");
+    if (!(file instanceof File) || file.size === 0) {
+      setMessage("Choose a PDF or image to upload.");
+      return;
+    }
+    if (file.type !== "application/pdf" && !file.type.startsWith("image/")) {
+      setMessage("Only PDF and image reports are allowed.");
+      return;
+    }
+    if (file.size >= 10 * 1024 * 1024) {
+      setMessage("Reports must be smaller than 10 MB.");
+      return;
+    }
+
+    setUploading(true);
+    setMessage("");
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-") || "report";
+    const storagePath = "reports/" + selectedPatient.id + "/" + Date.now() + "-" + safeName;
+    try {
+      await uploadBytes(ref(files, storagePath), file, {
+        contentType: file.type,
+        customMetadata: { patientId: selectedPatient.id, uploadedBy: user.uid },
+      });
+      await addDoc(collection(db, "patients", selectedPatient.id, "reports"), {
+        fileName: file.name,
+        storagePath,
+        contentType: file.type,
+        size: file.size,
+        category: text(form, "category"),
+        reportDate: text(form, "reportDate"),
+        notes: text(form, "notes"),
+        createdBy: user.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      formElement.reset();
+      setMessage("Medical report uploaded securely.");
+    } catch {
+      setMessage("Unable to upload this report. Please check access and try again.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function accessReport(record: ReportRecord, mode: "view" | "download") {
+    setReportActionId(record.id);
+    setMessage("");
+    try {
+      const blob = await getBlob(ref(files, record.storagePath));
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      if (mode === "view") {
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+      } else {
+        link.download = record.fileName;
+      }
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch {
+      setMessage("Unable to open this report. Please check access and try again.");
+    } finally {
+      setReportActionId(null);
+    }
+  }
+
   const tabs: Array<{ key: TabKey; label: string; icon: typeof Activity; count?: number }> = [
     { key: "overview", label: "Overview", icon: UserRound },
     { key: "visits", label: "Visits", icon: Stethoscope, count: visits.length },
     { key: "prescriptions", label: "Prescriptions", icon: FileHeart, count: prescriptions.length },
     { key: "vaccinations", label: "Vaccinations", icon: Syringe, count: vaccinations.length },
     { key: "pregnancy", label: "Pregnancy", icon: Baby, count: pregnancyRecords.length },
+    { key: "reports", label: "Reports", icon: FileText, count: reports.length },
   ];
 
   return (
@@ -298,9 +400,10 @@ function PatientRegister() {
               <div className="p-5 sm:p-7">
                 {activeTab === "overview" && <Overview patient={selectedPatient} showEdit={showEdit} setShowEdit={setShowEdit} editPatient={editPatient} saving={saving} />}
                 {activeTab === "visits" && <VisitsPanel records={visits} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "visits", { visitDate: text(form, "visitDate"), doctorName: text(form, "doctorName"), chiefComplaint: text(form, "chiefComplaint"), vitals: text(form, "vitals"), diagnosis: text(form, "diagnosis"), treatment: text(form, "treatment"), followUpDate: text(form, "followUpDate"), notes: text(form, "notes") }); }} />}
-                {activeTab === "prescriptions" && <PrescriptionsPanel records={prescriptions} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "prescriptions", { prescribedDate: text(form, "prescribedDate"), doctorName: text(form, "doctorName"), medicines: [{ name: text(form, "medicineName"), dose: text(form, "dose"), frequency: text(form, "frequency"), duration: text(form, "duration"), instructions: text(form, "instructions") }], advice: text(form, "advice") }); }} />}
+                {activeTab === "prescriptions" && <PrescriptionsPanel patient={selectedPatient} records={prescriptions} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "prescriptions", { prescribedDate: text(form, "prescribedDate"), doctorName: text(form, "doctorName"), medicines: [{ name: text(form, "medicineName"), dose: text(form, "dose"), frequency: text(form, "frequency"), duration: text(form, "duration"), instructions: text(form, "instructions") }], advice: text(form, "advice") }); }} />}
                 {activeTab === "vaccinations" && <VaccinationsPanel records={vaccinations} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "vaccinations", { vaccineName: text(form, "vaccineName"), administeredDate: text(form, "administeredDate"), nextDueDate: text(form, "nextDueDate"), batchNumber: text(form, "batchNumber"), notes: text(form, "notes") }); }} />}
                 {activeTab === "pregnancy" && <PregnancyPanel records={pregnancyRecords} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "pregnancyRecords", { recordedDate: text(form, "recordedDate"), lmpDate: text(form, "lmpDate"), eddDate: text(form, "eddDate"), gestationalWeeks: text(form, "gestationalWeeks"), bloodPressure: text(form, "bloodPressure"), weight: text(form, "weight"), fetalHeartRate: text(form, "fetalHeartRate"), nextVisitDate: text(form, "nextVisitDate"), notes: text(form, "notes") }); }} />}
+                {activeTab === "reports" && <ReportsPanel records={reports} uploading={uploading} actionId={reportActionId} onUpload={uploadReport} onAccess={accessReport} />}
               </div>
             </div>
           )}
@@ -332,8 +435,38 @@ function VisitsPanel({ records, saving, onSave }: { records: VisitRecord[]; savi
   return <div><SectionHeading icon={Stethoscope} title="Visit history" action="Consultation notes and follow-up" /><form onSubmit={onSave} className="grid gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2"><label className={labelClass}>Visit date<input name="visitDate" type="date" required className={inputClass} /></label><label className={labelClass}>Doctor<select name="doctorName" required defaultValue="" className={inputClass}><option value="" disabled>Select doctor</option><option>Dr. Lt Col Shafi Ahamad</option><option>Dr. Shaik Reshma</option></select></label><label className={labelClass + " sm:col-span-2"}>Chief complaint<textarea name="chiefComplaint" required rows={2} className={inputClass} /></label><label className={labelClass}>Vitals<input name="vitals" placeholder="Temp, pulse, BP, weight" className={inputClass} /></label><label className={labelClass}>Follow-up date<input name="followUpDate" type="date" className={inputClass} /></label><label className={labelClass}>Diagnosis<textarea name="diagnosis" required rows={3} className={inputClass} /></label><label className={labelClass}>Treatment plan<textarea name="treatment" rows={3} className={inputClass} /></label><label className={labelClass + " sm:col-span-2"}>Clinical notes<textarea name="notes" rows={2} className={inputClass} /></label><div className="sm:col-span-2"><SaveButton saving={saving} label="Add visit" /></div></form><div className="mt-5 space-y-3">{records.map((record) => <article key={record.id} className="rounded-2xl border border-slate-200 p-4"><div className="flex flex-wrap justify-between gap-2"><p className="font-bold text-[#233A59]">{record.visitDate} · {record.doctorName}</p><span className="text-xs text-slate-500">{formatCreatedAt(record.createdAt)}</span></div><p className="mt-3 text-sm font-medium text-slate-800">{record.chiefComplaint}</p><p className="mt-2 text-sm text-slate-600"><strong>Diagnosis:</strong> {record.diagnosis}</p>{record.treatment && <p className="mt-1 text-sm text-slate-600"><strong>Plan:</strong> {record.treatment}</p>}{record.followUpDate && <p className="mt-3 inline-flex items-center gap-1 rounded-lg bg-blue-50 px-2 py-1 text-xs font-bold text-blue-800"><CalendarClock size={13} /> Follow-up {record.followUpDate}</p>}</article>)}{records.length === 0 && <Empty label="No visits recorded yet" />}</div></div>;
 }
 
-function PrescriptionsPanel({ records, saving, onSave }: { records: PrescriptionRecord[]; saving: boolean; onSave: (event: FormEvent<HTMLFormElement>) => Promise<void> }) {
-  return <div><SectionHeading icon={FileHeart} title="Prescriptions" action="Medication and advice history" /><form onSubmit={onSave} className="grid gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2"><label className={labelClass}>Prescription date<input name="prescribedDate" type="date" required className={inputClass} /></label><label className={labelClass}>Doctor<select name="doctorName" required defaultValue="" className={inputClass}><option value="" disabled>Select doctor</option><option>Dr. Lt Col Shafi Ahamad</option><option>Dr. Shaik Reshma</option></select></label><label className={labelClass + " sm:col-span-2"}>Medicine<input name="medicineName" required className={inputClass} /></label><label className={labelClass}>Dose<input name="dose" placeholder="e.g. 5 ml" className={inputClass} /></label><label className={labelClass}>Frequency<input name="frequency" placeholder="e.g. twice daily" className={inputClass} /></label><label className={labelClass}>Duration<input name="duration" placeholder="e.g. 5 days" className={inputClass} /></label><label className={labelClass}>Instructions<input name="instructions" placeholder="After food" className={inputClass} /></label><label className={labelClass + " sm:col-span-2"}>Advice<textarea name="advice" rows={2} className={inputClass} /></label><div className="sm:col-span-2"><SaveButton saving={saving} label="Save prescription" /></div></form><div className="mt-5 space-y-3">{records.map((record) => <article key={record.id} className="rounded-2xl border border-slate-200 p-4"><p className="font-bold text-[#233A59]">{record.prescribedDate} · {record.doctorName}</p>{record.medicines?.map((medicine, index) => <div key={index} className="mt-3 rounded-xl bg-slate-50 p-3"><p className="font-bold text-slate-800">{medicine.name}</p><p className="mt-1 text-sm text-slate-600">{[medicine.dose, medicine.frequency, medicine.duration].filter(Boolean).join(" · ")}</p>{medicine.instructions && <p className="mt-1 text-xs text-slate-500">{medicine.instructions}</p>}</div>)}{record.advice && <p className="mt-3 text-sm text-slate-600"><strong>Advice:</strong> {record.advice}</p>}</article>)}{records.length === 0 && <Empty label="No prescriptions recorded yet" />}</div></div>;
+function PrescriptionsPanel({ patient, records, saving, onSave }: { patient: Patient; records: PrescriptionRecord[]; saving: boolean; onSave: (event: FormEvent<HTMLFormElement>) => Promise<void> }) {
+  return (
+    <div>
+      <SectionHeading icon={FileHeart} title="Prescriptions" action="Medication history and clinic-branded PDF prescriptions" />
+      <form onSubmit={onSave} className="grid gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2">
+        <label className={labelClass}>Prescription date<input name="prescribedDate" type="date" required className={inputClass} /></label>
+        <label className={labelClass}>Doctor<select name="doctorName" required defaultValue="" className={inputClass}><option value="" disabled>Select doctor</option><option>Dr. Lt Col Shafi Ahamad</option><option>Dr. Shaik Reshma</option></select></label>
+        <label className={labelClass + " sm:col-span-2"}>Medicine<input name="medicineName" required className={inputClass} /></label>
+        <label className={labelClass}>Dose<input name="dose" placeholder="e.g. 5 ml" className={inputClass} /></label>
+        <label className={labelClass}>Frequency<input name="frequency" placeholder="e.g. twice daily" className={inputClass} /></label>
+        <label className={labelClass}>Duration<input name="duration" placeholder="e.g. 5 days" className={inputClass} /></label>
+        <label className={labelClass}>Instructions<input name="instructions" placeholder="After food" className={inputClass} /></label>
+        <label className={labelClass + " sm:col-span-2"}>Advice<textarea name="advice" rows={2} className={inputClass} /></label>
+        <div className="sm:col-span-2"><SaveButton saving={saving} label="Save prescription" /></div>
+      </form>
+      <div className="mt-5 space-y-3">
+        {records.map((record) => (
+          <article key={record.id} className="rounded-2xl border border-slate-200 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <p className="font-bold text-[#233A59]">{record.prescribedDate} · {record.doctorName}</p>
+              <button type="button" onClick={() => void downloadPrescriptionPdf(patient, record)} className="inline-flex items-center gap-2 rounded-xl border border-[#233A59]/20 bg-blue-50 px-3 py-2 text-xs font-bold text-[#233A59] transition hover:bg-blue-100">
+                <Download size={15} /> Download PDF
+              </button>
+            </div>
+            {record.medicines?.map((medicine, index) => <div key={index} className="mt-3 rounded-xl bg-slate-50 p-3"><p className="font-bold text-slate-800">{medicine.name}</p><p className="mt-1 text-sm text-slate-600">{[medicine.dose, medicine.frequency, medicine.duration].filter(Boolean).join(" · ")}</p>{medicine.instructions && <p className="mt-1 text-xs text-slate-500">{medicine.instructions}</p>}</div>)}
+            {record.advice && <p className="mt-3 text-sm text-slate-600"><strong>Advice:</strong> {record.advice}</p>}
+          </article>
+        ))}
+        {records.length === 0 && <Empty label="No prescriptions recorded yet" />}
+      </div>
+    </div>
+  );
 }
 
 function VaccinationsPanel({ records, saving, onSave }: { records: VaccinationRecord[]; saving: boolean; onSave: (event: FormEvent<HTMLFormElement>) => Promise<void> }) {
@@ -342,6 +475,40 @@ function VaccinationsPanel({ records, saving, onSave }: { records: VaccinationRe
 
 function PregnancyPanel({ records, saving, onSave }: { records: PregnancyRecord[]; saving: boolean; onSave: (event: FormEvent<HTMLFormElement>) => Promise<void> }) {
   return <div><SectionHeading icon={Baby} title="Pregnancy follow-up" action="Antenatal observations and visit planning" /><form onSubmit={onSave} className="grid gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2"><label className={labelClass}>Recorded date<input name="recordedDate" type="date" required className={inputClass} /></label><label className={labelClass}>Gestational weeks<input name="gestationalWeeks" placeholder="e.g. 24 weeks" className={inputClass} /></label><label className={labelClass}>LMP date<input name="lmpDate" type="date" className={inputClass} /></label><label className={labelClass}>Expected delivery date<input name="eddDate" type="date" className={inputClass} /></label><label className={labelClass}>Blood pressure<input name="bloodPressure" placeholder="e.g. 120/80" className={inputClass} /></label><label className={labelClass}>Weight<input name="weight" placeholder="kg" className={inputClass} /></label><label className={labelClass}>Fetal heart rate<input name="fetalHeartRate" placeholder="bpm" className={inputClass} /></label><label className={labelClass}>Next visit<input name="nextVisitDate" type="date" className={inputClass} /></label><label className={labelClass + " sm:col-span-2"}>Notes<textarea name="notes" rows={3} className={inputClass} /></label><div className="sm:col-span-2"><SaveButton saving={saving} label="Save follow-up" /></div></form><div className="mt-5 space-y-3">{records.map((record) => <article key={record.id} className="rounded-2xl border border-slate-200 p-4"><div className="flex flex-wrap justify-between gap-2"><p className="font-bold text-[#233A59]">{record.recordedDate} · {record.gestationalWeeks || "Antenatal follow-up"}</p>{record.nextVisitDate && <span className="text-xs font-bold text-blue-700">Next visit {record.nextVisitDate}</span>}</div><div className="mt-3 grid grid-cols-2 gap-2 text-sm text-slate-600"><p>BP: {record.bloodPressure || "—"}</p><p>Weight: {record.weight || "—"}</p><p>FHR: {record.fetalHeartRate || "—"}</p><p>EDD: {record.eddDate || "—"}</p></div>{record.notes && <p className="mt-3 text-sm text-slate-600">{record.notes}</p>}</article>)}{records.length === 0 && <Empty label="No pregnancy follow-ups recorded yet" />}</div></div>;
+}
+
+function ReportsPanel({ records, uploading, actionId, onUpload, onAccess }: { records: ReportRecord[]; uploading: boolean; actionId: string | null; onUpload: (event: FormEvent<HTMLFormElement>) => Promise<void>; onAccess: (record: ReportRecord, mode: "view" | "download") => Promise<void> }) {
+  return (
+    <div>
+      <SectionHeading icon={FileUp} title="Medical reports" action="PDFs and images protected by staff-only Firebase access" />
+      <form onSubmit={onUpload} className="grid gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2">
+        <label className={labelClass}>Report category<select name="category" required defaultValue="" className={inputClass}><option value="" disabled>Select category</option><option>Lab report</option><option>Ultrasound / Imaging</option><option>Prescription / Referral</option><option>Vaccination document</option><option>Other</option></select></label>
+        <label className={labelClass}>Report date<input name="reportDate" type="date" required className={inputClass} /></label>
+        <label className={labelClass + " sm:col-span-2"}>Choose PDF or image<input name="reportFile" type="file" accept="application/pdf,image/*" required className={inputClass + " file:mr-4 file:rounded-lg file:border-0 file:bg-[#233A59] file:px-3 file:py-2 file:text-sm file:font-bold file:text-white"} /><span className="mt-2 block text-xs font-normal text-slate-500">Maximum 10 MB. Access is restricted to approved clinic staff.</span></label>
+        <label className={labelClass + " sm:col-span-2"}>Notes<textarea name="notes" rows={2} className={inputClass} placeholder="Optional context for this report" /></label>
+        <div className="sm:col-span-2"><SaveButton saving={uploading} label="Upload report securely" /></div>
+      </form>
+      <div className="mt-5 space-y-3">
+        {records.map((record) => (
+          <article key={record.id} className="rounded-2xl border border-slate-200 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2"><FileText size={18} className="shrink-0 text-[#A8864A]" /><p className="truncate font-bold text-[#233A59]">{record.fileName}</p></div>
+                <p className="mt-1 text-sm text-slate-600">{record.category} · {record.reportDate} · {formatFileSize(record.size)}</p>
+                <p className="mt-1 text-xs text-slate-500">Uploaded {formatCreatedAt(record.createdAt)}</p>
+              </div>
+              <div className="flex gap-2">
+                <button type="button" disabled={actionId === record.id} onClick={() => void onAccess(record, "view")} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">{actionId === record.id ? <LoaderCircle size={15} className="animate-spin" /> : <ExternalLink size={15} />} View</button>
+                <button type="button" disabled={actionId === record.id} onClick={() => void onAccess(record, "download")} className="inline-flex items-center gap-2 rounded-xl bg-[#233A59] px-3 py-2 text-xs font-bold text-white transition hover:bg-[#1b2d46] disabled:opacity-50"><Download size={15} /> Download</button>
+              </div>
+            </div>
+            {record.notes && <p className="mt-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">{record.notes}</p>}
+          </article>
+        ))}
+        {records.length === 0 && <Empty label="No medical reports uploaded yet" />}
+      </div>
+    </div>
+  );
 }
 
 function Empty({ label }: { label: string }) {
