@@ -3,7 +3,7 @@
 import StaffGuard, { useStaff } from "@/components/admin/StaffGuard";
 import { InstallAppButton } from "@/components/pwa/PwaRegister";
 import { firebaseAuth } from "@/firebase/config";
-import { CalendarDays, LayoutDashboard, LogOut, ReceiptIndianRupee, Stethoscope, UsersRound } from "lucide-react";
+import { CalendarDays, FlaskConical, LayoutDashboard, LogOut, ReceiptIndianRupee, Stethoscope, UsersRound } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -14,6 +14,7 @@ const navigation = [
   { href: "/admin/appointments", label: "Appointments", icon: CalendarDays },
   { href: "/admin/patients", label: "Patients", icon: UsersRound },
   { href: "/admin/billing", label: "Billing", icon: ReceiptIndianRupee },
+  { href: "/admin/lab", label: "Lab", icon: FlaskConical },
 ];
 
 function StaffChrome({ children }: { children: ReactNode }) {

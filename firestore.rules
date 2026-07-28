@@ -182,6 +182,65 @@ service cloud.firestore {
       }
     }
 
+    match /labOrders/{orderId} {
+      allow read: if isStaff();
+      allow create: if isStaff()
+        && request.resource.data.keys().hasAll([
+          'orderNumber', 'patientId', 'patientName', 'patientPhone', 'tests',
+          'priority', 'clinician', 'notes', 'status', 'createdBy', 'orderedAt', 'updatedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'orderNumber', 'patientId', 'patientNumber', 'patientName', 'patientPhone',
+          'tests', 'priority', 'clinician', 'notes', 'status', 'createdBy',
+          'orderedAt', 'updatedAt'
+        ])
+        && request.resource.data.orderNumber is string
+        && request.resource.data.orderNumber.size() >= 8
+        && request.resource.data.orderNumber.size() <= 40
+        && request.resource.data.patientId is string
+        && request.resource.data.patientId.size() > 0
+        && request.resource.data.patientName is string
+        && request.resource.data.patientName.size() >= 2
+        && request.resource.data.patientName.size() <= 100
+        && request.resource.data.patientPhone is string
+        && request.resource.data.patientPhone.size() <= 20
+        && request.resource.data.tests is list
+        && request.resource.data.tests.size() > 0
+        && request.resource.data.tests.size() <= 50
+        && request.resource.data.priority in ['routine', 'urgent']
+        && request.resource.data.clinician is string
+        && request.resource.data.clinician.size() <= 100
+        && request.resource.data.notes is string
+        && request.resource.data.notes.size() <= 1000
+        && request.resource.data.status == 'ordered'
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.orderedAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if isStaff()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'resultSummary', 'reportFileName', 'reportStoragePath',
+          'reportContentType', 'reportSize', 'specimenCollectedAt',
+          'completedAt', 'updatedAt'
+        ])
+        && request.resource.data.status in ['ordered', 'collected', 'processing', 'completed', 'cancelled']
+        && (
+          (resource.data.status == 'ordered' && request.resource.data.status in ['ordered', 'collected', 'processing', 'completed', 'cancelled'])
+          || (resource.data.status == 'collected' && request.resource.data.status in ['collected', 'processing', 'completed', 'cancelled'])
+          || (resource.data.status == 'processing' && request.resource.data.status in ['processing', 'completed', 'cancelled'])
+          || (resource.data.status == 'completed' && request.resource.data.status == 'completed')
+          || (resource.data.status == 'cancelled' && request.resource.data.status == 'cancelled')
+        )
+        && (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+            'resultSummary', 'reportFileName', 'reportStoragePath',
+            'reportContentType', 'reportSize', 'completedAt'
+          ])
+          || request.resource.data.status == 'completed'
+        )
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if isAdmin();
+    }
+
     match /staff/{staffId} {
       allow read: if signedIn() && (request.auth.uid == staffId || isAdmin());
       allow create, update, delete: if isAdmin();
