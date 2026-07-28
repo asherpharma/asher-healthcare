@@ -44,6 +44,31 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time;
     }
 
+    function validStaffAppointment() {
+      return isStaff()
+        && request.resource.data.keys().hasOnly([
+          'patientName', 'phone', 'doctorId', 'preferredDate', 'preferredTime',
+          'reason', 'status', 'source', 'privacyAccepted', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.patientName is string
+        && request.resource.data.patientName.size() >= 2
+        && request.resource.data.patientName.size() <= 80
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() >= 10
+        && request.resource.data.phone.size() <= 20
+        && request.resource.data.doctorId in ['pediatrics', 'obg']
+        && request.resource.data.preferredDate is string
+        && request.resource.data.preferredDate.size() == 10
+        && request.resource.data.preferredTime in ['morning', 'afternoon', 'evening']
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() <= 500
+        && request.resource.data.status in ['requested', 'confirmed']
+        && request.resource.data.source in ['reception', 'phone', 'walk-in']
+        && request.resource.data.privacyAccepted == true
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+    }
+
     function validClinicalCreate() {
       return isStaff()
         && request.resource.data.createdBy == request.auth.uid
@@ -59,7 +84,7 @@ service cloud.firestore {
     }
 
     match /appointments/{appointmentId} {
-      allow create: if validAppointment();
+      allow create: if validAppointment() || validStaffAppointment();
       allow read: if isStaff();
       allow update: if isStaff()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])

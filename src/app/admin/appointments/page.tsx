@@ -3,6 +3,7 @@
 import AdminShell from "@/components/admin/AdminShell";
 import { firestore } from "@/firebase/config";
 import {
+  addDoc,
   collection,
   doc,
   limit,
@@ -22,12 +23,14 @@ import {
   LoaderCircle,
   MessageCircle,
   Phone,
+  Plus,
+  Save,
   Search,
   Stethoscope,
   UserRound,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 type AppointmentStatus = "requested" | "confirmed" | "completed" | "cancelled";
 type Appointment = {
@@ -39,10 +42,21 @@ type Appointment = {
   preferredTime: string;
   reason: string;
   status: AppointmentStatus;
+  source?: string;
   createdAt?: Timestamp;
 };
 
 type StatusFilter = "all" | AppointmentStatus;
+type BookingSource = "reception" | "phone" | "walk-in";
+type BookingForm = {
+  patientName: string;
+  phone: string;
+  doctorId: "pediatrics" | "obg";
+  preferredDate: string;
+  preferredTime: "morning" | "afternoon" | "evening";
+  reason: string;
+  source: BookingSource;
+};
 
 const doctorNames: Record<string, string> = {
   pediatrics: "Dr. Lt Col Shafi Ahamad",
@@ -61,6 +75,16 @@ const statusStyles: Record<AppointmentStatus, string> = {
   completed: "bg-emerald-50 text-emerald-800 ring-emerald-200",
   cancelled: "bg-red-50 text-red-800 ring-red-200",
 };
+
+const emptyBooking = (date: string): BookingForm => ({
+  patientName: "",
+  phone: "",
+  doctorId: "pediatrics",
+  preferredDate: date,
+  preferredTime: "morning",
+  reason: "",
+  source: "reception",
+});
 
 const inputClass = "h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-[#233A59] focus:ring-2 focus:ring-[#233A59]/10";
 
@@ -93,6 +117,10 @@ function AppointmentDesk() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [doctorFilter, setDoctorFilter] = useState("all");
   const [dateFilter, setDateFilter] = useState("");
+  const [showCreate, setShowCreate] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [bookingError, setBookingError] = useState("");
+  const [booking, setBooking] = useState<BookingForm>(() => emptyBooking(today));
 
   useEffect(() => {
     if (!firestore) return;
@@ -144,6 +172,59 @@ function AppointmentDesk() {
     }
   }
 
+  async function createAppointment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!firestore) return;
+
+    const name = booking.patientName.trim();
+    const phone = booking.phone.trim();
+    if (name.length < 2) {
+      setBookingError("Enter the patient’s full name.");
+      return;
+    }
+    if (phone.replace(/\D/g, "").length < 10) {
+      setBookingError("Enter a valid phone number with at least 10 digits.");
+      return;
+    }
+    if (!booking.preferredDate) {
+      setBookingError("Choose an appointment date.");
+      return;
+    }
+
+    setCreating(true);
+    setBookingError("");
+    setError("");
+    setNotice("");
+
+    try {
+      await addDoc(collection(firestore, "appointments"), {
+        patientName: name,
+        phone,
+        doctorId: booking.doctorId,
+        preferredDate: booking.preferredDate,
+        preferredTime: booking.preferredTime,
+        reason: booking.reason.trim(),
+        status: "confirmed",
+        source: booking.source,
+        privacyAccepted: true,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      setBooking(emptyBooking(today));
+      setShowCreate(false);
+      setNotice("Reception appointment created and confirmed.");
+    } catch (createError) {
+      console.error(createError);
+      setBookingError("The appointment could not be created. Please check staff access and try again.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  function updateBooking<Key extends keyof BookingForm>(key: Key, value: BookingForm[Key]) {
+    setBooking((current) => ({ ...current, [key]: value }));
+  }
+
   function clearFilters() {
     setSearch("");
     setStatusFilter("all");
@@ -161,10 +242,66 @@ function AppointmentDesk() {
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-[#233A59] sm:text-4xl">Daily clinic schedule</h1>
           <p className="mt-3 text-slate-600">Find requests quickly, coordinate patients, and keep every visit status current.</p>
         </div>
-        <button type="button" onClick={() => setDateFilter(dateFilter === today ? "" : today)} className={"inline-flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-bold transition " + (dateFilter === today ? "bg-[#233A59] text-white" : "border border-[#233A59]/20 bg-white text-[#233A59] hover:bg-blue-50")}>
-          <CalendarDays size={18} /> {dateFilter === today ? "Showing today" : "Show today"}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={() => { setShowCreate((open) => !open); setBookingError(""); }} className="inline-flex items-center gap-2 rounded-xl bg-[#A8864A] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#92713b]">
+            <Plus size={18} /> {showCreate ? "Close form" : "New booking"}
+          </button>
+          <button type="button" onClick={() => setDateFilter(dateFilter === today ? "" : today)} className={"inline-flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-bold transition " + (dateFilter === today ? "bg-[#233A59] text-white" : "border border-[#233A59]/20 bg-white text-[#233A59] hover:bg-blue-50")}>
+            <CalendarDays size={18} /> {dateFilter === today ? "Showing today" : "Show today"}
+          </button>
+        </div>
       </div>
+
+      {showCreate && (
+        <section className="mt-6 overflow-hidden rounded-3xl bg-[#233A59] text-white shadow-lg shadow-[#233A59]/15">
+          <div className="border-b border-white/10 px-5 py-5 sm:px-7">
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#D4B678]">Reception booking</p>
+            <h2 className="mt-2 text-2xl font-bold">Add a phone or walk-in appointment</h2>
+            <p className="mt-2 text-sm leading-6 text-white/70">Bookings created here are confirmed immediately and added to the live clinic schedule.</p>
+          </div>
+          <form onSubmit={createAppointment} className="grid gap-4 p-5 sm:grid-cols-2 sm:p-7 xl:grid-cols-3">
+            <label className="text-sm font-bold">Patient name
+              <input required minLength={2} maxLength={80} value={booking.patientName} onChange={(event) => updateBooking("patientName", event.target.value)} placeholder="Full name" className={inputClass + " mt-2 w-full text-slate-800"} />
+            </label>
+            <label className="text-sm font-bold">Phone number
+              <input required inputMode="tel" maxLength={20} value={booking.phone} onChange={(event) => updateBooking("phone", event.target.value)} placeholder="10-digit mobile number" className={inputClass + " mt-2 w-full text-slate-800"} />
+            </label>
+            <label className="text-sm font-bold">Doctor
+              <select value={booking.doctorId} onChange={(event) => updateBooking("doctorId", event.target.value as BookingForm["doctorId"])} className={inputClass + " mt-2 w-full text-slate-800"}>
+                <option value="pediatrics">Dr. Lt Col Shafi Ahamad · Pediatrics</option>
+                <option value="obg">Dr. Shaik Reshma · OBG</option>
+              </select>
+            </label>
+            <label className="text-sm font-bold">Appointment date
+              <input required type="date" min={today} value={booking.preferredDate} onChange={(event) => updateBooking("preferredDate", event.target.value)} className={inputClass + " mt-2 w-full text-slate-800"} />
+            </label>
+            <label className="text-sm font-bold">Preferred time
+              <select value={booking.preferredTime} onChange={(event) => updateBooking("preferredTime", event.target.value as BookingForm["preferredTime"])} className={inputClass + " mt-2 w-full text-slate-800"}>
+                <option value="morning">Morning</option>
+                <option value="afternoon">Afternoon</option>
+                <option value="evening">Evening</option>
+              </select>
+            </label>
+            <label className="text-sm font-bold">Booking source
+              <select value={booking.source} onChange={(event) => updateBooking("source", event.target.value as BookingSource)} className={inputClass + " mt-2 w-full text-slate-800"}>
+                <option value="reception">Reception desk</option>
+                <option value="phone">Phone booking</option>
+                <option value="walk-in">Walk-in</option>
+              </select>
+            </label>
+            <label className="text-sm font-bold sm:col-span-2 xl:col-span-3">Reason or note
+              <textarea maxLength={500} rows={3} value={booking.reason} onChange={(event) => updateBooking("reason", event.target.value)} placeholder="Symptoms, follow-up, vaccination, antenatal visit…" className="mt-2 block w-full rounded-xl border border-white/20 bg-white px-3 py-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-[#D4B678] focus:ring-2 focus:ring-[#D4B678]/20" />
+            </label>
+            {bookingError && <p className="rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 sm:col-span-2 xl:col-span-3">{bookingError}</p>}
+            <div className="flex flex-wrap gap-3 sm:col-span-2 xl:col-span-3">
+              <button type="submit" disabled={creating} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-[#233A59] transition hover:bg-[#F8F4EA] disabled:cursor-not-allowed disabled:opacity-60">
+                {creating ? <LoaderCircle size={17} className="animate-spin" /> : <Save size={17} />} {creating ? "Creating…" : "Create confirmed booking"}
+              </button>
+              <button type="button" onClick={() => { setShowCreate(false); setBookingError(""); }} className="min-h-11 rounded-xl border border-white/25 px-5 py-3 text-sm font-bold text-white transition hover:bg-white/10">Cancel</button>
+            </div>
+          </form>
+        </section>
+      )}
 
       <div className="mt-7 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {[
@@ -200,7 +337,7 @@ function AppointmentDesk() {
       {error && <p className="mt-5 rounded-xl bg-red-50 p-4 text-sm font-semibold text-red-700">{error}</p>}
 
       {!loading && !error && items.length === 0 && (
-        <div className="mt-8 rounded-3xl bg-white p-10 text-center ring-1 ring-slate-200"><CalendarDays className="mx-auto text-[#A8864A]" size={36} /><h2 className="mt-4 text-xl font-bold text-[#233A59]">No requests yet</h2><p className="mt-2 text-slate-600">New website appointment requests will appear here.</p></div>
+        <div className="mt-8 rounded-3xl bg-white p-10 text-center ring-1 ring-slate-200"><CalendarDays className="mx-auto text-[#A8864A]" size={36} /><h2 className="mt-4 text-xl font-bold text-[#233A59]">No requests yet</h2><p className="mt-2 text-slate-600">New website, phone, and walk-in appointments will appear here.</p></div>
       )}
 
       {!loading && items.length > 0 && filteredItems.length === 0 && (
@@ -219,7 +356,7 @@ function AppointmentDesk() {
                     <h2 className="inline-flex items-center gap-2 font-bold text-[#233A59]"><UserRound size={18} className="text-[#A8864A]" /> {item.patientName}</h2>
                     <span className={"rounded-full px-2.5 py-1 text-xs font-bold capitalize ring-1 " + statusStyles[item.status]}>{item.status}</span>
                   </div>
-                  <p className="mt-2 text-sm text-slate-500">{doctorNames[item.doctorId] || item.doctorId}</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-500"><span>{doctorNames[item.doctorId] || item.doctorId}</span><span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-slate-500">{item.source === "walk-in" ? "Walk-in" : item.source === "phone" ? "Phone" : item.source === "reception" ? "Reception" : "Website"}</span></div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <a href={"tel:" + item.phone} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-100"><Phone size={14} /> Call</a>
                     <a href={"https://wa.me/" + whatsAppNumber(item.phone) + "?text=" + encodeURIComponent(message)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800 transition hover:bg-emerald-100"><MessageCircle size={14} /> WhatsApp</a>
