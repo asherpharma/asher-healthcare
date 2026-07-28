@@ -1,0 +1,36 @@
+{
+  "name": "Asher Healthcare Staff",
+  "short_name": "Asher Staff",
+  "description": "Secure mobile clinic workspace for Asher Women & Child Healthcare staff.",
+  "start_url": "/admin",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#233A59",
+  "orientation": "portrait-primary",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/images/logo.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Appointments",
+      "short_name": "Appointments",
+      "url": "/admin/appointments"
+    },
+    {
+      "name": "Patients",
+      "short_name": "Patients",
+      "url": "/admin/patients"
+    },
+    {
+      "name": "Billing",
+      "short_name": "Billing",
+      "url": "/admin/billing"
+    }
+  ]
+}

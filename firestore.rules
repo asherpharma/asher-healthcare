@@ -93,6 +93,95 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    match /invoices/{invoiceId} {
+      allow read: if isStaff();
+      allow create: if isStaff()
+        && request.resource.data.keys().hasAll([
+          'invoiceNumber', 'patientId', 'patientName', 'patientPhone', 'items',
+          'subtotal', 'discount', 'total', 'amountPaid', 'balance',
+          'paymentStatus', 'paymentMethod', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'invoiceNumber', 'patientId', 'patientNumber', 'patientName', 'patientPhone',
+          'items', 'subtotal', 'discount', 'total', 'amountPaid', 'balance',
+          'paymentStatus', 'paymentMethod', 'paymentReference', 'notes',
+          'createdBy', 'createdAt', 'updatedAt', 'paidAt'
+        ])
+        && request.resource.data.invoiceNumber is string
+        && request.resource.data.invoiceNumber.size() >= 8
+        && request.resource.data.invoiceNumber.size() <= 40
+        && request.resource.data.patientId is string
+        && request.resource.data.patientId.size() > 0
+        && request.resource.data.patientName is string
+        && request.resource.data.patientName.size() >= 2
+        && request.resource.data.patientName.size() <= 100
+        && request.resource.data.patientPhone is string
+        && request.resource.data.patientPhone.size() <= 20
+        && request.resource.data.items is list
+        && request.resource.data.items.size() > 0
+        && request.resource.data.items.size() <= 50
+        && request.resource.data.subtotal is number
+        && request.resource.data.discount is number
+        && request.resource.data.total is number
+        && request.resource.data.amountPaid is number
+        && request.resource.data.balance is number
+        && request.resource.data.subtotal >= 0
+        && request.resource.data.discount >= 0
+        && request.resource.data.discount <= request.resource.data.subtotal
+        && request.resource.data.total >= 0
+        && request.resource.data.amountPaid >= 0
+        && request.resource.data.amountPaid <= request.resource.data.total
+        && request.resource.data.balance >= 0
+        && request.resource.data.balance <= request.resource.data.total
+        && request.resource.data.paymentStatus in ['unpaid', 'partial', 'paid']
+        && request.resource.data.paymentMethod in ['cash', 'upi', 'card', 'bank_transfer', 'online', 'not_recorded']
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if isStaff()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'amountPaid', 'balance', 'paymentStatus', 'paymentMethod',
+          'paymentReference', 'updatedAt', 'paidAt'
+        ])
+        && request.resource.data.amountPaid is number
+        && request.resource.data.balance is number
+        && request.resource.data.amountPaid >= resource.data.amountPaid
+        && request.resource.data.amountPaid <= resource.data.total
+        && request.resource.data.balance >= 0
+        && request.resource.data.balance <= resource.data.balance
+        && request.resource.data.paymentStatus in ['partial', 'paid']
+        && request.resource.data.paymentMethod in ['cash', 'upi', 'card', 'bank_transfer', 'online']
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if isAdmin();
+
+      match /payments/{paymentId} {
+        allow read: if isStaff();
+        allow create: if isStaff()
+          && request.resource.data.keys().hasAll([
+            'invoiceId', 'invoiceNumber', 'patientId', 'patientName', 'amount',
+            'method', 'source', 'status', 'createdBy', 'createdAt'
+          ])
+          && request.resource.data.keys().hasOnly([
+            'invoiceId', 'invoiceNumber', 'patientId', 'patientName', 'amount',
+            'method', 'reference', 'source', 'status', 'gatewayPaymentId',
+            'gatewayOrderId', 'createdBy', 'createdAt'
+          ])
+          && request.resource.data.invoiceId == invoiceId
+          && request.resource.data.invoiceNumber is string
+          && request.resource.data.patientId is string
+          && request.resource.data.patientName is string
+          && request.resource.data.amount is number
+          && request.resource.data.amount > 0
+          && request.resource.data.method in ['cash', 'upi', 'card', 'bank_transfer', 'online']
+          && request.resource.data.source in ['manual', 'gateway']
+          && request.resource.data.status == 'received'
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt == request.time;
+        allow update: if false;
+        allow delete: if isAdmin();
+      }
+    }
+
     match /staff/{staffId} {
       allow read: if signedIn() && (request.auth.uid == staffId || isAdmin());
       allow create, update, delete: if isAdmin();
