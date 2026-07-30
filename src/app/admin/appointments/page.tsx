@@ -1,9 +1,20 @@
 "use client";
 
 import AdminShell from "@/components/admin/AdminShell";
-import { firestore } from "@/firebase/config";
+import { firebaseAuth, firestore } from "@/firebase/config";
+import { useAppointmentSchedule } from "@/hooks/useAppointmentSchedule";
 import {
-  addDoc,
+  clinicDate,
+  dateIsEnabled,
+  doctorName,
+  DOCTORS,
+  formatAppointmentTime,
+  generateTimeSlots,
+  nextEnabledDate,
+  scheduleSummary,
+  type DoctorId,
+} from "@/lib/appointments";
+import {
   collection,
   doc,
   limit,
@@ -11,7 +22,8 @@ import {
   orderBy,
   query,
   serverTimestamp,
-  updateDoc,
+  where,
+  writeBatch,
   type Timestamp,
 } from "firebase/firestore";
 import {
@@ -43,6 +55,7 @@ type Appointment = {
   reason: string;
   status: AppointmentStatus;
   source?: string;
+  slotId?: string;
   createdAt?: Timestamp;
 };
 
@@ -51,9 +64,9 @@ type BookingSource = "reception" | "phone" | "walk-in";
 type BookingForm = {
   patientName: string;
   phone: string;
-  doctorId: "pediatrics" | "obg";
+  doctorId: DoctorId;
   preferredDate: string;
-  preferredTime: "morning" | "afternoon" | "evening";
+  preferredTime: string;
   reason: string;
   source: BookingSource;
 };
@@ -63,12 +76,6 @@ const doctorNames: Record<string, string> = {
   obg: "Dr. Shaik Reshma",
 };
 
-const slotLabels: Record<string, string> = {
-  morning: "Morning",
-  afternoon: "Afternoon",
-  evening: "Evening",
-};
-
 const statusStyles: Record<AppointmentStatus, string> = {
   requested: "bg-amber-50 text-amber-800 ring-amber-200",
   confirmed: "bg-blue-50 text-blue-800 ring-blue-200",
@@ -76,23 +83,17 @@ const statusStyles: Record<AppointmentStatus, string> = {
   cancelled: "bg-red-50 text-red-800 ring-red-200",
 };
 
-const emptyBooking = (date: string): BookingForm => ({
+const emptyBooking = (date: string, time = "17:00"): BookingForm => ({
   patientName: "",
   phone: "",
   doctorId: "pediatrics",
   preferredDate: date,
-  preferredTime: "morning",
+  preferredTime: time,
   reason: "",
   source: "reception",
 });
 
 const inputClass = "h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-[#233A59] focus:ring-2 focus:ring-[#233A59]/10";
-
-function localDate() {
-  const now = new Date();
-  const offset = now.getTimezoneOffset();
-  return new Date(now.getTime() - offset * 60000).toISOString().slice(0, 10);
-}
 
 function prettyDate(value: string) {
   if (!value) return "Date not set";
@@ -107,7 +108,8 @@ function whatsAppNumber(phone: string) {
 }
 
 function AppointmentDesk() {
-  const today = localDate();
+  const today = clinicDate();
+  const { schedule } = useAppointmentSchedule();
   const [items, setItems] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -120,7 +122,55 @@ function AppointmentDesk() {
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
   const [bookingError, setBookingError] = useState("");
-  const [booking, setBooking] = useState<BookingForm>(() => emptyBooking(today));
+  const [booking, setBooking] = useState<BookingForm>(() => emptyBooking(nextEnabledDate(schedule, today)));
+  const [availability, setAvailability] = useState<{ key: string; slots: Set<string> }>({
+    key: "",
+    slots: new Set(),
+  });
+
+  const bookingSlots = useMemo(
+    () => dateIsEnabled(schedule, booking.preferredDate)
+      ? generateTimeSlots(schedule.doctors[booking.doctorId])
+      : [],
+    [booking.doctorId, booking.preferredDate, schedule],
+  );
+  const availabilityKey = `${booking.doctorId}_${booking.preferredDate}`;
+  const occupiedSlots = useMemo(
+    () => availability.key === availabilityKey ? availability.slots : new Set<string>(),
+    [availability, availabilityKey],
+  );
+  const availabilityLoading = Boolean(firestore) && availability.key !== availabilityKey;
+  const availableBookingSlots = useMemo(
+    () => bookingSlots.filter((slot) => !occupiedSlots.has(slot)),
+    [bookingSlots, occupiedSlots],
+  );
+  const selectedBookingTime = availableBookingSlots.includes(booking.preferredTime)
+    ? booking.preferredTime
+    : availableBookingSlots[0] ?? "";
+
+  useEffect(() => {
+    if (!firestore || !booking.doctorId || !booking.preferredDate) return;
+    const slotsQuery = query(
+      collection(firestore, "appointmentSlots"),
+      where("doctorId", "==", booking.doctorId),
+      where("date", "==", booking.preferredDate),
+    );
+    return onSnapshot(
+      slotsQuery,
+      (snapshot) => {
+        setAvailability({
+          key: `${booking.doctorId}_${booking.preferredDate}`,
+          slots: new Set(snapshot.docs.map((item) => String(item.data().time || ""))),
+        });
+      },
+      () => {
+        setAvailability({
+          key: `${booking.doctorId}_${booking.preferredDate}`,
+          slots: new Set(),
+        });
+      },
+    );
+  }, [booking.doctorId, booking.preferredDate]);
 
   useEffect(() => {
     if (!firestore) return;
@@ -163,7 +213,16 @@ function AppointmentDesk() {
     setError("");
     setNotice("");
     try {
-      await updateDoc(doc(firestore, "appointments", id), { status, updatedAt: serverTimestamp() });
+      const item = items.find((appointment) => appointment.id === id);
+      const batch = writeBatch(firestore);
+      batch.update(doc(firestore, "appointments", id), {
+        status,
+        updatedAt: serverTimestamp(),
+      });
+      if (status === "cancelled" && item?.slotId) {
+        batch.delete(doc(firestore, "appointmentSlots", item.slotId));
+      }
+      await batch.commit();
       setNotice("Appointment status updated.");
     } catch {
       setError("The appointment could not be updated. Please try again.");
@@ -186,8 +245,12 @@ function AppointmentDesk() {
       setBookingError("Enter a valid phone number with at least 10 digits.");
       return;
     }
-    if (!booking.preferredDate) {
+    if (!booking.preferredDate || !dateIsEnabled(schedule, booking.preferredDate)) {
       setBookingError("Choose an appointment date.");
+      return;
+    }
+    if (!selectedBookingTime || occupiedSlots.has(selectedBookingTime)) {
+      setBookingError("Choose an available appointment time.");
       return;
     }
 
@@ -197,25 +260,34 @@ function AppointmentDesk() {
     setNotice("");
 
     try {
-      await addDoc(collection(firestore, "appointments"), {
-        patientName: name,
-        phone,
-        doctorId: booking.doctorId,
-        preferredDate: booking.preferredDate,
-        preferredTime: booking.preferredTime,
-        reason: booking.reason.trim(),
-        status: "confirmed",
-        source: booking.source,
-        privacyAccepted: true,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+      const currentUser = firebaseAuth?.currentUser;
+      if (!currentUser) throw new Error("Staff session missing");
+      const idToken = await currentUser.getIdToken();
+      const response = await fetch("/api/appointments/book", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          patientName: name,
+          phone,
+          doctorId: booking.doctorId,
+          preferredDate: booking.preferredDate,
+          preferredTime: selectedBookingTime,
+          reason: booking.reason.trim(),
+          source: booking.source,
+          privacyAccepted: true,
+        }),
       });
-      setBooking(emptyBooking(today));
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "The appointment could not be created.");
+      setBooking(emptyBooking(nextEnabledDate(schedule, today), generateTimeSlots(schedule.doctors.pediatrics)[0]));
       setShowCreate(false);
       setNotice("Reception appointment created and confirmed.");
     } catch (createError) {
       console.error(createError);
-      setBookingError("The appointment could not be created. Please check staff access and try again.");
+      setBookingError(createError instanceof Error ? createError.message : "The appointment could not be created.");
     } finally {
       setCreating(false);
     }
@@ -268,19 +340,27 @@ function AppointmentDesk() {
             </label>
             <label className="text-sm font-bold">Doctor
               <select value={booking.doctorId} onChange={(event) => updateBooking("doctorId", event.target.value as BookingForm["doctorId"])} className={inputClass + " mt-2 w-full text-slate-800"}>
-                <option value="pediatrics">Dr. Lt Col Shafi Ahamad · Pediatrics</option>
-                <option value="obg">Dr. Shaik Reshma · OBG</option>
+                {DOCTORS.map((doctor) => <option key={doctor.id} value={doctor.id}>{doctor.name} · {doctor.specialty}</option>)}
               </select>
             </label>
             <label className="text-sm font-bold">Appointment date
               <input required type="date" min={today} value={booking.preferredDate} onChange={(event) => updateBooking("preferredDate", event.target.value)} className={inputClass + " mt-2 w-full text-slate-800"} />
             </label>
-            <label className="text-sm font-bold">Preferred time
-              <select value={booking.preferredTime} onChange={(event) => updateBooking("preferredTime", event.target.value as BookingForm["preferredTime"])} className={inputClass + " mt-2 w-full text-slate-800"}>
-                <option value="morning">Morning</option>
-                <option value="afternoon">Afternoon</option>
-                <option value="evening">Evening</option>
+            <label className="text-sm font-bold">Appointment time
+              <select
+                value={selectedBookingTime}
+                onChange={(event) => updateBooking("preferredTime", event.target.value)}
+                disabled={availabilityLoading || availableBookingSlots.length === 0}
+                className={inputClass + " mt-2 w-full text-slate-800 disabled:opacity-60"}
+              >
+                <option value="">{availabilityLoading ? "Checking availability…" : availableBookingSlots.length ? "Select a time" : "No slots available"}</option>
+                {bookingSlots.map((slot) => (
+                  <option key={slot} value={slot} disabled={occupiedSlots.has(slot)}>
+                    {formatAppointmentTime(slot)}{occupiedSlots.has(slot) ? " — Booked" : ""}
+                  </option>
+                ))}
               </select>
+              <span className="mt-2 block text-xs font-medium text-white/60">{scheduleSummary(schedule, booking.doctorId)}</span>
             </label>
             <label className="text-sm font-bold">Booking source
               <select value={booking.source} onChange={(event) => updateBooking("source", event.target.value as BookingSource)} className={inputClass + " mt-2 w-full text-slate-800"}>
@@ -347,7 +427,7 @@ function AppointmentDesk() {
       <div className="mt-6 space-y-4">
         {filteredItems.map((item) => {
           const isUpdating = updatingId === item.id;
-          const message = "Hello " + item.patientName + ", your appointment request at Asher Women & Child Healthcare for " + prettyDate(item.preferredDate) + " (" + (slotLabels[item.preferredTime] ?? item.preferredTime) + ") with " + (doctorNames[item.doctorId] ?? item.doctorId) + " has been received. Please reply here if you need help.";
+          const message = "Hello " + item.patientName + ", your appointment request at Asher Women & Child Healthcare for " + prettyDate(item.preferredDate) + " at " + formatAppointmentTime(item.preferredTime) + " with " + doctorName(item.doctorId) + " has been received. Please reply here if you need help.";
           return (
             <article key={item.id} className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
               <div className="grid gap-5 xl:grid-cols-[1.05fr_1.15fr_auto] xl:items-center">
@@ -365,7 +445,7 @@ function AppointmentDesk() {
                 </div>
 
                 <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600">
-                  <p className="font-bold text-[#233A59]">{prettyDate(item.preferredDate)} · {slotLabels[item.preferredTime] ?? item.preferredTime}</p>
+                  <p className="font-bold text-[#233A59]">{prettyDate(item.preferredDate)} · {formatAppointmentTime(item.preferredTime)}</p>
                   <p className="mt-2 leading-6">{item.reason || "No reason provided"}</p>
                   {item.preferredDate === today && <span className="mt-3 inline-flex rounded-full bg-blue-100 px-2.5 py-1 text-xs font-bold text-blue-800">Today</span>}
                 </div>

@@ -3,7 +3,7 @@
 import StaffGuard, { useStaff } from "@/components/admin/StaffGuard";
 import { InstallAppButton } from "@/components/pwa/PwaRegister";
 import { firebaseAuth } from "@/firebase/config";
-import { CalendarDays, FlaskConical, LayoutDashboard, LogOut, ReceiptIndianRupee, Stethoscope, UsersRound } from "lucide-react";
+import { CalendarDays, FlaskConical, LayoutDashboard, LogOut, ReceiptIndianRupee, Settings2, Stethoscope, UsersRound } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -15,6 +15,7 @@ const navigation = [
   { href: "/admin/patients", label: "Patients", icon: UsersRound },
   { href: "/admin/billing", label: "Billing", icon: ReceiptIndianRupee },
   { href: "/admin/lab", label: "Lab", icon: FlaskConical },
+  { href: "/admin/settings", label: "Settings", icon: Settings2, adminOnly: true },
 ];
 
 function StaffChrome({ children }: { children: ReactNode }) {
@@ -46,7 +47,7 @@ function StaffChrome({ children }: { children: ReactNode }) {
         <aside className="rounded-2xl bg-[#233A59] p-3 text-white lg:min-h-[calc(100vh-8.5rem)]">
           <div className="flex items-center gap-2 px-3 py-3 text-xs font-bold uppercase tracking-[0.16em] text-white/60"><Stethoscope size={15} />Staff menu</div>
           <nav className="flex gap-2 overflow-x-auto pb-1 lg:grid lg:grid-cols-1 lg:overflow-visible lg:pb-0">
-            {navigation.map((item) => {
+            {navigation.filter((item) => !item.adminOnly || profile.role === "admin").map((item) => {
               const Icon = item.icon;
               const active = pathname === item.href;
               return <Link key={item.href} href={item.href} style={active ? { color: "#233A59" } : undefined} className={"flex min-w-[130px] items-center justify-center gap-2 rounded-xl px-3 py-3 text-sm font-bold transition lg:min-w-0 lg:justify-start " + (active ? "bg-white" : "text-white/80 hover:bg-white/10 hover:text-white")}><Icon size={18} />{item.label}</Link>;
