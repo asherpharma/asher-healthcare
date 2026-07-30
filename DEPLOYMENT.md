@@ -34,3 +34,48 @@ If nameservers must stay at GoDaddy, Cloudflare Pages can connect www with a CNA
 6. Do not store patient records until access controls, backups, and the clinic's privacy process are reviewed.
 
 Never commit .env.local or clinic credentials to GitHub.
+## Razorpay secure payment setup
+
+The public website remains a static Next.js export. Secure payment endpoints run as Cloudflare Pages Functions under `/api/razorpay/*`; Razorpay secrets are never included in browser JavaScript.
+
+### Cloudflare Variables and Secrets
+
+In Cloudflare, open **Workers & Pages → asher-healthcare → Settings → Variables and Secrets**. Add the following to both Preview and Production. Mark credentials and private keys as encrypted secrets.
+
+- `RAZORPAY_KEY_ID` — begin with a Razorpay Test Mode key.
+- `RAZORPAY_KEY_SECRET` — the matching Test Mode secret.
+- `RAZORPAY_WEBHOOK_SECRET` — a new random secret used only for webhooks.
+- `FIREBASE_PROJECT_ID` — `asher-healthcare-clinic`.
+- `FIREBASE_WEB_API_KEY` — the Firebase web API key already used by the website.
+- `FIREBASE_CLIENT_EMAIL` — the `client_email` from a restricted Firebase service account JSON key.
+- `FIREBASE_PRIVATE_KEY` — the complete `private_key` from that service account JSON key, including the BEGIN/END lines.
+
+Do not add any of these values to GitHub. The Razorpay key ID is returned to authenticated staff only when checkout starts; the key secret never leaves Cloudflare.
+
+### Firebase service account
+
+1. In Firebase/Google Cloud, create a dedicated service account for the payment function.
+2. Grant only the minimum Firestore access required for this clinic project. Avoid Owner or Editor roles.
+3. Generate a JSON key and place only `client_email` and `private_key` into Cloudflare encrypted secrets.
+4. Store the downloaded JSON key in the clinic's password manager, then remove it from Downloads and shared computers.
+5. Deploy the updated `firestore.rules`. Client applications can record manual payments, while gateway payment records are accepted only from the trusted service account.
+
+### Razorpay webhook
+
+In the Razorpay dashboard, create a webhook with this URL:
+
+`https://asherhealthcare.in/api/razorpay/webhook`
+
+Use the same value entered as `RAZORPAY_WEBHOOK_SECRET` and subscribe to `payment.captured`. This allows the invoice to update even if the staff browser closes after payment.
+
+### Test before going live
+
+1. Keep Razorpay in Test Mode and use Test Mode API keys.
+2. Open an unpaid invoice in **Admin → Billing** and select **Record payment**.
+3. Choose the amount and select **Pay online**.
+4. Complete a Razorpay test payment.
+5. Confirm the invoice balance, payment audit entry, collected-today amount, and receipt PDF update once—and only once.
+6. Test a failed payment, a partial payment, closing the checkout window, and webhook delivery.
+7. Replace Test Mode keys with Live Mode keys only after Razorpay activates the account and all checks pass.
+
+After any variable, secret, rule, or function change, redeploy the Cloudflare Pages project before testing production.

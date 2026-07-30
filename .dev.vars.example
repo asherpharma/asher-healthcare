@@ -1,0 +1,9 @@
+# Copy to .dev.vars for local Cloudflare Pages Functions testing.
+# Never commit real values.
+RAZORPAY_KEY_ID=rzp_test_replace_me
+RAZORPAY_KEY_SECRET=replace_me
+RAZORPAY_WEBHOOK_SECRET=replace_me
+FIREBASE_PROJECT_ID=asher-healthcare-clinic
+FIREBASE_WEB_API_KEY=replace_me
+FIREBASE_CLIENT_EMAIL=replace_me
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nreplace_me\n-----END PRIVATE KEY-----\n"

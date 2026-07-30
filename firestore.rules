@@ -134,7 +134,7 @@ service cloud.firestore {
         && request.resource.data.balance >= 0
         && request.resource.data.balance <= request.resource.data.total
         && request.resource.data.paymentStatus in ['unpaid', 'partial', 'paid']
-        && request.resource.data.paymentMethod in ['cash', 'upi', 'card', 'bank_transfer', 'online', 'not_recorded']
+        && request.resource.data.paymentMethod in ['cash', 'upi', 'card', 'bank_transfer', 'not_recorded']
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.createdAt == request.time
         && request.resource.data.updatedAt == request.time;
@@ -150,7 +150,7 @@ service cloud.firestore {
         && request.resource.data.balance >= 0
         && request.resource.data.balance <= resource.data.balance
         && request.resource.data.paymentStatus in ['partial', 'paid']
-        && request.resource.data.paymentMethod in ['cash', 'upi', 'card', 'bank_transfer', 'online']
+        && request.resource.data.paymentMethod in ['cash', 'upi', 'card', 'bank_transfer']
         && request.resource.data.updatedAt == request.time;
       allow delete: if isAdmin();
 
@@ -163,8 +163,7 @@ service cloud.firestore {
           ])
           && request.resource.data.keys().hasOnly([
             'invoiceId', 'invoiceNumber', 'patientId', 'patientName', 'amount',
-            'method', 'reference', 'source', 'status', 'gatewayPaymentId',
-            'gatewayOrderId', 'createdBy', 'createdAt'
+            'method', 'reference', 'source', 'status', 'createdBy', 'createdAt'
           ])
           && request.resource.data.invoiceId == invoiceId
           && request.resource.data.invoiceNumber is string
@@ -172,8 +171,8 @@ service cloud.firestore {
           && request.resource.data.patientName is string
           && request.resource.data.amount is number
           && request.resource.data.amount > 0
-          && request.resource.data.method in ['cash', 'upi', 'card', 'bank_transfer', 'online']
-          && request.resource.data.source in ['manual', 'gateway']
+          && request.resource.data.method in ['cash', 'upi', 'card', 'bank_transfer']
+          && request.resource.data.source == 'manual'
           && request.resource.data.status == 'received'
           && request.resource.data.createdBy == request.auth.uid
           && request.resource.data.createdAt == request.time;
