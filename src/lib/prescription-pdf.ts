@@ -138,7 +138,7 @@ function drawBlankWritingArea(pdf: jsPDF, startY: number, doctorName: string) {
   pdf.text("Doctor's signature", 170, 273, { align: "center" });
 }
 
-export async function downloadBlankPrescriptionPdf(
+async function createBlankPrescriptionPdf(
   patient: PrescriptionPdfPatient,
   doctorName: string,
 ) {
@@ -148,7 +148,14 @@ export async function downloadBlankPrescriptionPdf(
   drawPatientDetails(pdf, patient);
   drawBlankWritingArea(pdf, 111, doctorName);
   drawClinicFooter(pdf);
+  return pdf;
+}
 
+export async function downloadBlankPrescriptionPdf(
+  patient: PrescriptionPdfPatient,
+  doctorName: string,
+) {
+  const pdf = await createBlankPrescriptionPdf(patient, doctorName);
   const fileName =
     "blank-prescription-" +
     safePdfName(patient.fullName) +
@@ -158,7 +165,7 @@ export async function downloadBlankPrescriptionPdf(
   pdf.save(fileName);
 }
 
-export async function downloadPrescriptionPdf(
+async function createPrescriptionPdf(
   patient: PrescriptionPdfPatient,
   prescription: PrescriptionPdfRecord,
 ) {
@@ -245,7 +252,14 @@ export async function downloadPrescriptionPdf(
     pdf.setPage(page);
     drawClinicFooter(pdf, page, pageCount);
   }
+  return pdf;
+}
 
+export async function downloadPrescriptionPdf(
+  patient: PrescriptionPdfPatient,
+  prescription: PrescriptionPdfRecord,
+) {
+  const pdf = await createPrescriptionPdf(patient, prescription);
   const fileName =
     "prescription-" +
     safePdfName(patient.fullName) +
@@ -253,4 +267,52 @@ export async function downloadPrescriptionPdf(
     (prescription.prescribedDate || "record") +
     ".pdf";
   pdf.save(fileName);
+}
+
+function openPrintPage(title: string) {
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) {
+    throw new Error("Print preview was blocked. Please allow pop-ups for this clinic site.");
+  }
+
+  printWindow.opener = null;
+  printWindow.document.title = title;
+  printWindow.document.body.style.cssText =
+    "margin:0;display:grid;min-height:100vh;place-items:center;background:#f8fafc;color:#233a59;font:600 16px system-ui,sans-serif";
+  printWindow.document.body.textContent = "Preparing print preview...";
+  return printWindow;
+}
+
+function showPdfInPrintPage(pdf: jsPDF, printWindow: Window) {
+  const pdfUrl = String(pdf.output("bloburl"));
+  printWindow.location.replace(pdfUrl);
+  window.setTimeout(() => URL.revokeObjectURL(pdfUrl), 5 * 60_000);
+}
+
+export async function printBlankPrescriptionPdf(
+  patient: PrescriptionPdfPatient,
+  doctorName: string,
+) {
+  const printWindow = openPrintPage("Print prescription");
+  try {
+    const pdf = await createBlankPrescriptionPdf(patient, doctorName);
+    showPdfInPrintPage(pdf, printWindow);
+  } catch (error) {
+    printWindow.close();
+    throw error;
+  }
+}
+
+export async function printPrescriptionPdf(
+  patient: PrescriptionPdfPatient,
+  prescription: PrescriptionPdfRecord,
+) {
+  const printWindow = openPrintPage("Print prescription");
+  try {
+    const pdf = await createPrescriptionPdf(patient, prescription);
+    showPdfInPrintPage(pdf, printWindow);
+  } catch (error) {
+    printWindow.close();
+    throw error;
+  }
 }
