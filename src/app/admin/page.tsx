@@ -206,7 +206,7 @@ function DashboardContent() {
           <p className="mt-2 max-w-2xl leading-7 text-white/75">
             Search the schedule, filter by doctor or status, and confirm or complete visits from one focused workspace.
           </p>
-          <Link href="/admin/appointments" className="mt-6 inline-flex min-h-11 items-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-[#233A59] transition hover:bg-[#F8F4EA]">
+          <Link href="/admin/appointments" className="mt-6 inline-flex min-h-11 items-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold transition hover:bg-[#F8F4EA]" style={{ color: "#233A59" }}>
             Open appointment desk <ArrowRight size={17} />
           </Link>
         </section>
