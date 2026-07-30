@@ -1,88 +1,289 @@
 "use client";
 
 import { firestore } from "@/firebase/config";
-import { addDoc, collection, serverTimestamp } from "firebase/firestore";
-import { CalendarCheck, CheckCircle2, Clock3, MessageCircle, Phone, ShieldCheck } from "lucide-react";
-import { FormEvent, useState } from "react";
+import { useAppointmentSchedule } from "@/hooks/useAppointmentSchedule";
+import {
+  appointmentSlotId,
+  clinicDate,
+  dateIsEnabled,
+  DOCTORS,
+  formatAppointmentTime,
+  generateTimeSlots,
+  nextEnabledDate,
+  scheduleSummary,
+  type DoctorId,
+} from "@/lib/appointments";
+import {
+  collection,
+  onSnapshot,
+  query,
+  where,
+} from "firebase/firestore";
+import {
+  CalendarCheck,
+  CheckCircle2,
+  Clock3,
+  LoaderCircle,
+  MessageCircle,
+  Phone,
+  ShieldCheck,
+} from "lucide-react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
-const doctors = [
-  { id: "pediatrics", label: "Dr. Lt Col Shafi Ahamad — Pediatrics" },
-  { id: "obg", label: "Dr. Shaik Reshma — Obstetrics & Gynaecology" },
-];
+type Result = { tone: "success" | "error"; message: string } | null;
 
 export default function AppointmentCTA() {
-  const [result, setResult] = useState("");
+  const { schedule, loading: scheduleLoading, error: scheduleError } = useAppointmentSchedule();
+  const [doctorId, setDoctorId] = useState<DoctorId>("pediatrics");
+  const [date, setDate] = useState(() => nextEnabledDate(schedule));
+  const [time, setTime] = useState("");
+  const [availability, setAvailability] = useState<{ key: string; slots: Set<string> }>({
+    key: "",
+    slots: new Set(),
+  });
+  const [result, setResult] = useState<Result>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  const allSlots = useMemo(
+    () => dateIsEnabled(schedule, date) ? generateTimeSlots(schedule.doctors[doctorId]) : [],
+    [date, doctorId, schedule],
+  );
+  const availabilityKey = `${doctorId}_${date}`;
+  const occupiedSlots = useMemo(
+    () => availability.key === availabilityKey ? availability.slots : new Set<string>(),
+    [availability, availabilityKey],
+  );
+  const availabilityLoading = Boolean(firestore) && availability.key !== availabilityKey;
+  const availableSlots = useMemo(
+    () => allSlots.filter((slot) => !occupiedSlots.has(slot)),
+    [allSlots, occupiedSlots],
+  );
+  const selectedTime = availableSlots.includes(time) ? time : availableSlots[0] ?? "";
+
+  useEffect(() => {
+    if (!firestore || !doctorId || !date) return;
+    const slotsQuery = query(
+      collection(firestore, "appointmentSlots"),
+      where("doctorId", "==", doctorId),
+      where("date", "==", date),
+    );
+    return onSnapshot(
+      slotsQuery,
+      (snapshot) => {
+        setAvailability({
+          key: `${doctorId}_${date}`,
+          slots: new Set(snapshot.docs.map((item) => String(item.data().time || ""))),
+        });
+      },
+      () => {
+        setAvailability({ key: `${doctorId}_${date}`, slots: new Set() });
+      },
+    );
+  }, [date, doctorId]);
 
   async function submitBooking(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!selectedTime) {
+      setResult({ tone: "error", message: "Please choose an available appointment time." });
+      return;
+    }
+
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
-    const doctor = doctors.find((item) => item.id === form.get("doctor"));
-    const message = [
-      "Hello Asher Healthcare, I would like to request an appointment.",
-      "",
-      "Patient: " + form.get("name"),
-      "Phone: " + form.get("phone"),
-      "Doctor: " + (doctor?.label || form.get("doctor")),
-      "Preferred date: " + form.get("date"),
-      "Preferred time: " + form.get("time"),
-      "Reason: " + (form.get("reason") || "Not specified"),
-    ].join("\n");
+    const doctor = DOCTORS.find((item) => item.id === doctorId);
+    const payload = {
+      patientName: String(form.get("name") || "").trim(),
+      phone: String(form.get("phone") || "").trim(),
+      doctorId,
+      preferredDate: date,
+      preferredTime: selectedTime,
+      reason: String(form.get("reason") || "").trim(),
+      source: "website",
+      privacyAccepted: form.get("consent") === "on",
+    };
 
     setSubmitting(true);
-    setResult("");
-    const whatsapp = window.open("https://wa.me/919019263709?text=" + encodeURIComponent(message), "_blank", "noopener,noreferrer");
-
+    setResult(null);
     try {
-      if (firestore) {
-        await addDoc(collection(firestore, "appointments"), {
-          patientName: String(form.get("name")).trim(),
-          phone: String(form.get("phone")).trim(),
-          doctorId: String(form.get("doctor")),
-          preferredDate: String(form.get("date")),
-          preferredTime: String(form.get("time")),
-          reason: String(form.get("reason") || "").trim(),
-          status: "requested",
-          source: "website",
-          privacyAccepted: form.get("consent") === "on",
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-        setResult("Your request has been saved and sent to WhatsApp for confirmation.");
-        formElement.reset();
-      } else {
-        setResult("Please complete your request in WhatsApp so the clinic can confirm it.");
+      const response = await fetch("/api/appointments/book", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const responseBody = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(responseBody.error || "The appointment could not be reserved.");
       }
-      if (!whatsapp) window.location.href = "https://wa.me/919019263709?text=" + encodeURIComponent(message);
-    } catch {
-      setResult("The online save was unavailable. Please complete the request in WhatsApp.");
+
+      const message = [
+        "Hello Asher Healthcare, I have reserved an appointment slot.",
+        "",
+        `Patient: ${payload.patientName}`,
+        `Phone: ${payload.phone}`,
+        `Doctor: ${doctor?.label || doctorId}`,
+        `Date: ${date}`,
+        `Time: ${formatAppointmentTime(selectedTime)}`,
+        `Reason: ${payload.reason || "Not specified"}`,
+      ].join("\n");
+      const whatsappUrl = `https://wa.me/919019263709?text=${encodeURIComponent(message)}`;
+      const whatsapp = window.open(whatsappUrl, "_blank", "noopener,noreferrer");
+
+      setAvailability((current) => ({
+        key: availabilityKey,
+        slots: new Set(current.key === availabilityKey ? current.slots : []).add(selectedTime),
+      }));
+      setResult({
+        tone: "success",
+        message: `Your ${formatAppointmentTime(selectedTime)} slot is reserved. The clinic will confirm it shortly.`,
+      });
+      formElement.reset();
+      if (!whatsapp) window.location.href = whatsappUrl;
+    } catch (bookingError) {
+      setResult({
+        tone: "error",
+        message: bookingError instanceof Error
+          ? bookingError.message
+          : "The appointment could not be reserved. Please call the clinic.",
+      });
     } finally {
       setSubmitting(false);
     }
   }
+
+  const selectedDayEnabled = dateIsEnabled(schedule, date);
+  const scheduleText = scheduleSummary(schedule, doctorId);
 
   return (
     <section id="appointment" className="section appointment-section">
       <div className="site-shell appointment-shell">
         <div className="appointment-copy">
           <span className="section-kicker">Book in under a minute</span>
-          <h2>Request your preferred appointment.</h2>
-          <p>Tell us when you would like to visit. The clinic team will confirm the exact slot.</p>
-          <div className="booking-points"><span><MessageCircle /> Quick confirmation on WhatsApp</span><span><Clock3 /> Clinic hours: 9:00 AM–9:00 PM</span><span><ShieldCheck /> No payment required online</span></div>
-          <a className="phone-card" href="tel:+919019263709"><span><Phone /></span><div><small>Prefer to call?</small><strong>+91 90192 63709</strong></div></a>
+          <h2>Choose a live appointment slot.</h2>
+          <p>
+            Appointments are available Monday to Saturday. Select a doctor, date,
+            and one of the currently available times.
+          </p>
+          <div className="booking-points">
+            <span><MessageCircle /> Quick confirmation on WhatsApp</span>
+            <span><Clock3 /> Default hours: 5:00 PM–8:00 PM</span>
+            <span><ShieldCheck /> Live timings set by the clinic</span>
+          </div>
+          <a className="phone-card" href="tel:+919019263709">
+            <span><Phone /></span>
+            <div><small>Prefer to call?</small><strong>+91 90192 63709</strong></div>
+          </a>
         </div>
+
         <form className="booking-card" onSubmit={submitBooking}>
-          <div className="booking-card-head"><span><CalendarCheck /></span><div><small>Appointment request</small><h3>Choose your preferences</h3></div></div>
-          <label>Patient name<input name="name" type="text" placeholder="Full name" autoComplete="name" minLength={2} maxLength={80} required /></label>
-          <label>Mobile number<input name="phone" type="tel" placeholder="10-digit mobile number" pattern="[0-9 +()-]{10,20}" autoComplete="tel" required /></label>
-          <label>Specialist<select name="doctor" defaultValue="" required><option value="" disabled>Select a doctor</option>{doctors.map((doctor) => <option key={doctor.id} value={doctor.id}>{doctor.label}</option>)}</select></label>
-          <div className="form-row"><label>Preferred date<input name="date" type="date" min={new Date().toISOString().slice(0, 10)} required /></label><label>Preferred time<select name="time" defaultValue="" required><option value="" disabled>Select time</option><option value="morning">Morning (9 AM–12 PM)</option><option value="afternoon">Afternoon (12–4 PM)</option><option value="evening">Evening (4–9 PM)</option></select></label></div>
-          <label>Reason for visit <span className="optional">Optional</span><textarea name="reason" rows={3} maxLength={500} placeholder="Briefly tell us how we can help" /></label>
-          <label className="flex-row"><input name="consent" type="checkbox" required style={{ width: 18, height: 18 }} /><span>I agree that the clinic may use these details to arrange my appointment.</span></label>
-          <button className="button button-primary booking-submit" type="submit" disabled={submitting}><MessageCircle /> {submitting ? "Saving request…" : "Request appointment"}</button>
-          {result && <p className="form-success"><CheckCircle2 /> {result}</p>}
-          <p className="form-note">For medical emergencies, contact local emergency services. This form does not confirm a slot.</p>
+          <div className="booking-card-head">
+            <span><CalendarCheck /></span>
+            <div><small>Live appointment booking</small><h3>Reserve your preferred time</h3></div>
+          </div>
+
+          <label>
+            Patient name
+            <input name="name" type="text" placeholder="Full name" autoComplete="name" minLength={2} maxLength={80} required />
+          </label>
+          <label>
+            Mobile number
+            <input name="phone" type="tel" placeholder="10-digit mobile number" pattern="[0-9 +()-]{10,20}" autoComplete="tel" required />
+          </label>
+          <label>
+            Specialist
+            <select
+              name="doctor"
+              value={doctorId}
+              onChange={(event) => {
+                setDoctorId(event.target.value as DoctorId);
+                setResult(null);
+              }}
+              required
+            >
+              {DOCTORS.map((doctor) => (
+                <option key={doctor.id} value={doctor.id}>{doctor.label}</option>
+              ))}
+            </select>
+            <small className="mt-2 block text-slate-500">{scheduleText}</small>
+          </label>
+
+          <div className="form-row">
+            <label>
+              Appointment date
+              <input
+                name="date"
+                type="date"
+                min={clinicDate()}
+                value={date}
+                onChange={(event) => {
+                  setDate(event.target.value);
+                  setResult(null);
+                }}
+                required
+              />
+            </label>
+            <label>
+              Available time
+              <select
+                name="time"
+                value={selectedTime}
+                onChange={(event) => setTime(event.target.value)}
+                disabled={!selectedDayEnabled || availabilityLoading || availableSlots.length === 0}
+                required
+              >
+                <option value="">
+                  {availabilityLoading
+                    ? "Checking availability…"
+                    : !selectedDayEnabled
+                      ? "Clinic closed this day"
+                      : availableSlots.length === 0
+                        ? "No slots available"
+                        : "Select a time"}
+                </option>
+                {allSlots.map((slot) => (
+                  <option key={appointmentSlotId(doctorId, date, slot)} value={slot} disabled={occupiedSlots.has(slot)}>
+                    {formatAppointmentTime(slot)}{occupiedSlots.has(slot) ? " — Booked" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          {!selectedDayEnabled && (
+            <p className="rounded-xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+              Appointments are closed on this day. Please choose Monday to Saturday.
+            </p>
+          )}
+          {scheduleError && (
+            <p className="rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              {scheduleError} Default clinic timings are shown.
+            </p>
+          )}
+
+          <label>
+            Reason for visit <span className="optional">Optional</span>
+            <textarea name="reason" rows={3} maxLength={500} placeholder="Briefly tell us how we can help" />
+          </label>
+          <label className="flex-row">
+            <input name="consent" type="checkbox" required style={{ width: 18, height: 18 }} />
+            <span>I agree that the clinic may use these details to arrange my appointment.</span>
+          </label>
+          <button
+            className="button button-primary booking-submit"
+            type="submit"
+            disabled={submitting || scheduleLoading || !selectedTime}
+          >
+            {submitting ? <LoaderCircle className="animate-spin" /> : <CalendarCheck />}
+            {submitting ? "Reserving slot…" : "Reserve appointment"}
+          </button>
+          {result && (
+            <p className={result.tone === "success" ? "form-success" : "rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700"}>
+              {result.tone === "success" && <CheckCircle2 />} {result.message}
+            </p>
+          )}
+          <p className="form-note">
+            The selected time is held for you after submission and confirmed by the clinic.
+            For emergencies, contact local emergency services.
+          </p>
         </form>
       </div>
     </section>

@@ -34,7 +34,10 @@ async function createServiceAccountAssertion(env) {
   const header = textToBase64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
   const claims = textToBase64Url(JSON.stringify({
     iss: env.FIREBASE_CLIENT_EMAIL,
-    scope: "https://www.googleapis.com/auth/datastore",
+    scope: [
+      "https://www.googleapis.com/auth/datastore",
+      "https://www.googleapis.com/auth/identitytoolkit",
+    ].join(" "),
     aud: "https://oauth2.googleapis.com/token",
     iat: issuedAt,
     exp: issuedAt + 3600,
@@ -55,7 +58,7 @@ async function createServiceAccountAssertion(env) {
   return `${unsignedToken}.${bytesToBase64Url(new Uint8Array(signature))}`;
 }
 
-async function serviceAccountAccessToken(env) {
+export async function serviceAccountAccessToken(env) {
   requireEnvironment(env, [
     "FIREBASE_PROJECT_ID",
     "FIREBASE_CLIENT_EMAIL",
@@ -166,8 +169,8 @@ async function firestoreRequest(env, url, options = {}) {
     throw new HttpError(
       response.status === 409 || response.status === 412 ? 409 : 503,
       response.status === 409 || response.status === 412
-        ? "This billing record changed during payment. Please retry verification."
-        : "The clinic database could not complete this payment.",
+        ? "This clinic record changed. Please refresh and try again."
+        : "The secure clinic database could not complete this request.",
     );
   }
   return result;
@@ -247,4 +250,63 @@ export async function requireActiveStaff(request, env) {
     email: firebaseUser.email || "",
     role,
   };
+}
+
+export async function requireAdminStaff(request, env) {
+  const staff = await requireActiveStaff(request, env);
+  if (staff.role !== "admin") {
+    throw new HttpError(403, "Only a clinic administrator can manage staff access.");
+  }
+  return staff;
+}
+
+async function identityToolkitRequest(env, path, body) {
+  requireEnvironment(env, ["FIREBASE_PROJECT_ID", "FIREBASE_WEB_API_KEY"]);
+  const accessToken = await serviceAccountAccessToken(env);
+  const response = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/${path}?key=${encodeURIComponent(env.FIREBASE_WEB_API_KEY)}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    },
+  );
+  const result = await response.json();
+  if (!response.ok) {
+    const code = String(result?.error?.message || "");
+    if (code.includes("EMAIL_EXISTS")) {
+      throw new HttpError(409, "A sign-in account already exists for this email address.");
+    }
+    if (code.includes("WEAK_PASSWORD")) {
+      throw new HttpError(400, "The temporary password does not meet Firebase security requirements.");
+    }
+    console.error("Identity Toolkit error", response.status, code);
+    throw new HttpError(503, "The secure staff account service could not complete this request.");
+  }
+  return result;
+}
+
+export function createAuthUser(env, { displayName, email, password }) {
+  return identityToolkitRequest(
+    env,
+    `projects/${encodeURIComponent(env.FIREBASE_PROJECT_ID)}/accounts`,
+    {
+      displayName,
+      email,
+      password,
+      emailVerified: false,
+      disabled: false,
+    },
+  );
+}
+
+export function deleteAuthUser(env, localId) {
+  return identityToolkitRequest(
+    env,
+    `projects/${encodeURIComponent(env.FIREBASE_PROJECT_ID)}/accounts:delete`,
+    { localId },
+  );
 }

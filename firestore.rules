@@ -20,55 +20,6 @@ service cloud.firestore {
       return isStaff() && staffProfile().data.role == 'admin';
     }
 
-    function validAppointment() {
-      return request.resource.data.keys().hasOnly([
-          'patientName', 'phone', 'doctorId', 'preferredDate', 'preferredTime',
-          'reason', 'status', 'source', 'privacyAccepted', 'createdAt', 'updatedAt'
-        ])
-        && request.resource.data.patientName is string
-        && request.resource.data.patientName.size() >= 2
-        && request.resource.data.patientName.size() <= 80
-        && request.resource.data.phone is string
-        && request.resource.data.phone.size() >= 10
-        && request.resource.data.phone.size() <= 20
-        && request.resource.data.doctorId in ['pediatrics', 'obg']
-        && request.resource.data.preferredDate is string
-        && request.resource.data.preferredDate.size() == 10
-        && request.resource.data.preferredTime in ['morning', 'afternoon', 'evening']
-        && request.resource.data.reason is string
-        && request.resource.data.reason.size() <= 500
-        && request.resource.data.status == 'requested'
-        && request.resource.data.source == 'website'
-        && request.resource.data.privacyAccepted == true
-        && request.resource.data.createdAt == request.time
-        && request.resource.data.updatedAt == request.time;
-    }
-
-    function validStaffAppointment() {
-      return isStaff()
-        && request.resource.data.keys().hasOnly([
-          'patientName', 'phone', 'doctorId', 'preferredDate', 'preferredTime',
-          'reason', 'status', 'source', 'privacyAccepted', 'createdAt', 'updatedAt'
-        ])
-        && request.resource.data.patientName is string
-        && request.resource.data.patientName.size() >= 2
-        && request.resource.data.patientName.size() <= 80
-        && request.resource.data.phone is string
-        && request.resource.data.phone.size() >= 10
-        && request.resource.data.phone.size() <= 20
-        && request.resource.data.doctorId in ['pediatrics', 'obg']
-        && request.resource.data.preferredDate is string
-        && request.resource.data.preferredDate.size() == 10
-        && request.resource.data.preferredTime in ['morning', 'afternoon', 'evening']
-        && request.resource.data.reason is string
-        && request.resource.data.reason.size() <= 500
-        && request.resource.data.status in ['requested', 'confirmed']
-        && request.resource.data.source in ['reception', 'phone', 'walk-in']
-        && request.resource.data.privacyAccepted == true
-        && request.resource.data.createdAt == request.time
-        && request.resource.data.updatedAt == request.time;
-    }
-
     function validClinicalCreate() {
       return isStaff()
         && request.resource.data.createdBy == request.auth.uid
@@ -84,13 +35,35 @@ service cloud.firestore {
     }
 
     match /appointments/{appointmentId} {
-      allow create: if validAppointment() || validStaffAppointment();
+      // New appointments are created by the protected booking API so that a
+      // doctor/date/time slot can be locked atomically and never double-booked.
+      allow create: if false;
       allow read: if isStaff();
       allow update: if isStaff()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
         && request.resource.data.status in ['requested', 'confirmed', 'completed', 'cancelled']
         && request.resource.data.updatedAt == request.time;
       allow delete: if isAdmin();
+    }
+
+    match /appointmentSlots/{slotId} {
+      // Slot documents contain no patient details and power public live availability.
+      allow read: if true;
+      allow create, update: if false;
+      allow delete: if isStaff();
+    }
+
+    match /clinicSettings/appointmentSchedule {
+      allow read: if true;
+      allow create, update: if isAdmin()
+        && request.resource.data.timezone == 'Asia/Kolkata'
+        && request.resource.data.enabledDays is list
+        && request.resource.data.enabledDays.size() > 0
+        && request.resource.data.enabledDays.size() <= 7
+        && request.resource.data.doctors is map
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
     }
 
     match /invoices/{invoiceId} {

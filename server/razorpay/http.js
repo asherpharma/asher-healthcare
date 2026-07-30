@@ -24,8 +24,8 @@ export function errorResponse(error) {
     return json({ error: error.message }, error.status);
   }
 
-  console.error("Unhandled payment API error", error);
-  return json({ error: "The secure payment service is temporarily unavailable." }, 500);
+  console.error("Unhandled clinic API error", error);
+  return json({ error: "The secure clinic service is temporarily unavailable." }, 500);
 }
 
 export function assertSameOrigin(request) {
@@ -57,7 +57,7 @@ export function requireEnvironment(env, names) {
   if (missing.length > 0) {
     throw new HttpError(
       503,
-      "Payment setup is incomplete. A clinic administrator must finish the secure server configuration.",
+      "Secure server setup is incomplete. A clinic administrator must finish the configuration.",
     );
   }
 }
