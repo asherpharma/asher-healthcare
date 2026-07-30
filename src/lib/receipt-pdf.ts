@@ -1,4 +1,5 @@
 import { jsPDF } from "jspdf";
+import { clinicGold, clinicNavy, drawClinicFooter, drawClinicHeader } from "@/lib/clinic-pdf";
 
 export type ReceiptLineItem = { description: string; quantity: number; unitPrice: number; amount: number };
 export type ReceiptInvoice = {
@@ -26,45 +27,47 @@ function labelMethod(value: string) {
   return value ? value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()) : "Not recorded";
 }
 
-export function downloadReceiptPdf(invoice: ReceiptInvoice) {
+export async function downloadReceiptPdf(invoice: ReceiptInvoice) {
   const pdf = new jsPDF({ unit: "mm", format: "a4" });
-  const navy: [number, number, number] = [35, 58, 89];
-  const gold: [number, number, number] = [168, 134, 74];
   const pageWidth = pdf.internal.pageSize.getWidth();
   const margin = 16;
 
-  pdf.setFillColor(...navy);
-  pdf.rect(0, 0, pageWidth, 40, "F");
-  pdf.setTextColor(255, 255, 255);
-  pdf.setFont("helvetica", "bold");
-  pdf.setFontSize(18);
-  pdf.text("ASHER WOMEN & CHILD HEALTHCARE", margin, 16);
-  pdf.setFont("helvetica", "normal");
-  pdf.setFontSize(9);
-  pdf.text("Ground Floor, 546, Thanisandra Main Road, RK Hegde Nagar, Bengaluru 560077", margin, 24);
-  pdf.text("Phone: +91 90192 63709  |  asherhealthcare.in", margin, 30);
-  pdf.setFillColor(...gold);
-  pdf.rect(0, 38, pageWidth, 2, "F");
+  await drawClinicHeader(pdf, "Payment receipt");
 
-  pdf.setTextColor(...navy);
+  pdf.setTextColor(...clinicNavy);
   pdf.setFont("helvetica", "bold");
-  pdf.setFontSize(15);
-  pdf.text("PAYMENT RECEIPT", margin, 54);
-  pdf.setFontSize(10);
-  pdf.text(invoice.invoiceNumber, pageWidth - margin, 54, { align: "right" });
+  pdf.setFontSize(8);
+  pdf.text("RECEIPT NUMBER", margin, 54);
+  pdf.text("DATE ISSUED", pageWidth - margin, 54, { align: "right" });
 
   const date = invoice.createdAt?.toDate?.() ?? new Date();
-  pdf.setFont("helvetica", "normal");
-  pdf.setTextColor(70, 80, 95);
-  pdf.text("Date: " + date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }), margin, 62);
-  pdf.text("Patient: " + invoice.patientName, margin, 70);
-  pdf.text("Phone: " + invoice.patientPhone, pageWidth - margin, 70, { align: "right" });
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(11);
+  pdf.text(invoice.invoiceNumber, margin, 61);
+  pdf.text(
+    date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
+    pageWidth - margin,
+    61,
+    { align: "right" },
+  );
 
-  let y = 82;
+  pdf.setFillColor(248, 250, 252);
+  pdf.roundedRect(margin, 68, pageWidth - margin * 2, 20, 2.5, 2.5, "F");
+  pdf.setTextColor(100, 116, 139);
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(7.5);
+  pdf.text("PATIENT", margin + 4, 75);
+  pdf.text("MOBILE", pageWidth - margin - 4, 75, { align: "right" });
+  pdf.setTextColor(...clinicNavy);
+  pdf.setFontSize(10);
+  pdf.text(invoice.patientName, margin + 4, 82, { maxWidth: 110 });
+  pdf.text(invoice.patientPhone, pageWidth - margin - 4, 82, { align: "right" });
+
+  let y = 101;
   pdf.setFillColor(241, 245, 249);
   pdf.rect(margin, y - 6, pageWidth - margin * 2, 9, "F");
   pdf.setFont("helvetica", "bold");
-  pdf.setTextColor(...navy);
+  pdf.setTextColor(...clinicNavy);
   pdf.text("Description", margin + 2, y);
   pdf.text("Qty", 125, y, { align: "right" });
   pdf.text("Rate", 158, y, { align: "right" });
@@ -76,9 +79,10 @@ export function downloadReceiptPdf(invoice: ReceiptInvoice) {
   for (const item of invoice.items) {
     const description = pdf.splitTextToSize(item.description || "Clinic service", 85);
     const rowHeight = Math.max(8, description.length * 5.5);
-    if (y + rowHeight > 250) {
+    if (y + rowHeight > 260) {
       pdf.addPage();
-      y = 20;
+      await drawClinicHeader(pdf, "Payment receipt");
+      y = 58;
     }
     pdf.text(description, margin + 2, y);
     pdf.text(String(item.quantity), 125, y, { align: "right" });
@@ -100,7 +104,7 @@ export function downloadReceiptPdf(invoice: ReceiptInvoice) {
   pdf.text(money(invoice.discount), valueX, y, { align: "right" });
   y += 8;
   pdf.setFont("helvetica", "bold");
-  pdf.setTextColor(...navy);
+  pdf.setTextColor(...clinicNavy);
   pdf.text("Total", totalsX, y);
   pdf.text(money(invoice.total), valueX, y, { align: "right" });
   y += 8;
@@ -127,8 +131,21 @@ export function downloadReceiptPdf(invoice: ReceiptInvoice) {
     pdf.text(pdf.splitTextToSize("Notes: " + invoice.notes, pageWidth - margin * 2), margin, y);
   }
 
-  pdf.setFontSize(9);
-  pdf.setTextColor(100, 110, 125);
-  pdf.text("Computer-generated receipt. Thank you for choosing Asher Healthcare.", pageWidth / 2, 287, { align: "center" });
+  const pageCount = pdf.getNumberOfPages();
+  for (let page = 1; page <= pageCount; page += 1) {
+    pdf.setPage(page);
+    drawClinicFooter(pdf, page, pageCount);
+    if (page === pageCount) {
+      pdf.setFontSize(7.5);
+      pdf.setTextColor(...clinicGold);
+      pdf.text(
+        "Computer-generated receipt - thank you for choosing Asher Healthcare.",
+        pageWidth / 2,
+        273,
+        { align: "center" },
+      );
+    }
+  }
+
   pdf.save(invoice.invoiceNumber + "-receipt.pdf");
 }
