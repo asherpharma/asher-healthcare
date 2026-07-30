@@ -3,7 +3,7 @@
 import AdminShell from "@/components/admin/AdminShell";
 import { useStaff } from "@/components/admin/StaffGuard";
 import { firestore, storage } from "@/firebase/config";
-import { downloadPrescriptionPdf } from "@/lib/prescription-pdf";
+import { downloadBlankPrescriptionPdf, downloadPrescriptionPdf } from "@/lib/prescription-pdf";
 import {
   addDoc,
   collection,
@@ -49,6 +49,7 @@ type Patient = {
   phone: string;
   dateOfBirth: string;
   gender: Gender;
+  doctorName?: string;
   address: string;
   allergies: string;
   medicalHistory: string;
@@ -127,6 +128,7 @@ function PatientRegister() {
   const [showEdit, setShowEdit] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [lastRegistered, setLastRegistered] = useState<Patient | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
   const [visits, setVisits] = useState<VisitRecord[]>([]);
@@ -180,16 +182,21 @@ function PatientRegister() {
     setMessage("");
     const form = new FormData(event.currentTarget);
     const patientRef = doc(collection(db, "patients"));
+    const patientNumber = "ASH-" + patientRef.id.slice(0, 7).toUpperCase();
+    const patientData = {
+      patientNumber,
+      fullName: text(form, "fullName"),
+      phone: text(form, "phone"),
+      dateOfBirth: text(form, "dateOfBirth"),
+      gender: text(form, "gender") as Gender,
+      doctorName: text(form, "doctorName"),
+      address: text(form, "address"),
+      allergies: text(form, "allergies"),
+      medicalHistory: text(form, "medicalHistory"),
+    };
     try {
       await setDoc(patientRef, {
-        patientNumber: "ASH-" + patientRef.id.slice(0, 7).toUpperCase(),
-        fullName: text(form, "fullName"),
-        phone: text(form, "phone"),
-        dateOfBirth: text(form, "dateOfBirth"),
-        gender: text(form, "gender"),
-        address: text(form, "address"),
-        allergies: text(form, "allergies"),
-        medicalHistory: text(form, "medicalHistory"),
+        ...patientData,
         createdBy: user.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -197,7 +204,8 @@ function PatientRegister() {
       event.currentTarget.reset();
       setShowForm(false);
       setSelectedId(patientRef.id);
-      setMessage("Patient registered securely.");
+      setLastRegistered({ id: patientRef.id, ...patientData });
+      setMessage("Patient registered securely. The prescription letterhead is ready.");
     } catch {
       setMessage("Patient registration failed. Please check access and try again.");
     } finally {
@@ -216,6 +224,7 @@ function PatientRegister() {
         phone: text(form, "phone"),
         dateOfBirth: text(form, "dateOfBirth"),
         gender: text(form, "gender"),
+        doctorName: text(form, "doctorName"),
         address: text(form, "address"),
         allergies: text(form, "allergies"),
         medicalHistory: text(form, "medicalHistory"),
@@ -344,12 +353,29 @@ function PatientRegister() {
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-[#233A59]">Patient records</h1>
           <p className="mt-3 text-slate-600">Private clinical records for registered patients.</p>
         </div>
-        <button onClick={() => setShowForm((value) => !value)} className="inline-flex items-center gap-2 rounded-xl bg-[#233A59] px-5 py-3 text-sm font-bold text-white">
+        <button onClick={() => { setShowForm((value) => !value); setLastRegistered(null); }} className="inline-flex items-center gap-2 rounded-xl bg-[#233A59] px-5 py-3 text-sm font-bold text-white">
           <Plus size={18} /> Register patient
         </button>
       </div>
 
       {message && <p className="mt-5 rounded-xl bg-blue-50 px-4 py-3 text-sm font-medium text-blue-800">{message}</p>}
+      {lastRegistered && (
+        <div className="mt-4 flex flex-col gap-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="font-bold text-emerald-900">Blank prescription prepared for {lastRegistered.fullName}</p>
+            <p className="mt-1 text-sm text-emerald-800">
+              Patient ID, mobile number, age and {lastRegistered.doctorName} are already included.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void downloadBlankPrescriptionPdf(lastRegistered, lastRegistered.doctorName ?? "")}
+            className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-[#233A59] px-4 py-3 text-sm font-bold text-white"
+          >
+            <Download size={17} /> Download letterhead
+          </button>
+        </div>
+      )}
 
       {showForm && (
         <form onSubmit={addPatient} className={cardClass + " mt-6 grid gap-4 sm:grid-cols-2"}>
@@ -361,10 +387,11 @@ function PatientRegister() {
           <label className={labelClass}>Mobile number<input name="phone" type="tel" required minLength={10} maxLength={20} className={inputClass} /></label>
           <label className={labelClass}>Date of birth<input name="dateOfBirth" type="date" required className={inputClass} /></label>
           <label className={labelClass}>Gender<select name="gender" required defaultValue="" className={inputClass}><option value="" disabled>Select</option><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option></select></label>
+          <label className={labelClass + " sm:col-span-2"}>Consulting doctor<select name="doctorName" required defaultValue="" className={inputClass}><option value="" disabled>Select doctor</option><option>Dr. Lt Col Shafi Ahamad</option><option>Dr. Shaik Reshma</option></select></label>
           <label className={labelClass + " sm:col-span-2"}>Address<textarea name="address" rows={2} required maxLength={300} className={inputClass} /></label>
           <label className={labelClass}>Known allergies<textarea name="allergies" rows={3} maxLength={500} className={inputClass} /></label>
           <label className={labelClass}>Medical history<textarea name="medicalHistory" rows={3} maxLength={1000} className={inputClass} /></label>
-          <div className="flex gap-3 sm:col-span-2"><SaveButton saving={saving} label="Save securely" /><button type="button" onClick={() => setShowForm(false)} className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold text-slate-700">Cancel</button></div>
+          <div className="flex gap-3 sm:col-span-2"><SaveButton saving={saving} label="Save & prepare prescription" /><button type="button" onClick={() => setShowForm(false)} className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold text-slate-700">Cancel</button></div>
         </form>
       )}
 
@@ -392,7 +419,7 @@ function PatientRegister() {
           ) : (
             <div className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-200">
               <div className="bg-[#233A59] p-6 text-white sm:p-8">
-                <div className="flex flex-wrap justify-between gap-5"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-[#D4B873]">{selectedPatient.patientNumber ?? "Patient profile"}</p><h2 className="mt-2 text-2xl font-bold">{selectedPatient.fullName}</h2><p className="mt-2 text-sm text-slate-200">{selectedPatient.phone} · DOB {selectedPatient.dateOfBirth}</p></div><div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10"><ShieldCheck size={27} /></div></div>
+                <div className="flex flex-wrap justify-between gap-5"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-[#D4B873]">{selectedPatient.patientNumber ?? "Patient profile"}</p><h2 className="mt-2 text-2xl font-bold">{selectedPatient.fullName}</h2><p className="mt-2 text-sm text-slate-200">{selectedPatient.phone} · DOB {selectedPatient.dateOfBirth}{selectedPatient.doctorName ? " · " + selectedPatient.doctorName : ""}</p></div><div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10"><ShieldCheck size={27} /></div></div>
               </div>
               <div className="flex gap-2 overflow-x-auto border-b border-slate-200 p-3">
                 {tabs.map(({ key, label, icon: Icon, count }) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={"inline-flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-bold " + (activeTab === key ? "bg-[#233A59] text-white" : "text-slate-600 hover:bg-slate-100")}><Icon size={16} />{label}{typeof count === "number" && <span className="rounded-full bg-white/15 px-1.5 text-xs">{count}</span>}</button>)}
@@ -422,9 +449,70 @@ function SectionHeading({ icon: Icon, title, action }: { icon: typeof Activity; 
   return <div className="mb-5 flex items-center gap-3"><span className="rounded-xl bg-blue-50 p-2.5 text-blue-700"><Icon size={20} /></span><div><h3 className="font-bold text-[#233A59]">{title}</h3>{action && <p className="text-xs text-slate-500">{action}</p>}</div></div>;
 }
 
+function BlankPrescriptionAction({ patient }: { patient: Patient }) {
+  const [doctorName, setDoctorName] = useState(patient.doctorName ?? "");
+
+  return (
+    <div className="flex flex-col gap-2 sm:flex-row">
+      <select
+        aria-label="Doctor for blank prescription"
+        value={doctorName}
+        onChange={(event) => setDoctorName(event.target.value)}
+        className="min-h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-[#233A59]"
+      >
+        <option value="">Select doctor</option>
+        <option>Dr. Lt Col Shafi Ahamad</option>
+        <option>Dr. Shaik Reshma</option>
+      </select>
+      <button
+        type="button"
+        disabled={!doctorName}
+        onClick={() => void downloadBlankPrescriptionPdf(patient, doctorName)}
+        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-[#233A59] px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <Download size={16} /> Blank prescription
+      </button>
+    </div>
+  );
+}
+
 function Overview({ patient, showEdit, setShowEdit, editPatient, saving }: { patient: Patient; showEdit: boolean; setShowEdit: (value: boolean) => void; editPatient: (event: FormEvent<HTMLFormElement>) => Promise<void>; saving: boolean }) {
-  if (showEdit) return <form key={patient.id} onSubmit={editPatient} className="grid gap-4 sm:grid-cols-2"><SectionHeading icon={UserRound} title="Edit patient profile" action="Keep identity and clinical background current" /><span className="hidden sm:block" /><label className={labelClass}>Full name<input name="fullName" required defaultValue={patient.fullName} className={inputClass} /></label><label className={labelClass}>Mobile number<input name="phone" required defaultValue={patient.phone} className={inputClass} /></label><label className={labelClass}>Date of birth<input name="dateOfBirth" type="date" required defaultValue={patient.dateOfBirth} className={inputClass} /></label><label className={labelClass}>Gender<select name="gender" defaultValue={patient.gender} className={inputClass}><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option></select></label><label className={labelClass + " sm:col-span-2"}>Address<textarea name="address" defaultValue={patient.address} rows={2} className={inputClass} /></label><label className={labelClass}>Known allergies<textarea name="allergies" defaultValue={patient.allergies} rows={3} className={inputClass} /></label><label className={labelClass}>Medical history<textarea name="medicalHistory" defaultValue={patient.medicalHistory} rows={3} className={inputClass} /></label><div className="flex gap-3 sm:col-span-2"><SaveButton saving={saving} label="Update profile" /><button type="button" onClick={() => setShowEdit(false)} className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold">Cancel</button></div></form>;
-  return <div><div className="flex items-center justify-between"><SectionHeading icon={ClipboardPlus} title="Clinical overview" action="Identity, allergies and medical background" /><button type="button" onClick={() => setShowEdit(true)} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-[#233A59]">Edit profile</button></div><div className="grid gap-4 sm:grid-cols-2"><Info label="Address" value={patient.address} /><Info label="Gender" value={patient.gender} /><Info label="Known allergies" value={patient.allergies || "None recorded"} alert={Boolean(patient.allergies)} /><Info label="Medical history" value={patient.medicalHistory || "No history recorded"} /></div></div>;
+  if (showEdit) {
+    return (
+      <form key={patient.id} onSubmit={editPatient} className="grid gap-4 sm:grid-cols-2">
+        <SectionHeading icon={UserRound} title="Edit patient profile" action="Keep identity and clinical background current" />
+        <span className="hidden sm:block" />
+        <label className={labelClass}>Full name<input name="fullName" required defaultValue={patient.fullName} className={inputClass} /></label>
+        <label className={labelClass}>Mobile number<input name="phone" required defaultValue={patient.phone} className={inputClass} /></label>
+        <label className={labelClass}>Date of birth<input name="dateOfBirth" type="date" required defaultValue={patient.dateOfBirth} className={inputClass} /></label>
+        <label className={labelClass}>Gender<select name="gender" defaultValue={patient.gender} className={inputClass}><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option></select></label>
+        <label className={labelClass + " sm:col-span-2"}>Consulting doctor<select name="doctorName" required defaultValue={patient.doctorName ?? ""} className={inputClass}><option value="" disabled>Select doctor</option><option>Dr. Lt Col Shafi Ahamad</option><option>Dr. Shaik Reshma</option></select></label>
+        <label className={labelClass + " sm:col-span-2"}>Address<textarea name="address" defaultValue={patient.address} rows={2} className={inputClass} /></label>
+        <label className={labelClass}>Known allergies<textarea name="allergies" defaultValue={patient.allergies} rows={3} className={inputClass} /></label>
+        <label className={labelClass}>Medical history<textarea name="medicalHistory" defaultValue={patient.medicalHistory} rows={3} className={inputClass} /></label>
+        <div className="flex gap-3 sm:col-span-2"><SaveButton saving={saving} label="Update profile" /><button type="button" onClick={() => setShowEdit(false)} className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold">Cancel</button></div>
+      </form>
+    );
+  }
+
+  return (
+    <div>
+      <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <SectionHeading icon={ClipboardPlus} title="Clinical overview" action="Identity, allergies and medical background" />
+        <div className="flex flex-col gap-2">
+          <BlankPrescriptionAction key={patient.id + ":" + (patient.doctorName ?? "")} patient={patient} />
+          <button type="button" onClick={() => setShowEdit(true)} className="self-end rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-[#233A59]">Edit profile</button>
+        </div>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Info label="Consulting doctor" value={patient.doctorName || "Not assigned"} />
+        <Info label="Gender" value={patient.gender} />
+        <Info label="Address" value={patient.address} />
+        <Info label="Known allergies" value={patient.allergies || "None recorded"} alert={Boolean(patient.allergies)} />
+        <Info label="Medical history" value={patient.medicalHistory || "No history recorded"} />
+      </div>
+    </div>
+  );
 }
 
 function Info({ label, value, alert = false }: { label: string; value: string; alert?: boolean }) {
