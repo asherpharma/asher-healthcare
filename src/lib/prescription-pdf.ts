@@ -15,7 +15,6 @@ export type PrescriptionPdfPatient = {
   phone: string;
   dateOfBirth: string;
   gender: string;
-  allergies?: string;
 };
 
 export type PrescriptionPdfRecord = {
@@ -88,18 +87,6 @@ function drawPatientDetails(pdf: jsPDF, patient: PrescriptionPdfPatient) {
   pdf.text("Patient ID: " + (patient.patientNumber ?? "Not assigned"), 18, 94);
 }
 
-function drawAllergyAlert(pdf: jsPDF, patient: PrescriptionPdfPatient) {
-  if (!patient.allergies) return 102;
-
-  pdf.setFillColor(255, 247, 237);
-  pdf.roundedRect(14, 100, 182, 11, 2, 2, "F");
-  pdf.setTextColor(154, 52, 18);
-  pdf.setFont("helvetica", "bold");
-  pdf.setFontSize(8);
-  pdf.text("ALLERGY ALERT: " + patient.allergies, 18, 107, { maxWidth: 174 });
-  return 116;
-}
-
 function drawMedicineHeader(pdf: jsPDF, y: number) {
   pdf.setFillColor(238, 242, 247);
   pdf.roundedRect(14, y, 182, 9, 1.5, 1.5, "F");
@@ -159,8 +146,7 @@ export async function downloadBlankPrescriptionPdf(
   await drawClinicHeader(pdf, "Prescription");
   drawDoctorDetails(pdf, doctorName, prescriptionDate());
   drawPatientDetails(pdf, patient);
-  const contentTop = drawAllergyAlert(pdf, patient);
-  drawBlankWritingArea(pdf, contentTop + 9, doctorName);
+  drawBlankWritingArea(pdf, 111, doctorName);
   drawClinicFooter(pdf);
 
   const fileName =
@@ -180,13 +166,12 @@ export async function downloadPrescriptionPdf(
   await drawClinicHeader(pdf, "Prescription");
   drawDoctorDetails(pdf, prescription.doctorName, prescriptionDate(prescription.prescribedDate));
   drawPatientDetails(pdf, patient);
-  const contentTop = drawAllergyAlert(pdf, patient);
 
   pdf.setTextColor(...clinicNavy);
   pdf.setFont("helvetica", "bold");
   pdf.setFontSize(14);
-  pdf.text("Rx", 14, contentTop + 8);
-  let y = drawMedicineHeader(pdf, contentTop + 13);
+  pdf.text("Rx", 14, 110);
+  let y = drawMedicineHeader(pdf, 115);
 
   for (const [index, medicine] of prescription.medicines.entries()) {
     const nameLines = pdf.splitTextToSize(String(index + 1) + ". " + medicine.name, 62) as string[];
