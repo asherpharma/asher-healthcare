@@ -1,4 +1,13 @@
 import { jsPDF } from "jspdf";
+import {
+  clinicGold,
+  clinicNavy,
+  doctorCredentials,
+  drawClinicFooter,
+  drawClinicHeader,
+  patientAge,
+  safePdfName,
+} from "@/lib/clinic-pdf";
 
 export type PrescriptionPdfPatient = {
   fullName: string;
@@ -23,27 +32,72 @@ export type PrescriptionPdfRecord = {
   advice: string;
 };
 
-function safeName(value: string) {
-  return value.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase();
+function prescriptionDate(value?: string) {
+  const parsed = value ? new Date(value + "T00:00:00") : new Date();
+  return Number.isNaN(parsed.getTime())
+    ? new Date().toLocaleDateString("en-IN")
+    : parsed.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 }
 
-function doctorCredentials(name: string) {
-  if (name.includes("Reshma")) {
-    return ["MBBS, MS (OBG)", "Consultant Obstetrician & Gynaecologist", "Laparoscopic Surgeon & Infertility Specialist"];
-  }
-  return ["MBBS, MD (Pediatrics)", "Consultant Pediatrician", "Pediatric Allergy & Asthma Specialist"];
+function drawDoctorDetails(pdf: jsPDF, doctorName: string, date: string) {
+  const credentials = doctorCredentials(doctorName);
+  const pageWidth = pdf.internal.pageSize.getWidth();
+
+  pdf.setTextColor(...clinicNavy);
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(12.5);
+  pdf.text(doctorName, 14, 52);
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(8);
+  pdf.text(credentials[0], 14, 58);
+  pdf.text(credentials[1], 14, 63);
+  pdf.text(credentials[2], 14, 68);
+
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(7.5);
+  pdf.setTextColor(100, 116, 139);
+  pdf.text("DATE", pageWidth - 14, 54, { align: "right" });
+  pdf.setTextColor(...clinicNavy);
+  pdf.setFontSize(9.5);
+  pdf.text(date, pageWidth - 14, 61, { align: "right" });
 }
 
-async function imageDataUrl(path: string) {
-  const response = await fetch(path);
-  if (!response.ok) throw new Error("Unable to load clinic logo");
-  const blob = await response.blob();
-  return await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(blob);
+function drawPatientDetails(pdf: jsPDF, patient: PrescriptionPdfPatient) {
+  const details = [
+    { label: "PATIENT", value: patient.fullName, x: 18, width: 58 },
+    { label: "MOBILE", value: patient.phone || "Not recorded", x: 80, width: 38 },
+    { label: "AGE", value: patientAge(patient.dateOfBirth), x: 122, width: 28 },
+    { label: "GENDER", value: patient.gender || "Not recorded", x: 154, width: 38 },
+  ];
+
+  pdf.setFillColor(248, 250, 252);
+  pdf.roundedRect(14, 75, 182, 21, 2.5, 2.5, "F");
+  details.forEach(({ label, value, x, width }) => {
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(7);
+    pdf.setTextColor(100, 116, 139);
+    pdf.text(label, x, 82);
+    pdf.setFontSize(9);
+    pdf.setTextColor(...clinicNavy);
+    pdf.text(String(value), x, 89, { maxWidth: width });
   });
+
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(7);
+  pdf.setTextColor(100, 116, 139);
+  pdf.text("Patient ID: " + (patient.patientNumber ?? "Not assigned"), 18, 94);
+}
+
+function drawAllergyAlert(pdf: jsPDF, patient: PrescriptionPdfPatient) {
+  if (!patient.allergies) return 102;
+
+  pdf.setFillColor(255, 247, 237);
+  pdf.roundedRect(14, 100, 182, 11, 2, 2, "F");
+  pdf.setTextColor(154, 52, 18);
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(8);
+  pdf.text("ALLERGY ALERT: " + patient.allergies, 18, 107, { maxWidth: 174 });
+  return 116;
 }
 
 function drawMedicineHeader(pdf: jsPDF, y: number) {
@@ -51,7 +105,7 @@ function drawMedicineHeader(pdf: jsPDF, y: number) {
   pdf.roundedRect(14, y, 182, 9, 1.5, 1.5, "F");
   pdf.setFont("helvetica", "bold");
   pdf.setFontSize(8);
-  pdf.setTextColor(35, 58, 89);
+  pdf.setTextColor(...clinicNavy);
   pdf.text("MEDICINE", 17, y + 6);
   pdf.text("DOSE", 86, y + 6);
   pdf.text("FREQUENCY", 112, y + 6);
@@ -59,17 +113,63 @@ function drawMedicineHeader(pdf: jsPDF, y: number) {
   return y + 12;
 }
 
-function addPageHeader(pdf: jsPDF, patient: PrescriptionPdfPatient) {
-  pdf.setFillColor(35, 58, 89);
-  pdf.rect(0, 0, 210, 18, "F");
-  pdf.setTextColor(255, 255, 255);
+async function drawContinuationHeader(pdf: jsPDF, patient: PrescriptionPdfPatient, doctorName: string) {
+  await drawClinicHeader(pdf, "Prescription");
   pdf.setFont("helvetica", "bold");
-  pdf.setFontSize(11);
-  pdf.text("ASHER WOMEN & CHILD HEALTHCARE", 14, 11.5);
-  pdf.setTextColor(35, 58, 89);
-  pdf.setFontSize(9);
-  pdf.text("Patient: " + patient.fullName + "   |   ID: " + (patient.patientNumber ?? "Not assigned"), 14, 27);
-  return drawMedicineHeader(pdf, 33);
+  pdf.setFontSize(8.5);
+  pdf.setTextColor(...clinicNavy);
+  pdf.text("Patient: " + patient.fullName, 14, 51);
+  pdf.text("Doctor: " + doctorName, 196, 51, { align: "right" });
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(7.5);
+  pdf.setTextColor(100, 116, 139);
+  pdf.text("Patient ID: " + (patient.patientNumber ?? "Not assigned"), 14, 57);
+  return drawMedicineHeader(pdf, 64);
+}
+
+function drawBlankWritingArea(pdf: jsPDF, startY: number, doctorName: string) {
+  pdf.setTextColor(...clinicNavy);
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(15);
+  pdf.text("Rx", 14, startY);
+
+  pdf.setDrawColor(232, 237, 242);
+  pdf.setLineWidth(0.25);
+  for (let y = startY + 14; y <= 244; y += 12) {
+    pdf.line(18, y, 192, y);
+  }
+
+  pdf.setDrawColor(...clinicNavy);
+  pdf.setLineWidth(0.4);
+  pdf.line(145, 264, 195, 264);
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(8.5);
+  pdf.setTextColor(...clinicNavy);
+  pdf.text(doctorName, 170, 269, { align: "center", maxWidth: 50 });
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(7);
+  pdf.text("Doctor's signature", 170, 273, { align: "center" });
+}
+
+export async function downloadBlankPrescriptionPdf(
+  patient: PrescriptionPdfPatient,
+  doctorName: string,
+) {
+  const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  await drawClinicHeader(pdf, "Prescription");
+  drawDoctorDetails(pdf, doctorName, prescriptionDate());
+  drawPatientDetails(pdf, patient);
+  const contentTop = drawAllergyAlert(pdf, patient);
+  drawBlankWritingArea(pdf, contentTop + 9, doctorName);
+  drawClinicFooter(pdf);
+
+  const fileName =
+    "blank-prescription-" +
+    safePdfName(patient.fullName) +
+    "-" +
+    new Date().toISOString().slice(0, 10) +
+    ".pdf";
+  pdf.save(fileName);
 }
 
 export async function downloadPrescriptionPdf(
@@ -77,71 +177,18 @@ export async function downloadPrescriptionPdf(
   prescription: PrescriptionPdfRecord,
 ) {
   const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-  const navy: [number, number, number] = [35, 58, 89];
-  const gold: [number, number, number] = [168, 134, 74];
+  await drawClinicHeader(pdf, "Prescription");
+  drawDoctorDetails(pdf, prescription.doctorName, prescriptionDate(prescription.prescribedDate));
+  drawPatientDetails(pdf, patient);
+  const contentTop = drawAllergyAlert(pdf, patient);
 
-  pdf.setFillColor(...navy);
-  pdf.rect(0, 0, 210, 45, "F");
-  try {
-    const logo = await imageDataUrl("/images/logo.png");
-    pdf.addImage(logo, "PNG", 14, 10, 24, 24, undefined, "FAST");
-  } catch {
-    pdf.setDrawColor(...gold);
-    pdf.setLineWidth(1.2);
-    pdf.circle(26, 22, 10);
-  }
-
-  pdf.setTextColor(255, 255, 255);
-  pdf.setFont("helvetica", "bold");
-  pdf.setFontSize(18);
-  pdf.text("ASHER WOMEN & CHILD HEALTHCARE", 44, 18);
-  pdf.setFont("helvetica", "normal");
-  pdf.setFontSize(8.5);
-  pdf.text("Women, children and family-centred specialist care", 44, 25);
-  pdf.text("R.K. Hegde Nagar, Bengaluru - 560077  |  +91 90192 63709", 44, 31);
-
-  const credentials = doctorCredentials(prescription.doctorName);
-  pdf.setTextColor(...navy);
-  pdf.setFont("helvetica", "bold");
-  pdf.setFontSize(13);
-  pdf.text(prescription.doctorName, 14, 56);
-  pdf.setFont("helvetica", "normal");
-  pdf.setFontSize(8.5);
-  pdf.text(credentials[0], 14, 62);
-  pdf.text(credentials[1], 14, 67);
-  pdf.text(credentials[2], 14, 72);
-
-  pdf.setDrawColor(220, 226, 232);
-  pdf.line(14, 78, 196, 78);
-  pdf.setFont("helvetica", "bold");
-  pdf.setFontSize(8);
-  pdf.setTextColor(100, 116, 139);
-  pdf.text("PATIENT", 14, 86);
-  pdf.text("PATIENT ID", 82, 86);
-  pdf.text("DATE", 135, 86);
-  pdf.text("DOB / GENDER", 165, 86);
-  pdf.setTextColor(...navy);
-  pdf.setFontSize(9.5);
-  pdf.text(patient.fullName, 14, 92, { maxWidth: 62 });
-  pdf.text(patient.patientNumber ?? "Not assigned", 82, 92);
-  pdf.text(prescription.prescribedDate, 135, 92);
-  pdf.text(patient.dateOfBirth + " / " + patient.gender, 165, 92, { maxWidth: 31 });
-
-  if (patient.allergies) {
-    pdf.setFillColor(255, 247, 237);
-    pdf.roundedRect(14, 99, 182, 11, 2, 2, "F");
-    pdf.setTextColor(154, 52, 18);
-    pdf.setFontSize(8.5);
-    pdf.text("ALLERGY ALERT: " + patient.allergies, 18, 106, { maxWidth: 174 });
-  }
-
-  pdf.setTextColor(...navy);
+  pdf.setTextColor(...clinicNavy);
   pdf.setFont("helvetica", "bold");
   pdf.setFontSize(14);
-  pdf.text("Rx", 14, 122);
-  let y = drawMedicineHeader(pdf, 127);
+  pdf.text("Rx", 14, contentTop + 8);
+  let y = drawMedicineHeader(pdf, contentTop + 13);
 
-  prescription.medicines.forEach((medicine, index) => {
+  for (const [index, medicine] of prescription.medicines.entries()) {
     const nameLines = pdf.splitTextToSize(String(index + 1) + ". " + medicine.name, 62) as string[];
     const doseLines = pdf.splitTextToSize(medicine.dose || "-", 22) as string[];
     const frequencyLines = pdf.splitTextToSize(medicine.frequency || "-", 35) as string[];
@@ -152,9 +199,9 @@ export async function downloadPrescriptionPdf(
       : [];
     const rowHeight = Math.max(12, lineCount * 4.5 + instructionsLines.length * 4 + 5);
 
-    if (y + rowHeight > 262) {
+    if (y + rowHeight > 250) {
       pdf.addPage();
-      y = addPageHeader(pdf, patient);
+      y = await drawContinuationHeader(pdf, patient, prescription.doctorName);
     }
 
     pdf.setFont("helvetica", "normal");
@@ -172,20 +219,20 @@ export async function downloadPrescriptionPdf(
     pdf.setDrawColor(226, 232, 240);
     pdf.line(14, y + rowHeight - 2, 196, y + rowHeight - 2);
     y += rowHeight;
-  });
+  }
 
   if (prescription.advice) {
-    if (y > 235) {
-      pdf.addPage();
-      y = addPageHeader(pdf, patient);
-    }
-    pdf.setFillColor(248, 250, 252);
     const adviceLines = pdf.splitTextToSize(prescription.advice, 170) as string[];
     const adviceHeight = Math.max(18, adviceLines.length * 4.5 + 12);
+    if (y + adviceHeight > 250) {
+      pdf.addPage();
+      y = await drawContinuationHeader(pdf, patient, prescription.doctorName);
+    }
+    pdf.setFillColor(248, 250, 252);
     pdf.roundedRect(14, y + 3, 182, adviceHeight, 2, 2, "F");
     pdf.setFont("helvetica", "bold");
     pdf.setFontSize(8);
-    pdf.setTextColor(...gold);
+    pdf.setTextColor(...clinicGold);
     pdf.text("ADVICE", 18, y + 10);
     pdf.setFont("helvetica", "normal");
     pdf.setFontSize(9);
@@ -194,32 +241,31 @@ export async function downloadPrescriptionPdf(
     y += adviceHeight + 7;
   }
 
-  if (y > 248) {
+  if (y > 240) {
     pdf.addPage();
-    y = addPageHeader(pdf, patient);
+    y = await drawContinuationHeader(pdf, patient, prescription.doctorName);
   }
-  pdf.setDrawColor(...navy);
+  pdf.setDrawColor(...clinicNavy);
   pdf.line(145, y + 18, 195, y + 18);
   pdf.setFont("helvetica", "bold");
   pdf.setFontSize(8.5);
-  pdf.setTextColor(...navy);
-  pdf.text(prescription.doctorName, 170, y + 24, { align: "center" });
+  pdf.setTextColor(...clinicNavy);
+  pdf.text(prescription.doctorName, 170, y + 24, { align: "center", maxWidth: 50 });
   pdf.setFont("helvetica", "normal");
-  pdf.setFontSize(7.5);
+  pdf.setFontSize(7);
   pdf.text("Doctor's signature", 170, y + 29, { align: "center" });
 
   const pageCount = pdf.getNumberOfPages();
   for (let page = 1; page <= pageCount; page += 1) {
     pdf.setPage(page);
-    pdf.setDrawColor(226, 232, 240);
-    pdf.line(14, 285, 196, 285);
-    pdf.setFont("helvetica", "normal");
-    pdf.setFontSize(7);
-    pdf.setTextColor(100, 116, 139);
-    pdf.text("Asher Women & Child Healthcare | asherhealthcare.in", 14, 290);
-    pdf.text("Page " + page + " of " + pageCount, 196, 290, { align: "right" });
+    drawClinicFooter(pdf, page, pageCount);
   }
 
-  const fileName = "prescription-" + safeName(patient.fullName) + "-" + (prescription.prescribedDate || "record") + ".pdf";
+  const fileName =
+    "prescription-" +
+    safePdfName(patient.fullName) +
+    "-" +
+    (prescription.prescribedDate || "record") +
+    ".pdf";
   pdf.save(fileName);
 }
