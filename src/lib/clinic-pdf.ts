@@ -3,7 +3,8 @@ import { jsPDF } from "jspdf";
 export const clinicNavy: [number, number, number] = [35, 58, 89];
 export const clinicGold: [number, number, number] = [168, 134, 74];
 
-const clinicLogoPath = "/images/asher-logo-original.png";
+const clinicLogoPath = "/images/asher-logo-print.png";
+let clinicLogoPromise: Promise<string> | null = null;
 
 export function safePdfName(value: string) {
   return value.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase();
@@ -48,7 +49,7 @@ export function patientAge(dateOfBirth: string, asOf = new Date()) {
   return Math.max(0, days) + " day" + (days === 1 ? "" : "s");
 }
 
-export async function clinicLogoDataUrl() {
+async function loadClinicLogoDataUrl() {
   const response = await fetch(clinicLogoPath);
   if (!response.ok) throw new Error("Unable to load clinic logo");
   const blob = await response.blob();
@@ -59,6 +60,18 @@ export async function clinicLogoDataUrl() {
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(blob);
   });
+}
+
+export function clinicLogoDataUrl() {
+  clinicLogoPromise ??= loadClinicLogoDataUrl().catch((error) => {
+    clinicLogoPromise = null;
+    throw error;
+  });
+  return clinicLogoPromise;
+}
+
+export function preloadClinicPdfAssets() {
+  return clinicLogoDataUrl().then(() => undefined);
 }
 
 function drawLogoFallback(pdf: jsPDF) {
