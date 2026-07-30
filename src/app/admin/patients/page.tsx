@@ -3,7 +3,13 @@
 import AdminShell from "@/components/admin/AdminShell";
 import { useStaff } from "@/components/admin/StaffGuard";
 import { firestore, storage } from "@/firebase/config";
-import { downloadBlankPrescriptionPdf, downloadPrescriptionPdf } from "@/lib/prescription-pdf";
+import { preloadClinicPdfAssets } from "@/lib/clinic-pdf";
+import {
+  downloadBlankPrescriptionPdf,
+  downloadPrescriptionPdf,
+  printBlankPrescriptionPdf,
+  printPrescriptionPdf,
+} from "@/lib/prescription-pdf";
 import {
   addDoc,
   collection,
@@ -32,6 +38,7 @@ import {
   LoaderCircle,
   NotebookTabs,
   Plus,
+  Printer,
   Search,
   ShieldCheck,
   Stethoscope,
@@ -138,6 +145,10 @@ function PatientRegister() {
   const [reports, setReports] = useState<ReportRecord[]>([]);
   const [uploading, setUploading] = useState(false);
   const [reportActionId, setReportActionId] = useState<string | null>(null);
+
+  useEffect(() => {
+    void preloadClinicPdfAssets().catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     const patientsQuery = query(collection(db, "patients"), orderBy("createdAt", "desc"), limit(100));
@@ -367,13 +378,10 @@ function PatientRegister() {
               Patient ID, mobile number, age and {lastRegistered.doctorName} are already included.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => void downloadBlankPrescriptionPdf(lastRegistered, lastRegistered.doctorName ?? "")}
-            className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-[#233A59] px-4 py-3 text-sm font-bold text-white"
-          >
-            <Download size={17} /> Download letterhead
-          </button>
+          <PrescriptionDocumentActions
+            patient={lastRegistered}
+            doctorName={lastRegistered.doctorName ?? ""}
+          />
         </div>
       )}
 
@@ -449,6 +457,69 @@ function SectionHeading({ icon: Icon, title, action }: { icon: typeof Activity; 
   return <div className="mb-5 flex items-center gap-3"><span className="rounded-xl bg-blue-50 p-2.5 text-blue-700"><Icon size={20} /></span><div><h3 className="font-bold text-[#233A59]">{title}</h3>{action && <p className="text-xs text-slate-500">{action}</p>}</div></div>;
 }
 
+function PrescriptionDocumentActions({
+  patient,
+  doctorName,
+  prescription,
+  compact = false,
+}: {
+  patient: Patient;
+  doctorName: string;
+  prescription?: PrescriptionRecord;
+  compact?: boolean;
+}) {
+  const [action, setAction] = useState<"print" | "download" | null>(null);
+  const [error, setError] = useState("");
+  const disabled = !doctorName || action !== null;
+  const buttonSize = compact ? "px-3 py-2 text-xs" : "min-h-10 px-4 py-2 text-sm";
+
+  const runAction = async (mode: "print" | "download") => {
+    setAction(mode);
+    setError("");
+    try {
+      if (prescription) {
+        await (mode === "print"
+          ? printPrescriptionPdf(patient, prescription)
+          : downloadPrescriptionPdf(patient, prescription));
+      } else {
+        await (mode === "print"
+          ? printBlankPrescriptionPdf(patient, doctorName)
+          : downloadBlankPrescriptionPdf(patient, doctorName));
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to prepare the prescription.");
+    } finally {
+      setAction(null);
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => void runAction("print")}
+          className={"inline-flex items-center justify-center gap-2 rounded-xl border border-[#233A59]/20 bg-white font-bold text-[#233A59] transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 " + buttonSize}
+        >
+          {action === "print" ? <LoaderCircle className="animate-spin" size={16} /> : <Printer size={16} />}
+          Print
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => void runAction("download")}
+          className={"inline-flex items-center justify-center gap-2 rounded-xl bg-[#233A59] font-bold text-white transition hover:bg-[#1b2d46] disabled:cursor-not-allowed disabled:opacity-50 " + buttonSize}
+        >
+          {action === "download" ? <LoaderCircle className="animate-spin" size={16} /> : <Download size={16} />}
+          Download
+        </button>
+      </div>
+      {error && <p className="mt-2 max-w-sm text-xs font-medium text-red-700">{error}</p>}
+    </div>
+  );
+}
+
 function BlankPrescriptionAction({ patient }: { patient: Patient }) {
   const [doctorName, setDoctorName] = useState(patient.doctorName ?? "");
 
@@ -464,14 +535,7 @@ function BlankPrescriptionAction({ patient }: { patient: Patient }) {
         <option>Dr. Lt Col Shafi Ahamad</option>
         <option>Dr. Shaik Reshma</option>
       </select>
-      <button
-        type="button"
-        disabled={!doctorName}
-        onClick={() => void downloadBlankPrescriptionPdf(patient, doctorName)}
-        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-[#233A59] px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        <Download size={16} /> Blank prescription
-      </button>
+      <PrescriptionDocumentActions patient={patient} doctorName={doctorName} />
     </div>
   );
 }
@@ -543,9 +607,12 @@ function PrescriptionsPanel({ patient, records, saving, onSave }: { patient: Pat
           <article key={record.id} className="rounded-2xl border border-slate-200 p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <p className="font-bold text-[#233A59]">{record.prescribedDate} · {record.doctorName}</p>
-              <button type="button" onClick={() => void downloadPrescriptionPdf(patient, record)} className="inline-flex items-center gap-2 rounded-xl border border-[#233A59]/20 bg-blue-50 px-3 py-2 text-xs font-bold text-[#233A59] transition hover:bg-blue-100">
-                <Download size={15} /> Download PDF
-              </button>
+              <PrescriptionDocumentActions
+                patient={patient}
+                doctorName={record.doctorName}
+                prescription={record}
+                compact
+              />
             </div>
             {record.medicines?.map((medicine, index) => <div key={index} className="mt-3 rounded-xl bg-slate-50 p-3"><p className="font-bold text-slate-800">{medicine.name}</p><p className="mt-1 text-sm text-slate-600">{[medicine.dose, medicine.frequency, medicine.duration].filter(Boolean).join(" · ")}</p>{medicine.instructions && <p className="mt-1 text-xs text-slate-500">{medicine.instructions}</p>}</div>)}
             {record.advice && <p className="mt-3 text-sm text-slate-600"><strong>Advice:</strong> {record.advice}</p>}
