@@ -171,7 +171,9 @@ export default function StaffCommandCenter({ role }: { role: StaffRole }) {
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const focusTimer = window.setTimeout(() => {
-      inputRef.current?.focus();
+      // Opening the software keyboard immediately can collapse the usable
+      // viewport on phones. Desktop keeps the fast keyboard-first workflow.
+      if (window.innerWidth >= 1024) inputRef.current?.focus();
       if (!loaded) void loadPatients();
     }, 80);
     return () => {
