@@ -1,4 +1,4 @@
-const CACHE_NAME = "asher-public-v2";
+const CACHE_NAME = "asher-public-v3";
 const PUBLIC_ASSETS = [
   "/",
   "/offline.html",

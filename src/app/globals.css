@@ -320,6 +320,18 @@ img { object-fit: cover; }
   .legal-content section { padding: 26px 22px; }
 }
 
+@media (display-mode: standalone) {
+  html, body {
+    min-height: 100dvh;
+    overscroll-behavior-y: none;
+  }
+
+  body {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }

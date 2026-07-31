@@ -28,6 +28,7 @@ import {
   Stethoscope,
   TrendingUp,
   UserRoundCheck,
+  UserRoundCog,
   UsersRound,
   WalletCards,
   type LucideIcon,
@@ -250,22 +251,47 @@ async function fetchDashboardData(): Promise<DashboardData> {
   };
 }
 
-function AdminOnlyMessage() {
+function StaffAppHome({ role, displayName }: { role: "doctor" | "reception"; displayName: string }) {
+  const isDoctor = role === "doctor";
+  const actions = isDoctor
+    ? [
+        { href: "/admin/consultations", label: "Open consultations", detail: "Review the clinical queue", icon: Stethoscope, tone: "bg-cyan-50 text-cyan-900" },
+        { href: "/admin/appointments", label: "Appointments", detail: "Today’s doctor schedule", icon: CalendarCheck2, tone: "bg-blue-50 text-blue-900" },
+        { href: "/admin/patients", label: "Patient records", detail: "History and prescriptions", icon: UsersRound, tone: "bg-violet-50 text-violet-900" },
+        { href: "/admin/lab", label: "Lab reports", detail: "Orders and results", icon: FlaskConical, tone: "bg-emerald-50 text-emerald-900" },
+      ]
+    : [
+        { href: "/admin/patients", label: "Register patient", detail: "Create the visit and invoice", icon: UserRoundCheck, tone: "bg-blue-50 text-blue-900" },
+        { href: "/admin/appointments", label: "Appointments", detail: "Book and manage the queue", icon: CalendarCheck2, tone: "bg-amber-50 text-amber-900" },
+        { href: "/admin/billing", label: "Collect payment", detail: "QR, receipt, and balance", icon: IndianRupee, tone: "bg-emerald-50 text-emerald-900" },
+        { href: "/admin/lab", label: "Lab desk", detail: "Orders and reports", icon: FlaskConical, tone: "bg-violet-50 text-violet-900" },
+      ];
+
   return (
-    <section className="mx-auto max-w-2xl rounded-3xl border border-amber-200 bg-white p-7 text-center shadow-sm sm:p-10">
-      <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-amber-50 text-amber-700">
-        <ShieldAlert size={28} />
-      </span>
-      <p className="mt-6 text-xs font-bold uppercase tracking-[0.18em] text-[#A8864A]">Administrator access</p>
-      <h1 className="mt-2 text-3xl font-bold text-[#233A59]">Management dashboard is private</h1>
-      <p className="mx-auto mt-3 max-w-xl leading-7 text-slate-600">
-        Financial totals and clinic-wide performance are available only to administrators. Your clinical and reception tools remain available below.
-      </p>
-      <div className="mt-7 flex flex-wrap justify-center gap-3">
-        <Link href="/admin/appointments" className="rounded-xl bg-[#233A59] px-5 py-3 text-sm font-bold text-white">Appointments</Link>
-        <Link href="/admin/patients" className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold text-[#233A59]">Patients</Link>
-      </div>
-    </section>
+    <div className="mx-auto max-w-4xl space-y-5">
+      <section className="overflow-hidden rounded-[30px] bg-gradient-to-br from-[#16314b] to-[#2f5878] p-6 text-white shadow-xl sm:p-8">
+        <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#efd193]">{isDoctor ? "Doctor workspace" : "Reception workspace"}</p>
+        <h1 className="mt-2 text-3xl font-bold">Hello, {displayName.split(" ")[0] || "team"}.</h1>
+        <p className="mt-3 max-w-xl leading-7 text-white/75">Choose a clinic task below. The phone app keeps your most-used actions one tap away.</p>
+      </section>
+
+      <section className="grid grid-cols-2 gap-3 sm:gap-4">
+        {actions.map((action) => {
+          const Icon = action.icon;
+          return (
+            <Link key={action.href} href={action.href} className={`flex min-h-36 flex-col justify-between rounded-[24px] p-5 shadow-sm ring-1 ring-black/5 transition active:scale-[0.98] ${action.tone}`}>
+              <Icon size={26} />
+              <div><h2 className="font-bold sm:text-lg">{action.label}</h2><p className="mt-1 text-xs leading-5 opacity-70 sm:text-sm">{action.detail}</p></div>
+            </Link>
+          );
+        })}
+      </section>
+
+      <section className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
+        <ShieldAlert className="mt-0.5 shrink-0" size={19} />
+        <p>Clinic-wide financial analytics remain visible only to administrators. Your assigned operational tools are available above.</p>
+      </section>
+    </div>
   );
 }
 
@@ -666,6 +692,7 @@ function AdminDashboard() {
             <Link href="/admin/billing" className="flex items-center justify-between rounded-2xl bg-emerald-50 p-4 font-bold text-emerald-800 transition hover:bg-emerald-100"><span className="flex items-center gap-3"><IndianRupee size={21} />Billing & receipts</span><ArrowRight size={17} /></Link>
             <Link href="/admin/lab" className="flex items-center justify-between rounded-2xl bg-violet-50 p-4 font-bold text-violet-800 transition hover:bg-violet-100"><span className="flex items-center gap-3"><FlaskConical size={21} />Laboratory desk</span><ArrowRight size={17} /></Link>
             <Link href="/admin/tasks" className="flex items-center justify-between rounded-2xl bg-amber-50 p-4 font-bold text-amber-800 transition hover:bg-amber-100"><span className="flex items-center gap-3"><ListTodo size={21} />Tasks & follow-ups</span><ArrowRight size={17} /></Link>
+            <Link href="/admin/staff" className="flex items-center justify-between rounded-2xl bg-slate-100 p-4 font-bold text-[#233A59] transition hover:bg-slate-200"><span className="flex items-center gap-3"><UserRoundCog size={21} />Staff access</span><ArrowRight size={17} /></Link>
           </div>
         </div>
       </section>
@@ -677,7 +704,9 @@ function AdminDashboard() {
 
 function DashboardAccess() {
   const { profile } = useStaff();
-  return profile.role === "admin" ? <AdminDashboard /> : <AdminOnlyMessage />;
+  return profile.role === "admin"
+    ? <AdminDashboard />
+    : <StaffAppHome role={profile.role} displayName={profile.displayName} />;
 }
 
 export default function AdminPage() {

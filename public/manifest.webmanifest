@@ -1,9 +1,9 @@
 {
   "id": "/admin",
-  "name": "Asher Healthcare Staff",
+  "name": "Asher Healthcare Clinic Staff",
   "short_name": "Asher Staff",
   "description": "Secure mobile clinic workspace for Asher Women & Child Healthcare staff.",
-  "start_url": "/admin?source=pwa",
+  "start_url": "/admin?source=installed-app",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
   "background_color": "#f8fafc",
@@ -57,6 +57,11 @@
       "name": "Lab Desk",
       "short_name": "Lab",
       "url": "/admin/lab"
+    },
+    {
+      "name": "Mobile App Setup",
+      "short_name": "App Setup",
+      "url": "/admin/app"
     }
   ]
 }

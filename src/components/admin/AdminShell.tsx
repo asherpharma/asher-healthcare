@@ -4,7 +4,7 @@ import StaffGuard, { type StaffRole, useStaff } from "@/components/admin/StaffGu
 import MobileStaffNav from "@/components/admin/MobileStaffNav";
 import { InstallAppButton, NetworkStatus } from "@/components/pwa/PwaRegister";
 import { firebaseAuth } from "@/firebase/config";
-import { CalendarDays, FlaskConical, LayoutDashboard, ListTodo, LogOut, ReceiptIndianRupee, Settings2, Stethoscope, UsersRound, type LucideIcon } from "lucide-react";
+import { CalendarDays, FlaskConical, LayoutDashboard, ListTodo, LogOut, ReceiptIndianRupee, Settings2, Smartphone, Stethoscope, UserRoundCog, UsersRound, type LucideIcon } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -26,6 +26,8 @@ const navigation: NavigationItem[] = [
   { href: "/admin/tasks", label: "Tasks & follow-ups", icon: ListTodo },
   { href: "/admin/billing", label: "Billing", icon: ReceiptIndianRupee },
   { href: "/admin/lab", label: "Lab", icon: FlaskConical },
+  { href: "/admin/staff", label: "Staff access", icon: UserRoundCog, adminOnly: true },
+  { href: "/admin/app", label: "Mobile app", icon: Smartphone },
   { href: "/admin/settings", label: "Settings", icon: Settings2, adminOnly: true },
 ];
 
@@ -40,7 +42,7 @@ function StaffChrome({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-950">
+    <div className="min-h-dvh bg-slate-50 text-slate-950">
       <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur-xl">
         <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-3 px-4 py-3 sm:px-5 lg:px-8 lg:py-4">
           <Link href="/admin" className="flex items-center gap-3">
@@ -69,7 +71,7 @@ function StaffChrome({ children }: { children: ReactNode }) {
             })}
           </nav>
         </aside>
-        <main id="main-content">{children}</main>
+        <main id="main-content" className="min-w-0">{children}</main>
       </div>
       <MobileStaffNav role={profile.role} onLogout={() => void logOut()} />
     </div>
