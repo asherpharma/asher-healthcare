@@ -213,9 +213,10 @@ function PatientRegister() {
 
   async function addPatient(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const registrationForm = event.currentTarget;
     setSaving(true);
     setMessage("");
-    const form = new FormData(event.currentTarget);
+    const form = new FormData(registrationForm);
     const patientRef = doc(collection(db, "patients"));
     const invoiceRef = doc(collection(db, "invoices"));
     const patientNumber = "ASH-" + patientRef.id.slice(0, 7).toUpperCase();
@@ -290,7 +291,7 @@ function PatientRegister() {
       });
       batch.set(invoiceRef, invoiceData);
       await batch.commit();
-      event.currentTarget.reset();
+      registrationForm.reset();
       setCaseType("general");
       setSpecialty("");
       setGeneralDoctor("");
@@ -319,7 +320,8 @@ function PatientRegister() {
         consultationLabel,
       });
       setMessage("Patient registered securely. Collect the consultation fee to release the receipt and prescription.");
-    } catch {
+    } catch (error) {
+      console.error("Reception registration failed", error);
       setMessage("Patient registration and consultation invoice could not be created. Please check access and try again.");
     } finally {
       setSaving(false);
