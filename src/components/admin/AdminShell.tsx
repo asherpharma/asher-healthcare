@@ -11,7 +11,7 @@ import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 
 const navigation = [
-  { href: "/admin", label: "Overview", icon: LayoutDashboard },
+  { href: "/admin", label: "Dashboard", icon: LayoutDashboard, adminOnly: true },
   { href: "/admin/appointments", label: "Appointments", icon: CalendarDays },
   { href: "/admin/patients", label: "Patients", icon: UsersRound },
   { href: "/admin/tasks", label: "Tasks & follow-ups", icon: ListTodo },

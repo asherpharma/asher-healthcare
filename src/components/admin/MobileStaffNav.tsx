@@ -18,7 +18,7 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 
 const primaryNavigation = [
-  { href: "/admin", label: "Home", icon: LayoutDashboard },
+  { href: "/admin", label: "Dashboard", icon: LayoutDashboard, adminOnly: true },
   { href: "/admin/appointments", label: "Appointments", icon: CalendarDays },
   { href: "/admin/patients", label: "Patients", icon: UsersRound },
   { href: "/admin/billing", label: "Billing", icon: ReceiptIndianRupee },
@@ -33,6 +33,7 @@ export default function MobileStaffNav({
 }) {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
+  const visibleNavigation = primaryNavigation.filter((item) => !item.adminOnly || role === "admin");
 
   return (
     <>
@@ -41,8 +42,11 @@ export default function MobileStaffNav({
         className="fixed inset-x-0 bottom-0 z-50 border-t border-slate-200 bg-white/95 px-1 shadow-[0_-10px_35px_rgba(15,23,42,0.09)] backdrop-blur-xl lg:hidden"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
-        <div className="mx-auto grid max-w-lg grid-cols-5">
-          {primaryNavigation.map((item) => {
+        <div
+          className="mx-auto grid max-w-lg"
+          style={{ gridTemplateColumns: `repeat(${visibleNavigation.length + 1}, minmax(0, 1fr))` }}
+        >
+          {visibleNavigation.map((item) => {
             const Icon = item.icon;
             const active =
               item.href === "/admin"
