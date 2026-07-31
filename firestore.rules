@@ -410,14 +410,135 @@ service cloud.firestore {
 
       match /vaccinations/{vaccinationId} {
         allow read: if isStaff();
-        allow create: if validClinicalCreate();
+        allow create: if validClinicalCreate()
+          && request.resource.data.keys().hasAll([
+            'vaccineName', 'doseNumber', 'administeredDate', 'nextDueDate',
+            'batchNumber', 'manufacturer', 'expiryDate', 'route', 'site',
+            'administeredBy', 'adverseEvents', 'notes',
+            'createdBy', 'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.keys().hasOnly([
+            'vaccineName', 'doseNumber', 'administeredDate', 'nextDueDate',
+            'batchNumber', 'manufacturer', 'expiryDate', 'route', 'site',
+            'administeredBy', 'adverseEvents', 'notes',
+            'createdBy', 'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.vaccineName is string
+          && request.resource.data.vaccineName.size() >= 2
+          && request.resource.data.vaccineName.size() <= 120
+          && request.resource.data.doseNumber is string
+          && request.resource.data.doseNumber.size() <= 30
+          && request.resource.data.administeredDate is string
+          && request.resource.data.administeredDate.size() == 10
+          && request.resource.data.nextDueDate is string
+          && request.resource.data.nextDueDate.size() <= 10
+          && request.resource.data.batchNumber is string
+          && request.resource.data.batchNumber.size() <= 80
+          && request.resource.data.manufacturer is string
+          && request.resource.data.manufacturer.size() <= 100
+          && request.resource.data.expiryDate is string
+          && request.resource.data.expiryDate.size() <= 10
+          && request.resource.data.route in ['', 'IM', 'SC', 'ID', 'oral', 'nasal']
+          && request.resource.data.site is string
+          && request.resource.data.site.size() <= 80
+          && request.resource.data.administeredBy is string
+          && request.resource.data.administeredBy.size() <= 100
+          && request.resource.data.adverseEvents is string
+          && request.resource.data.adverseEvents.size() <= 500
+          && request.resource.data.notes is string
+          && request.resource.data.notes.size() <= 500;
         allow update: if validClinicalUpdate();
         allow delete: if isAdmin();
       }
 
       match /pregnancyRecords/{pregnancyRecordId} {
         allow read: if isStaff();
-        allow create: if validClinicalCreate();
+        allow create: if validClinicalCreate()
+          && request.resource.data.keys().hasAll([
+            'recordedDate', 'lmpDate', 'eddDate', 'gestationalWeeks',
+            'bloodPressure', 'weight', 'fetalHeartRate', 'nextVisitDate',
+            'gravida', 'para', 'riskLevel', 'riskFactors', 'symptoms',
+            'fundalHeight', 'fetalMovement', 'investigations', 'carePlan', 'notes',
+            'createdBy', 'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.keys().hasOnly([
+            'recordedDate', 'lmpDate', 'eddDate', 'gestationalWeeks',
+            'bloodPressure', 'weight', 'fetalHeartRate', 'nextVisitDate',
+            'gravida', 'para', 'riskLevel', 'riskFactors', 'symptoms',
+            'fundalHeight', 'fetalMovement', 'investigations', 'carePlan', 'notes',
+            'createdBy', 'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.recordedDate is string
+          && request.resource.data.recordedDate.size() == 10
+          && request.resource.data.lmpDate is string
+          && request.resource.data.lmpDate.size() == 10
+          && request.resource.data.eddDate is string
+          && request.resource.data.eddDate.size() == 10
+          && request.resource.data.gestationalWeeks is string
+          && request.resource.data.gestationalWeeks.size() <= 20
+          && request.resource.data.bloodPressure is string
+          && request.resource.data.bloodPressure.size() <= 20
+          && request.resource.data.weight is string
+          && request.resource.data.weight.size() <= 20
+          && request.resource.data.fetalHeartRate is string
+          && request.resource.data.fetalHeartRate.size() <= 30
+          && request.resource.data.nextVisitDate is string
+          && request.resource.data.nextVisitDate.size() <= 10
+          && request.resource.data.gravida is string
+          && request.resource.data.gravida.size() <= 20
+          && request.resource.data.para is string
+          && request.resource.data.para.size() <= 20
+          && request.resource.data.riskLevel in ['routine', 'moderate', 'high']
+          && request.resource.data.riskFactors is string
+          && request.resource.data.riskFactors.size() <= 600
+          && request.resource.data.symptoms is string
+          && request.resource.data.symptoms.size() <= 300
+          && request.resource.data.fundalHeight is string
+          && request.resource.data.fundalHeight.size() <= 30
+          && request.resource.data.fetalMovement is string
+          && request.resource.data.fetalMovement.size() <= 120
+          && request.resource.data.investigations is string
+          && request.resource.data.investigations.size() <= 800
+          && request.resource.data.carePlan is string
+          && request.resource.data.carePlan.size() <= 800
+          && request.resource.data.notes is string
+          && request.resource.data.notes.size() <= 800;
+        allow update: if validClinicalUpdate();
+        allow delete: if isAdmin();
+      }
+
+      match /growthRecords/{growthRecordId} {
+        allow read: if isStaff();
+        allow create: if validClinicalCreate()
+          && request.resource.data.keys().hasAll([
+            'measuredDate', 'weightKg', 'heightCm', 'headCircumferenceCm',
+            'bmi', 'milestone', 'nutritionNotes', 'clinician',
+            'createdBy', 'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.keys().hasOnly([
+            'measuredDate', 'weightKg', 'heightCm', 'headCircumferenceCm',
+            'bmi', 'milestone', 'nutritionNotes', 'clinician',
+            'createdBy', 'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.measuredDate is string
+          && request.resource.data.measuredDate.size() == 10
+          && (request.resource.data.weightKg == null || (request.resource.data.weightKg is number && request.resource.data.weightKg > 0 && request.resource.data.weightKg <= 300))
+          && (request.resource.data.heightCm == null || (request.resource.data.heightCm is number && request.resource.data.heightCm >= 10 && request.resource.data.heightCm <= 250))
+          && (request.resource.data.headCircumferenceCm == null || (request.resource.data.headCircumferenceCm is number && request.resource.data.headCircumferenceCm >= 10 && request.resource.data.headCircumferenceCm <= 100))
+          && (request.resource.data.bmi == null || (request.resource.data.bmi is number && request.resource.data.bmi > 0 && request.resource.data.bmi <= 100))
+          && (
+            request.resource.data.weightKg != null
+            || request.resource.data.heightCm != null
+            || request.resource.data.headCircumferenceCm != null
+          )
+          && request.resource.data.milestone is string
+          && request.resource.data.milestone.size() <= 300
+          && request.resource.data.nutritionNotes is string
+          && request.resource.data.nutritionNotes.size() <= 600
+          && request.resource.data.clinician in [
+            'Dr. Lt Col Shafi Ahamad',
+            'Dr. Shaik Reshma'
+          ];
         allow update: if validClinicalUpdate();
         allow delete: if isAdmin();
       }

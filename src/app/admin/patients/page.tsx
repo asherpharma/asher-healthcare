@@ -24,6 +24,7 @@ import {
   query,
   serverTimestamp,
   updateDoc,
+  where,
   writeBatch,
   type Timestamp,
 } from "firebase/firestore";
@@ -32,6 +33,7 @@ import {
   Activity,
   Baby,
   CalendarClock,
+  ChartNoAxesCombined,
   ChevronRight,
   ClipboardPlus,
   Download,
@@ -39,14 +41,19 @@ import {
   FileHeart,
   FileText,
   FileUp,
+  History,
+  HeartPulse,
   LoaderCircle,
   NotebookTabs,
   Plus,
   Printer,
+  Ruler,
   Search,
   ShieldCheck,
+  Scale,
   Stethoscope,
   Syringe,
+  TriangleAlert,
   Trash2,
   UserRound,
   X,
@@ -93,9 +100,16 @@ type PrescriptionRecord = BaseRecord & {
 };
 type VaccinationRecord = BaseRecord & {
   vaccineName: string;
+  doseNumber?: string;
   administeredDate: string;
   nextDueDate: string;
   batchNumber: string;
+  manufacturer?: string;
+  expiryDate?: string;
+  route?: string;
+  site?: string;
+  administeredBy?: string;
+  adverseEvents?: string;
   notes: string;
 };
 type PregnancyRecord = BaseRecord & {
@@ -107,7 +121,26 @@ type PregnancyRecord = BaseRecord & {
   weight: string;
   fetalHeartRate: string;
   nextVisitDate: string;
+  gravida?: string;
+  para?: string;
+  riskLevel?: "routine" | "moderate" | "high";
+  riskFactors?: string;
+  symptoms?: string;
+  fundalHeight?: string;
+  fetalMovement?: string;
+  investigations?: string;
+  carePlan?: string;
   notes: string;
+};
+type GrowthRecord = BaseRecord & {
+  measuredDate: string;
+  weightKg: number | null;
+  heightCm: number | null;
+  headCircumferenceCm: number | null;
+  bmi: number | null;
+  milestone: string;
+  nutritionNotes: string;
+  clinician: string;
 };
 type ReportRecord = BaseRecord & {
   fileName: string;
@@ -118,7 +151,28 @@ type ReportRecord = BaseRecord & {
   reportDate: string;
   notes: string;
 };
-type TabKey = "overview" | "visits" | "prescriptions" | "vaccinations" | "pregnancy" | "reports";
+type InvoiceRecord = BaseRecord & {
+  invoiceNumber: string;
+  total: number;
+  amountPaid: number;
+  balance: number;
+  paymentStatus: string;
+};
+type LabRecord = BaseRecord & {
+  orderNumber: string;
+  tests: string[];
+  status: string;
+  orderedAt?: Timestamp;
+};
+type TimelineItem = {
+  id: string;
+  kind: "visit" | "prescription" | "vaccination" | "pregnancy" | "growth" | "report" | "lab" | "invoice";
+  date: string;
+  title: string;
+  detail: string;
+  status?: string;
+};
+type TabKey = "overview" | "timeline" | "visits" | "prescriptions" | "growth" | "vaccinations" | "pregnancy" | "reports";
 type RegistrationResult = {
   patient: Patient & { doctorName: string };
   invoice: ReceptionInvoice;
@@ -140,6 +194,23 @@ function formatCreatedAt(value?: Timestamp) {
 function formatFileSize(bytes: number) {
   if (bytes < 1024 * 1024) return Math.max(1, Math.round(bytes / 1024)) + " KB";
   return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function numericValue(form: FormData, name: string) {
+  const value = Number(text(form, name));
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function timestampDate(value?: Timestamp) {
+  return value ? value.toDate().toISOString().slice(0, 10) : "";
+}
+
+function friendlyDate(value: string) {
+  if (!value) return "Date not recorded";
+  const date = new Date(value + "T00:00:00");
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 }
 
 function registrationInvoiceNumber() {
@@ -168,7 +239,10 @@ function PatientRegister() {
   const [prescriptions, setPrescriptions] = useState<PrescriptionRecord[]>([]);
   const [vaccinations, setVaccinations] = useState<VaccinationRecord[]>([]);
   const [pregnancyRecords, setPregnancyRecords] = useState<PregnancyRecord[]>([]);
+  const [growthRecords, setGrowthRecords] = useState<GrowthRecord[]>([]);
   const [reports, setReports] = useState<ReportRecord[]>([]);
+  const [invoices, setInvoices] = useState<InvoiceRecord[]>([]);
+  const [labOrders, setLabOrders] = useState<LabRecord[]>([]);
   const [uploading, setUploading] = useState(false);
   const [reportActionId, setReportActionId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Patient | null>(null);
@@ -203,10 +277,33 @@ function PatientRegister() {
       subscribe<PrescriptionRecord>("prescriptions", setPrescriptions),
       subscribe<VaccinationRecord>("vaccinations", setVaccinations),
       subscribe<PregnancyRecord>("pregnancyRecords", setPregnancyRecords),
+      subscribe<GrowthRecord>("growthRecords", setGrowthRecords),
       subscribe<ReportRecord>("reports", setReports),
+      onSnapshot(
+        query(collection(db, "invoices"), where("patientId", "==", selectedId), limit(50)),
+        (snapshot) => setInvoices(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as InvoiceRecord)),
+      ),
+      onSnapshot(
+        query(collection(db, "labOrders"), where("patientId", "==", selectedId), limit(50)),
+        (snapshot) => setLabOrders(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as LabRecord)),
+      ),
     ];
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
   }, [db, selectedId]);
+
+  const timeline = useMemo<TimelineItem[]>(() => {
+    const items: TimelineItem[] = [
+      ...visits.map((record) => ({ id: `visit-${record.id}`, kind: "visit" as const, date: record.visitDate || timestampDate(record.createdAt), title: record.diagnosis || "Clinical visit", detail: `${record.doctorName}${record.chiefComplaint ? ` · ${record.chiefComplaint}` : ""}`, status: record.followUpDate ? `Follow-up ${friendlyDate(record.followUpDate)}` : undefined })),
+      ...prescriptions.map((record) => ({ id: `prescription-${record.id}`, kind: "prescription" as const, date: record.prescribedDate || timestampDate(record.createdAt), title: "Prescription issued", detail: `${record.doctorName} · ${record.medicines?.map((medicine) => medicine.name).filter(Boolean).join(", ") || "Medication recorded"}` })),
+      ...vaccinations.map((record) => ({ id: `vaccination-${record.id}`, kind: "vaccination" as const, date: record.administeredDate || timestampDate(record.createdAt), title: `${record.vaccineName}${record.doseNumber ? ` · Dose ${record.doseNumber}` : ""}`, detail: record.batchNumber ? `Batch ${record.batchNumber}` : "Vaccination recorded", status: record.nextDueDate ? `Next due ${friendlyDate(record.nextDueDate)}` : undefined })),
+      ...pregnancyRecords.map((record) => ({ id: `pregnancy-${record.id}`, kind: "pregnancy" as const, date: record.recordedDate || timestampDate(record.createdAt), title: record.gestationalWeeks || "Antenatal follow-up", detail: [record.bloodPressure && `BP ${record.bloodPressure}`, record.weight && `${record.weight} kg`, record.fetalHeartRate && `FHR ${record.fetalHeartRate}`].filter(Boolean).join(" · ") || "Pregnancy care update", status: record.nextVisitDate ? `Next visit ${friendlyDate(record.nextVisitDate)}` : undefined })),
+      ...growthRecords.map((record) => ({ id: `growth-${record.id}`, kind: "growth" as const, date: record.measuredDate || timestampDate(record.createdAt), title: "Growth measurement", detail: [record.weightKg && `${record.weightKg} kg`, record.heightCm && `${record.heightCm} cm`, record.headCircumferenceCm && `HC ${record.headCircumferenceCm} cm`].filter(Boolean).join(" · ") || "Measurement recorded", status: record.milestone || undefined })),
+      ...reports.map((record) => ({ id: `report-${record.id}`, kind: "report" as const, date: record.reportDate || timestampDate(record.createdAt), title: record.category || "Medical report", detail: record.fileName })),
+      ...labOrders.map((record) => ({ id: `lab-${record.id}`, kind: "lab" as const, date: timestampDate(record.orderedAt || record.createdAt), title: `Lab order ${record.orderNumber}`, detail: record.tests?.join(", ") || "Tests ordered", status: record.status })),
+      ...invoices.map((record) => ({ id: `invoice-${record.id}`, kind: "invoice" as const, date: timestampDate(record.createdAt), title: `Invoice ${record.invoiceNumber}`, detail: `₹${record.amountPaid || 0} received of ₹${record.total || 0}`, status: record.paymentStatus })),
+    ];
+    return items.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  }, [growthRecords, invoices, labOrders, pregnancyRecords, prescriptions, reports, vaccinations, visits]);
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -371,12 +468,12 @@ function PatientRegister() {
     setMessage("");
     try {
       const patientRef = doc(db, "patients", deleteTarget.id);
-      const collectionNames = ["visits", "prescriptions", "vaccinations", "pregnancyRecords", "reports"] as const;
+      const collectionNames = ["visits", "prescriptions", "vaccinations", "pregnancyRecords", "growthRecords", "reports"] as const;
       const childSnapshots = await Promise.all(
         collectionNames.map((name) => getDocs(collection(patientRef, name))),
       );
       const childRefs = childSnapshots.flatMap((snapshot) => snapshot.docs.map((item) => item.ref));
-      const reportPaths = childSnapshots[4].docs
+      const reportPaths = childSnapshots[5].docs
         .map((item) => String(item.data().storagePath || ""))
         .filter(Boolean);
 
@@ -400,7 +497,10 @@ function PatientRegister() {
       setPrescriptions([]);
       setVaccinations([]);
       setPregnancyRecords([]);
+      setGrowthRecords([]);
       setReports([]);
+      setInvoices([]);
+      setLabOrders([]);
       if (lastRegistered?.patient.id === deleteTarget.id) setLastRegistered(null);
       setMessage(`Patient ${patientNumber} and linked clinical records were deleted. Billing records were retained for audit.`);
     } catch (error) {
@@ -511,8 +611,10 @@ function PatientRegister() {
 
   const tabs: Array<{ key: TabKey; label: string; icon: typeof Activity; count?: number }> = [
     { key: "overview", label: "Overview", icon: UserRound },
+    { key: "timeline", label: "Timeline", icon: History, count: timeline.length },
     { key: "visits", label: "Visits", icon: Stethoscope, count: visits.length },
     { key: "prescriptions", label: "Prescriptions", icon: FileHeart, count: prescriptions.length },
+    { key: "growth", label: "Growth", icon: ChartNoAxesCombined, count: growthRecords.length },
     { key: "vaccinations", label: "Vaccinations", icon: Syringe, count: vaccinations.length },
     { key: "pregnancy", label: "Pregnancy", icon: Baby, count: pregnancyRecords.length },
     { key: "reports", label: "Reports", icon: FileText, count: reports.length },
@@ -575,7 +677,7 @@ function PatientRegister() {
               <button type="button" onClick={() => { setDeleteTarget(null); setDeleteConfirmation(""); }} aria-label="Close patient deletion" className="rounded-xl p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
             </div>
             <h2 id="delete-patient-title" className="mt-5 text-2xl font-bold text-[#233A59]">Permanently delete patient?</h2>
-            <p className="mt-3 leading-7 text-slate-600">This removes <strong>{deleteTarget.fullName}</strong> and all linked visits, prescriptions, vaccinations, pregnancy records, and uploaded reports. Billing, receipts, and payment audit records are retained.</p>
+            <p className="mt-3 leading-7 text-slate-600">This removes <strong>{deleteTarget.fullName}</strong> and all linked visits, prescriptions, growth measurements, vaccinations, pregnancy records, and uploaded reports. Billing, receipts, and payment audit records are retained.</p>
             <div className="mt-5 rounded-2xl bg-red-50 p-4 text-sm text-red-900 ring-1 ring-red-100">Only an administrator can complete this action. It cannot be undone.</div>
             <label className={labelClass + " mt-5 block"}>Type <strong>{deleteTarget.patientNumber || deleteTarget.id}</strong> to confirm<input value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} autoComplete="off" className={inputClass} /></label>
             <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
@@ -627,10 +729,12 @@ function PatientRegister() {
               </div>
               <div className="p-5 sm:p-7">
                 {activeTab === "overview" && <Overview patient={selectedPatient} showEdit={showEdit} setShowEdit={setShowEdit} editPatient={editPatient} saving={saving} />}
+                {activeTab === "timeline" && <TimelinePanel items={timeline} vaccinations={vaccinations} pregnancyRecords={pregnancyRecords} />}
                 {activeTab === "visits" && <VisitsPanel records={visits} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "visits", { visitDate: text(form, "visitDate"), doctorName: text(form, "doctorName"), chiefComplaint: text(form, "chiefComplaint"), vitals: text(form, "vitals"), diagnosis: text(form, "diagnosis"), treatment: text(form, "treatment"), followUpDate: text(form, "followUpDate"), notes: text(form, "notes") }); }} />}
                 {activeTab === "prescriptions" && <PrescriptionsPanel patient={selectedPatient} records={prescriptions} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "prescriptions", { prescribedDate: text(form, "prescribedDate"), doctorName: text(form, "doctorName"), medicines: [{ name: text(form, "medicineName"), dose: text(form, "dose"), frequency: text(form, "frequency"), duration: text(form, "duration"), instructions: text(form, "instructions") }], advice: text(form, "advice") }); }} />}
-                {activeTab === "vaccinations" && <VaccinationsPanel records={vaccinations} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "vaccinations", { vaccineName: text(form, "vaccineName"), administeredDate: text(form, "administeredDate"), nextDueDate: text(form, "nextDueDate"), batchNumber: text(form, "batchNumber"), notes: text(form, "notes") }); }} />}
-                {activeTab === "pregnancy" && <PregnancyPanel records={pregnancyRecords} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "pregnancyRecords", { recordedDate: text(form, "recordedDate"), lmpDate: text(form, "lmpDate"), eddDate: text(form, "eddDate"), gestationalWeeks: text(form, "gestationalWeeks"), bloodPressure: text(form, "bloodPressure"), weight: text(form, "weight"), fetalHeartRate: text(form, "fetalHeartRate"), nextVisitDate: text(form, "nextVisitDate"), notes: text(form, "notes") }); }} />}
+                {activeTab === "growth" && <GrowthPanel records={growthRecords} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); const weightKg = numericValue(form, "weightKg"); const heightCm = numericValue(form, "heightCm"); const headCircumferenceCm = numericValue(form, "headCircumferenceCm"); if (!weightKg && !heightCm && !headCircumferenceCm) { event.preventDefault(); setMessage("Add at least one growth measurement before saving."); return Promise.resolve(); } const bmi = weightKg && heightCm ? Number((weightKg / ((heightCm / 100) ** 2)).toFixed(1)) : null; return saveRecord(event, "growthRecords", { measuredDate: text(form, "measuredDate"), weightKg, heightCm, headCircumferenceCm, bmi, milestone: text(form, "milestone"), nutritionNotes: text(form, "nutritionNotes"), clinician: text(form, "clinician") }); }} />}
+                {activeTab === "vaccinations" && <VaccinationsPanel records={vaccinations} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "vaccinations", { vaccineName: text(form, "vaccineName"), doseNumber: text(form, "doseNumber"), administeredDate: text(form, "administeredDate"), nextDueDate: text(form, "nextDueDate"), batchNumber: text(form, "batchNumber"), manufacturer: text(form, "manufacturer"), expiryDate: text(form, "expiryDate"), route: text(form, "route"), site: text(form, "site"), administeredBy: text(form, "administeredBy"), adverseEvents: text(form, "adverseEvents"), notes: text(form, "notes") }); }} />}
+                {activeTab === "pregnancy" && <PregnancyPanel records={pregnancyRecords} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "pregnancyRecords", { recordedDate: text(form, "recordedDate"), lmpDate: text(form, "lmpDate"), eddDate: text(form, "eddDate"), gestationalWeeks: text(form, "gestationalWeeks"), bloodPressure: text(form, "bloodPressure"), weight: text(form, "weight"), fetalHeartRate: text(form, "fetalHeartRate"), nextVisitDate: text(form, "nextVisitDate"), gravida: text(form, "gravida"), para: text(form, "para"), riskLevel: text(form, "riskLevel"), riskFactors: text(form, "riskFactors"), symptoms: text(form, "symptoms"), fundalHeight: text(form, "fundalHeight"), fetalMovement: text(form, "fetalMovement"), investigations: text(form, "investigations"), carePlan: text(form, "carePlan"), notes: text(form, "notes") }); }} />}
                 {activeTab === "reports" && <ReportsPanel records={reports} uploading={uploading} actionId={reportActionId} onUpload={uploadReport} onAccess={accessReport} />}
               </div>
             </div>
@@ -825,12 +929,159 @@ function PrescriptionsPanel({ patient, records, saving, onSave }: { patient: Pat
   );
 }
 
+function TimelinePanel({ items, vaccinations, pregnancyRecords }: { items: TimelineItem[]; vaccinations: VaccinationRecord[]; pregnancyRecords: PregnancyRecord[] }) {
+  const [today] = useState(() => new Date().toISOString().slice(0, 10));
+  const inThirtyDays = new Date(new Date(today + "T00:00:00Z").getTime() + 30 * 86_400_000).toISOString().slice(0, 10);
+  const vaccineDue = vaccinations.filter((record) => record.nextDueDate && record.nextDueDate <= inThirtyDays);
+  const antenatalDue = pregnancyRecords.filter((record) => record.nextVisitDate && record.nextVisitDate <= inThirtyDays);
+  const iconFor = (kind: TimelineItem["kind"]) => ({
+    visit: Stethoscope,
+    prescription: FileHeart,
+    vaccination: Syringe,
+    pregnancy: Baby,
+    growth: ChartNoAxesCombined,
+    report: FileText,
+    lab: Activity,
+    invoice: FileText,
+  })[kind];
+
+  return (
+    <div>
+      <SectionHeading icon={History} title="Patient timeline" action="Clinical care, reports and payments in one chronological view" />
+      {(vaccineDue.length > 0 || antenatalDue.length > 0) && (
+        <div className="mb-5 grid gap-3 sm:grid-cols-2">
+          {vaccineDue.length > 0 && <div className="rounded-2xl bg-amber-50 p-4 ring-1 ring-amber-200"><p className="flex items-center gap-2 text-sm font-bold text-amber-900"><TriangleAlert size={17} /> Vaccination attention</p><p className="mt-2 text-sm text-amber-800">{vaccineDue.length} dose{vaccineDue.length === 1 ? "" : "s"} overdue or due within 30 days.</p></div>}
+          {antenatalDue.length > 0 && <div className="rounded-2xl bg-rose-50 p-4 ring-1 ring-rose-200"><p className="flex items-center gap-2 text-sm font-bold text-rose-900"><HeartPulse size={17} /> Antenatal follow-up</p><p className="mt-2 text-sm text-rose-800">{antenatalDue.length} visit{antenatalDue.length === 1 ? "" : "s"} overdue or due within 30 days.</p></div>}
+        </div>
+      )}
+      <div className="relative space-y-3 before:absolute before:bottom-5 before:left-[1.45rem] before:top-5 before:w-px before:bg-slate-200">
+        {items.map((item) => {
+          const Icon = iconFor(item.kind);
+          return (
+            <article key={item.id} className="relative flex gap-4 rounded-2xl border border-slate-200 bg-white p-4">
+              <span className="z-10 grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-blue-50 text-blue-700 ring-4 ring-white"><Icon size={19} /></span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-bold text-[#233A59]">{item.title}</p><p className="mt-1 text-sm text-slate-600">{item.detail}</p></div><time className="text-xs font-semibold text-slate-500">{friendlyDate(item.date)}</time></div>
+                {item.status && <span className="mt-2 inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs font-bold capitalize text-slate-700">{item.status}</span>}
+              </div>
+            </article>
+          );
+        })}
+        {items.length === 0 && <Empty label="The patient timeline will appear as care records are added" />}
+      </div>
+    </div>
+  );
+}
+
+function MiniTrend({ records, metric, label, unit, icon: Icon }: { records: GrowthRecord[]; metric: "weightKg" | "heightCm"; label: string; unit: string; icon: typeof Scale }) {
+  const points = records
+    .filter((record) => typeof record[metric] === "number")
+    .sort((a, b) => a.measuredDate.localeCompare(b.measuredDate))
+    .slice(-8);
+  const values = points.map((record) => Number(record[metric]));
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = Math.max(1, max - min);
+  const polyline = points.map((record, index) => `${points.length === 1 ? 50 : 6 + (index / (points.length - 1)) * 88},${54 - ((Number(record[metric]) - min) / range) * 40}`).join(" ");
+  const latest = values.at(-1);
+
+  return (
+    <div className="rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200">
+      <div className="flex items-center justify-between"><p className="flex items-center gap-2 text-sm font-bold text-[#233A59]"><Icon size={17} />{label}</p><strong className="text-lg text-[#233A59]">{latest ? `${latest} ${unit}` : "—"}</strong></div>
+      {points.length > 1 ? <svg viewBox="0 0 100 60" role="img" aria-label={`${label} trend across ${points.length} measurements`} className="mt-3 h-20 w-full overflow-visible"><path d="M6 54 H94" stroke="#cbd5e1" strokeWidth="1" /><polyline points={polyline} fill="none" stroke="#A8864A" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />{polyline.split(" ").map((point, index) => { const [cx, cy] = point.split(","); return <circle key={index} cx={cx} cy={cy} r="2.5" fill="#233A59" />; })}</svg> : <p className="mt-4 text-xs text-slate-500">Add at least two measurements to see a trend.</p>}
+    </div>
+  );
+}
+
+function GrowthPanel({ records, saving, onSave }: { records: GrowthRecord[]; saving: boolean; onSave: (event: FormEvent<HTMLFormElement>) => Promise<void> }) {
+  return (
+    <div>
+      <SectionHeading icon={ChartNoAxesCombined} title="Child growth & development" action="Longitudinal measurements and clinician-observed milestones" />
+      <div className="mb-5 grid gap-3 sm:grid-cols-2"><MiniTrend records={records} metric="weightKg" label="Weight trend" unit="kg" icon={Scale} /><MiniTrend records={records} metric="heightCm" label="Height trend" unit="cm" icon={Ruler} /></div>
+      <form onSubmit={onSave} className="grid gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2">
+        <label className={labelClass}>Measurement date<input name="measuredDate" type="date" required className={inputClass} /></label>
+        <label className={labelClass}>Clinician<select name="clinician" required defaultValue="" className={inputClass}><option value="" disabled>Select clinician</option><option>Dr. Lt Col Shafi Ahamad</option><option>Dr. Shaik Reshma</option></select></label>
+        <label className={labelClass}>Weight (kg)<input name="weightKg" type="number" min="0.1" max="300" step="0.01" className={inputClass} /></label>
+        <label className={labelClass}>Height / length (cm)<input name="heightCm" type="number" min="10" max="250" step="0.1" className={inputClass} /></label>
+        <label className={labelClass}>Head circumference (cm)<input name="headCircumferenceCm" type="number" min="10" max="100" step="0.1" className={inputClass} /></label>
+        <label className={labelClass}>Developmental milestone<input name="milestone" maxLength={300} placeholder="Clinician-observed milestone" className={inputClass} /></label>
+        <label className={labelClass + " sm:col-span-2"}>Nutrition notes<textarea name="nutritionNotes" rows={2} maxLength={600} className={inputClass} /></label>
+        <div className="sm:col-span-2"><SaveButton saving={saving} label="Save growth measurement" /></div>
+      </form>
+      <p className="mt-3 text-xs text-slate-500">Trends support clinical review and are not a diagnosis or percentile assessment.</p>
+      <div className="mt-5 space-y-3">{records.map((record) => <article key={record.id} className="rounded-2xl border border-slate-200 p-4"><div className="flex flex-wrap justify-between gap-2"><p className="font-bold text-[#233A59]">{friendlyDate(record.measuredDate)}</p><span className="text-xs font-semibold text-slate-500">{record.clinician}</span></div><div className="mt-3 grid grid-cols-2 gap-2 text-sm text-slate-600 sm:grid-cols-4"><p>Weight: {record.weightKg ? `${record.weightKg} kg` : "—"}</p><p>Height: {record.heightCm ? `${record.heightCm} cm` : "—"}</p><p>Head: {record.headCircumferenceCm ? `${record.headCircumferenceCm} cm` : "—"}</p><p>BMI: {record.bmi || "—"}</p></div>{record.milestone && <p className="mt-3 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-900"><strong>Milestone:</strong> {record.milestone}</p>}{record.nutritionNotes && <p className="mt-3 text-sm text-slate-600"><strong>Nutrition:</strong> {record.nutritionNotes}</p>}</article>)}{records.length === 0 && <Empty label="No growth measurements recorded yet" />}</div>
+    </div>
+  );
+}
+
 function VaccinationsPanel({ records, saving, onSave }: { records: VaccinationRecord[]; saving: boolean; onSave: (event: FormEvent<HTMLFormElement>) => Promise<void> }) {
-  return <div><SectionHeading icon={Syringe} title="Vaccination record" action="Administered doses and reminders" /><form onSubmit={onSave} className="grid gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2"><label className={labelClass + " sm:col-span-2"}>Vaccine name<input name="vaccineName" required className={inputClass} /></label><label className={labelClass}>Administered date<input name="administeredDate" type="date" required className={inputClass} /></label><label className={labelClass}>Next due date<input name="nextDueDate" type="date" className={inputClass} /></label><label className={labelClass}>Batch number<input name="batchNumber" className={inputClass} /></label><label className={labelClass}>Notes<input name="notes" className={inputClass} /></label><div className="sm:col-span-2"><SaveButton saving={saving} label="Add vaccination" /></div></form><div className="mt-5 space-y-3">{records.map((record) => <article key={record.id} className="flex items-start gap-4 rounded-2xl border border-slate-200 p-4"><span className="rounded-xl bg-emerald-50 p-3 text-emerald-700"><Syringe size={20} /></span><div><p className="font-bold text-[#233A59]">{record.vaccineName}</p><p className="mt-1 text-sm text-slate-600">Administered {record.administeredDate}{record.batchNumber ? " · Batch " + record.batchNumber : ""}</p>{record.nextDueDate && <p className="mt-2 text-xs font-bold text-blue-700">Next due {record.nextDueDate}</p>}</div></article>)}{records.length === 0 && <Empty label="No vaccinations recorded yet" />}</div></div>;
+  const [today] = useState(() => new Date().toISOString().slice(0, 10));
+  return (
+    <div>
+      <SectionHeading icon={Syringe} title="Vaccination record" action="Dose traceability, administration details and due-date monitoring" />
+      <form onSubmit={onSave} className="grid gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2">
+        <label className={labelClass}>Vaccine name<input name="vaccineName" required maxLength={120} className={inputClass} /></label>
+        <label className={labelClass}>Dose number<input name="doseNumber" maxLength={30} placeholder="e.g. 1, booster" className={inputClass} /></label>
+        <label className={labelClass}>Administered date<input name="administeredDate" type="date" required className={inputClass} /></label>
+        <label className={labelClass}>Next due date<input name="nextDueDate" type="date" className={inputClass} /></label>
+        <label className={labelClass}>Batch / lot number<input name="batchNumber" maxLength={80} className={inputClass} /></label>
+        <label className={labelClass}>Manufacturer<input name="manufacturer" maxLength={100} className={inputClass} /></label>
+        <label className={labelClass}>Expiry date<input name="expiryDate" type="date" className={inputClass} /></label>
+        <label className={labelClass}>Route<select name="route" defaultValue="" className={inputClass}><option value="">Not recorded</option><option value="IM">Intramuscular (IM)</option><option value="SC">Subcutaneous (SC)</option><option value="ID">Intradermal (ID)</option><option value="oral">Oral</option><option value="nasal">Intranasal</option></select></label>
+        <label className={labelClass}>Administration site<input name="site" maxLength={80} placeholder="e.g. left thigh" className={inputClass} /></label>
+        <label className={labelClass}>Administered by<input name="administeredBy" maxLength={100} className={inputClass} /></label>
+        <label className={labelClass + " sm:col-span-2"}>Adverse event / observation<textarea name="adverseEvents" rows={2} maxLength={500} className={inputClass} /></label>
+        <label className={labelClass + " sm:col-span-2"}>Notes<textarea name="notes" rows={2} maxLength={500} className={inputClass} /></label>
+        <div className="sm:col-span-2"><SaveButton saving={saving} label="Add vaccination" /></div>
+      </form>
+      <div className="mt-5 space-y-3">{records.map((record) => { const due = record.nextDueDate && record.nextDueDate < today; return <article key={record.id} className="flex items-start gap-4 rounded-2xl border border-slate-200 p-4"><span className="rounded-xl bg-emerald-50 p-3 text-emerald-700"><Syringe size={20} /></span><div className="min-w-0 flex-1"><div className="flex flex-wrap justify-between gap-2"><p className="font-bold text-[#233A59]">{record.vaccineName}{record.doseNumber ? ` · Dose ${record.doseNumber}` : ""}</p>{due && <span className="rounded-lg bg-red-50 px-2 py-1 text-xs font-bold text-red-700">Overdue</span>}</div><p className="mt-1 text-sm text-slate-600">Administered {friendlyDate(record.administeredDate)}{record.batchNumber ? ` · Batch ${record.batchNumber}` : ""}</p>{[record.manufacturer, record.route, record.site].filter(Boolean).length > 0 && <p className="mt-1 text-xs text-slate-500">{[record.manufacturer, record.route, record.site].filter(Boolean).join(" · ")}</p>}{record.nextDueDate && <p className={"mt-2 text-xs font-bold " + (due ? "text-red-700" : "text-blue-700")}>Next due {friendlyDate(record.nextDueDate)}</p>}{record.adverseEvents && <p className="mt-3 rounded-xl bg-amber-50 p-3 text-sm text-amber-900"><strong>Observation:</strong> {record.adverseEvents}</p>}</div></article>; })}{records.length === 0 && <Empty label="No vaccinations recorded yet" />}</div>
+    </div>
+  );
+}
+
+function pregnancyDates(lmpDate: string, recordedDate: string, today: string) {
+  if (!lmpDate) return { edd: "", weeks: "" };
+  const lmp = new Date(lmpDate + "T00:00:00Z");
+  const recorded = new Date((recordedDate || today) + "T00:00:00Z");
+  if (Number.isNaN(lmp.getTime()) || Number.isNaN(recorded.getTime()) || recorded < lmp) return { edd: "", weeks: "" };
+  const edd = new Date(lmp.getTime() + 280 * 86_400_000).toISOString().slice(0, 10);
+  const totalDays = Math.floor((recorded.getTime() - lmp.getTime()) / 86_400_000);
+  return { edd, weeks: `${Math.floor(totalDays / 7)}w ${totalDays % 7}d` };
 }
 
 function PregnancyPanel({ records, saving, onSave }: { records: PregnancyRecord[]; saving: boolean; onSave: (event: FormEvent<HTMLFormElement>) => Promise<void> }) {
-  return <div><SectionHeading icon={Baby} title="Pregnancy follow-up" action="Antenatal observations and visit planning" /><form onSubmit={onSave} className="grid gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2"><label className={labelClass}>Recorded date<input name="recordedDate" type="date" required className={inputClass} /></label><label className={labelClass}>Gestational weeks<input name="gestationalWeeks" placeholder="e.g. 24 weeks" className={inputClass} /></label><label className={labelClass}>LMP date<input name="lmpDate" type="date" className={inputClass} /></label><label className={labelClass}>Expected delivery date<input name="eddDate" type="date" className={inputClass} /></label><label className={labelClass}>Blood pressure<input name="bloodPressure" placeholder="e.g. 120/80" className={inputClass} /></label><label className={labelClass}>Weight<input name="weight" placeholder="kg" className={inputClass} /></label><label className={labelClass}>Fetal heart rate<input name="fetalHeartRate" placeholder="bpm" className={inputClass} /></label><label className={labelClass}>Next visit<input name="nextVisitDate" type="date" className={inputClass} /></label><label className={labelClass + " sm:col-span-2"}>Notes<textarea name="notes" rows={3} className={inputClass} /></label><div className="sm:col-span-2"><SaveButton saving={saving} label="Save follow-up" /></div></form><div className="mt-5 space-y-3">{records.map((record) => <article key={record.id} className="rounded-2xl border border-slate-200 p-4"><div className="flex flex-wrap justify-between gap-2"><p className="font-bold text-[#233A59]">{record.recordedDate} · {record.gestationalWeeks || "Antenatal follow-up"}</p>{record.nextVisitDate && <span className="text-xs font-bold text-blue-700">Next visit {record.nextVisitDate}</span>}</div><div className="mt-3 grid grid-cols-2 gap-2 text-sm text-slate-600"><p>BP: {record.bloodPressure || "—"}</p><p>Weight: {record.weight || "—"}</p><p>FHR: {record.fetalHeartRate || "—"}</p><p>EDD: {record.eddDate || "—"}</p></div>{record.notes && <p className="mt-3 text-sm text-slate-600">{record.notes}</p>}</article>)}{records.length === 0 && <Empty label="No pregnancy follow-ups recorded yet" />}</div></div>;
+  const [today] = useState(() => new Date().toISOString().slice(0, 10));
+  const [lmpDate, setLmpDate] = useState("");
+  const [recordedDate, setRecordedDate] = useState("");
+  const derived = useMemo(() => pregnancyDates(lmpDate, recordedDate, today), [lmpDate, recordedDate, today]);
+  return (
+    <div>
+      <SectionHeading icon={Baby} title="Pregnancy care timeline" action="Antenatal observations, risk review and care planning" />
+      <form onSubmit={onSave} className="grid gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2">
+        <label className={labelClass}>Recorded date<input name="recordedDate" type="date" required value={recordedDate} onChange={(event) => setRecordedDate(event.target.value)} className={inputClass} /></label>
+        <label className={labelClass}>LMP date<input name="lmpDate" type="date" required value={lmpDate} onChange={(event) => setLmpDate(event.target.value)} className={inputClass} /></label>
+        <label className={labelClass}>Gestational age<input name="gestationalWeeks" readOnly value={derived.weeks} placeholder="Calculated from LMP" className={inputClass + " bg-slate-100"} /></label>
+        <label className={labelClass}>Expected delivery date<input name="eddDate" type="date" readOnly value={derived.edd} className={inputClass + " bg-slate-100"} /></label>
+        <label className={labelClass}>Gravida<input name="gravida" maxLength={20} placeholder="G" className={inputClass} /></label>
+        <label className={labelClass}>Para<input name="para" maxLength={20} placeholder="P" className={inputClass} /></label>
+        <label className={labelClass}>Risk level<select name="riskLevel" defaultValue="routine" className={inputClass}><option value="routine">Routine</option><option value="moderate">Needs closer review</option><option value="high">High risk</option></select></label>
+        <label className={labelClass}>Next visit<input name="nextVisitDate" type="date" className={inputClass} /></label>
+        <label className={labelClass}>Blood pressure<input name="bloodPressure" maxLength={20} placeholder="e.g. 120/80" className={inputClass} /></label>
+        <label className={labelClass}>Weight (kg)<input name="weight" maxLength={20} className={inputClass} /></label>
+        <label className={labelClass}>Fundal height<input name="fundalHeight" maxLength={30} placeholder="cm / weeks" className={inputClass} /></label>
+        <label className={labelClass}>Fetal heart rate<input name="fetalHeartRate" maxLength={30} placeholder="bpm" className={inputClass} /></label>
+        <label className={labelClass}>Fetal movement<input name="fetalMovement" maxLength={120} className={inputClass} /></label>
+        <label className={labelClass}>Symptoms<input name="symptoms" maxLength={300} className={inputClass} /></label>
+        <label className={labelClass + " sm:col-span-2"}>Risk factors<textarea name="riskFactors" rows={2} maxLength={600} className={inputClass} placeholder="Document clinician-assessed risks" /></label>
+        <label className={labelClass + " sm:col-span-2"}>Investigations reviewed<textarea name="investigations" rows={2} maxLength={800} className={inputClass} /></label>
+        <label className={labelClass + " sm:col-span-2"}>Care plan<textarea name="carePlan" rows={2} maxLength={800} className={inputClass} /></label>
+        <label className={labelClass + " sm:col-span-2"}>Notes<textarea name="notes" rows={2} maxLength={800} className={inputClass} /></label>
+        <div className="sm:col-span-2"><button disabled={saving || !derived.edd} className="inline-flex items-center gap-2 rounded-xl bg-[#233A59] px-5 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">{saving && <LoaderCircle className="animate-spin" size={17} />}Save antenatal follow-up</button>{!derived.edd && lmpDate && recordedDate && <p className="mt-2 text-xs font-bold text-red-700">Recorded date must be on or after the LMP date.</p>}</div>
+      </form>
+      <p className="mt-3 text-xs text-slate-500">Gestational age and EDD are calculated from the recorded LMP and require clinician confirmation.</p>
+      <div className="mt-5 space-y-3">{records.map((record) => { const highRisk = record.riskLevel === "high"; return <article key={record.id} className={"rounded-2xl border p-4 " + (highRisk ? "border-red-200 bg-red-50/40" : "border-slate-200")}><div className="flex flex-wrap justify-between gap-2"><p className="font-bold text-[#233A59]">{friendlyDate(record.recordedDate)} · {record.gestationalWeeks || "Antenatal follow-up"}</p><div className="flex gap-2">{record.riskLevel && <span className={"rounded-lg px-2 py-1 text-xs font-bold capitalize " + (highRisk ? "bg-red-100 text-red-800" : record.riskLevel === "moderate" ? "bg-amber-100 text-amber-800" : "bg-emerald-50 text-emerald-800")}>{record.riskLevel === "moderate" ? "Closer review" : record.riskLevel}</span>}{record.nextVisitDate && <span className="rounded-lg bg-blue-50 px-2 py-1 text-xs font-bold text-blue-700">Next {friendlyDate(record.nextVisitDate)}</span>}</div></div><div className="mt-3 grid grid-cols-2 gap-2 text-sm text-slate-600 sm:grid-cols-4"><p>BP: {record.bloodPressure || "—"}</p><p>Weight: {record.weight ? `${record.weight} kg` : "—"}</p><p>FHR: {record.fetalHeartRate || "—"}</p><p>EDD: {friendlyDate(record.eddDate)}</p></div>{record.riskFactors && <p className="mt-3 rounded-xl bg-amber-50 p-3 text-sm text-amber-900"><strong>Risk review:</strong> {record.riskFactors}</p>}{record.carePlan && <p className="mt-3 text-sm text-slate-600"><strong>Plan:</strong> {record.carePlan}</p>}{record.notes && <p className="mt-2 text-sm text-slate-600">{record.notes}</p>}</article>; })}{records.length === 0 && <Empty label="No pregnancy follow-ups recorded yet" />}</div>
+    </div>
+  );
 }
 
 function ReportsPanel({ records, uploading, actionId, onUpload, onAccess }: { records: ReportRecord[]; uploading: boolean; actionId: string | null; onUpload: (event: FormEvent<HTMLFormElement>) => Promise<void>; onAccess: (record: ReportRecord, mode: "view" | "download") => Promise<void> }) {
