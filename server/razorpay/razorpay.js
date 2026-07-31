@@ -61,6 +61,24 @@ export function captureRazorpayPayment(env, paymentId, amount) {
   });
 }
 
+export function createRazorpayRefund(env, paymentId, details) {
+  return razorpayRequest(env, `/payments/${encodeURIComponent(paymentId)}/refund`, {
+    method: "POST",
+    body: JSON.stringify(details),
+  });
+}
+
+export function fetchRazorpayRefund(env, refundId) {
+  return razorpayRequest(env, `/refunds/${encodeURIComponent(refundId)}`);
+}
+
+export function fetchRazorpayPaymentRefunds(env, paymentId) {
+  return razorpayRequest(
+    env,
+    `/payments/${encodeURIComponent(paymentId)}/refunds?count=100`,
+  );
+}
+
 function bytesToHex(bytes) {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }

@@ -78,10 +78,15 @@ type PaymentRecord = {
   patientId: string;
   patientName: string;
   amount: number;
+  refundedAmount?: number;
   method: string;
   status: string;
   createdAt?: Timestamp;
 };
+
+function netPaymentAmount(payment: PaymentRecord) {
+  return Math.max(0, Number(payment.amount || 0) - Number(payment.refundedAmount || 0));
+}
 
 type VisitRecord = {
   id: string;
@@ -441,18 +446,18 @@ function AdminDashboard() {
         createdAt: invoice.paidAt || invoice.updatedAt || invoice.createdAt,
       }));
     const paymentRecords = data.paymentAuditAvailable ? data.payments : fallbackPayments;
-    const receivedPayments = paymentRecords.filter((payment) => payment.status === "received");
+    const receivedPayments = paymentRecords.filter((payment) => ["received", "refunded"].includes(payment.status));
     const periodPayments = receivedPayments.filter((payment) => matchesRange(timestampDateKey(payment.createdAt), range, today));
 
     const billed = periodInvoices.reduce((sum, invoice) => sum + Number(invoice.total || 0), 0);
     const invoiceCollections = periodInvoices.reduce((sum, invoice) => sum + Number(invoice.amountPaid || 0), 0);
-    const collected = periodPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+    const collected = periodPayments.reduce((sum, payment) => sum + netPaymentAmount(payment), 0);
     const outstanding = periodInvoices.reduce((sum, invoice) => sum + Number(invoice.balance || 0), 0);
     const collectionRate = billed > 0 ? Math.min(100, (invoiceCollections / billed) * 100) : 0;
 
     const methodTotals = new Map<string, number>();
     periodPayments.forEach((payment) => {
-      methodTotals.set(payment.method, (methodTotals.get(payment.method) || 0) + Number(payment.amount || 0));
+      methodTotals.set(payment.method, (methodTotals.get(payment.method) || 0) + netPaymentAmount(payment));
     });
 
     const doctorMetrics = [...doctors, "Unassigned / archived"].map((doctorName) => {
@@ -464,7 +469,7 @@ function AdminDashboard() {
         visits: doctorVisits.length,
         uniquePatients: new Set(doctorVisits.map((visit) => visit.patientId)).size,
         billed: doctorInvoices.reduce((sum, invoice) => sum + Number(invoice.total || 0), 0),
-        collected: doctorPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0),
+        collected: doctorPayments.reduce((sum, payment) => sum + netPaymentAmount(payment), 0),
       };
     }).filter((doctor) => doctor.doctorName !== "Unassigned / archived" || doctor.visits > 0 || doctor.billed > 0 || doctor.collected > 0);
 
@@ -478,7 +483,7 @@ function AdminDashboard() {
         visits: visitEvents.filter((visit) => visit.date === key).length,
         collected: receivedPayments
           .filter((payment) => timestampDateKey(payment.createdAt) === key)
-          .reduce((sum, payment) => sum + Number(payment.amount || 0), 0),
+          .reduce((sum, payment) => sum + netPaymentAmount(payment), 0),
       };
     });
 
@@ -676,7 +681,7 @@ function AdminDashboard() {
             {analytics.recentPayments.map((payment) => (
               <article key={payment.id} className="flex flex-col gap-2 py-4 first:pt-0 sm:flex-row sm:items-center sm:justify-between">
                 <div><p className="font-bold text-slate-800">{payment.patientName || "Clinic payment"}</p><p className="mt-1 text-xs text-slate-500">{payment.invoiceNumber || "Invoice"} · {paymentMethodLabel(payment.method)}</p></div>
-                <div className="sm:text-right"><p className="font-bold text-emerald-700">{money(payment.amount)}</p><p className="mt-1 text-xs text-slate-500">{timestampDateKey(payment.createdAt) || "Recently"}</p></div>
+                <div className="sm:text-right"><p className="font-bold text-emerald-700">{money(netPaymentAmount(payment))}</p><p className="mt-1 text-xs text-slate-500">{timestampDateKey(payment.createdAt) || "Recently"}</p></div>
               </article>
             ))}
             {!loading && analytics.recentPayments.length === 0 ? <p className="py-8 text-center text-sm text-slate-500">No payment activity in this period.</p> : null}

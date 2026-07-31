@@ -1,5 +1,6 @@
 import { errorResponse, HttpError, json, requireEnvironment } from "../../../server/razorpay/http.js";
-import { finalizePayment, finalizeQrPayment } from "../../../server/razorpay/payments.js";
+import { finalizePayment, finalizeQrPayment, validDocumentId } from "../../../server/razorpay/payments.js";
+import { reconcileRefund } from "../../../server/razorpay/refunds.js";
 import { verifyWebhookSignature } from "../../../server/razorpay/razorpay.js";
 
 export async function onRequestPost(context) {
@@ -15,6 +16,27 @@ export async function onRequestPost(context) {
     }
 
     const event = JSON.parse(rawBody);
+    if (["refund.created", "refund.processed", "refund.failed"].includes(event.event)) {
+      const refund = event.payload?.refund?.entity;
+      const requestId = refund?.notes?.request_id;
+      if (!refund?.id || !validDocumentId(requestId)) {
+        return json({ received: true, ignored: true });
+      }
+      try {
+        const result = await reconcileRefund(context.env, {
+          requestId,
+          refund,
+          actorUid: "razorpay:webhook",
+        });
+        return json({ received: true, ...result });
+      } catch (error) {
+        if (error instanceof HttpError && error.status === 404) {
+          return json({ received: true, ignored: true });
+        }
+        throw error;
+      }
+    }
+
     if (event.event === "qr_code.credited") {
       const payment = event.payload?.payment?.entity;
       const qrCode = event.payload?.qr_code?.entity;

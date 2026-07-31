@@ -66,7 +66,7 @@ In the Razorpay dashboard, create a webhook with this URL:
 
 `https://asherhealthcare.in/api/razorpay/webhook`
 
-Use the same value entered as `RAZORPAY_WEBHOOK_SECRET` and subscribe to both `payment.captured` and `qr_code.credited`. This allows checkout and reception POS QR payments to update the invoice even if the staff browser closes after payment.
+Use the same value entered as `RAZORPAY_WEBHOOK_SECRET` and subscribe to `payment.captured`, `qr_code.credited`, `refund.created`, `refund.processed`, and `refund.failed`. This allows checkout, reception POS QR payments, and refunds to reconcile even if the staff browser closes.
 
 Razorpay QR Codes is an on-demand merchant feature. Ask Razorpay Support or the account point of contact to enable QR Codes before testing the reception POS workflow.
 
@@ -78,7 +78,8 @@ Razorpay QR Codes is an on-demand merchant feature. Ask Razorpay Support or the 
 4. Complete a Razorpay test payment.
 5. Confirm the invoice balance, payment audit entry, collected-today amount, and receipt PDF update once—and only once.
 6. Test a failed payment, a partial payment, closing the checkout window, and webhook delivery.
-7. Replace Test Mode keys with Live Mode keys only after Razorpay activates the account and all checks pass.
+7. In Test Mode, verify a partial refund and a full refund. Confirm that a processed refund reopens the correct invoice balance once, a pending refund can be safely synchronized, and a second request cannot be created while one is pending.
+8. Replace Test Mode keys with Live Mode keys only after Razorpay activates the account and all checks pass.
 
 For reception POS testing, register one general case (₹250) and one Pediatric/OBG specialist case (₹500), generate each single-use QR, complete payment, and confirm that printing remains unavailable until the server reports the payment as captured.
 

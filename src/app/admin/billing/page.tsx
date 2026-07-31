@@ -27,6 +27,7 @@ import {
   LoaderCircle,
   Plus,
   ReceiptIndianRupee,
+  RefreshCw,
   RotateCcw,
   Search,
   ShieldCheck,
@@ -75,11 +76,49 @@ type PaymentEntry = {
   method: PaymentMethod;
   reference: string;
   source: "manual" | "gateway";
-  status: "received" | "reversed";
+  status: "received" | "reversed" | "refunded";
+  gatewayPaymentId?: string;
+  refundedAmount?: number;
+  refundedAppliedAmount?: number;
+  refundStatus?: "initiating" | "pending" | "processed" | "failed";
+  activeRefundOperationId?: string;
+  lastRefundId?: string;
   createdAt?: Timestamp;
   reversedAt?: Timestamp;
   reversedBy?: string;
   reversalReason?: string;
+};
+
+type RefundOperation = {
+  id: string;
+  requestId: string;
+  refundId?: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  paymentDocumentId: string;
+  gatewayPaymentId: string;
+  patientName: string;
+  amount: number;
+  reason: string;
+  status: "initiating" | "pending" | "processed" | "failed";
+  reference?: string;
+  errorMessage?: string;
+  createdByName: string;
+  createdAt?: Timestamp;
+  processedAt?: Timestamp;
+  failedAt?: Timestamp;
+};
+
+type RefundResult = {
+  requestId: string;
+  refundId: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  paymentId: string;
+  amount: number;
+  status: RefundOperation["status"];
+  reference: string;
+  message: string;
 };
 
 type RazorpaySuccess = {
@@ -155,12 +194,21 @@ function methodLabel(value: string) {
   return labels[value] ?? value;
 }
 
+function netPaymentAmount(payment: PaymentEntry) {
+  return Math.max(0, Number(payment.amount || 0) - Number(payment.refundedAmount || 0));
+}
+
+function refundablePaymentAmount(payment: PaymentEntry) {
+  return payment.status === "reversed" ? 0 : netPaymentAmount(payment);
+}
+
 function BillingWorkspace() {
   const { user, profile } = useStaff();
   const db = firestore!;
   const [patients, setPatients] = useState<Patient[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [payments, setPayments] = useState<PaymentEntry[]>([]);
+  const [refundOperations, setRefundOperations] = useState<RefundOperation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -185,6 +233,13 @@ function BillingWorkspace() {
   const [reversingPayment, setReversingPayment] = useState<PaymentEntry | null>(null);
   const [reversalReason, setReversalReason] = useState("");
   const [reversing, setReversing] = useState(false);
+  const [refundingPayment, setRefundingPayment] = useState<PaymentEntry | null>(null);
+  const [refundAmount, setRefundAmount] = useState(0);
+  const [refundReason, setRefundReason] = useState("");
+  const [refundConfirmation, setRefundConfirmation] = useState("");
+  const [refundRequestId, setRefundRequestId] = useState("");
+  const [submittingRefund, setSubmittingRefund] = useState(false);
+  const [syncingRefundId, setSyncingRefundId] = useState("");
 
   useEffect(() => {
     const unsubscribePatients = onSnapshot(
@@ -217,12 +272,25 @@ function BillingWorkspace() {
         setError("Payment audit entries could not be loaded. Refresh once or ask an administrator to verify payment-audit access.");
       },
     );
+    const unsubscribeRefunds = profile.role === "admin"
+      ? onSnapshot(
+          query(collection(db, "refundOperations"), orderBy("createdAt", "desc"), limit(100)),
+          (snapshot) => setRefundOperations(
+            snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as RefundOperation),
+          ),
+          (refundError) => {
+            console.error("Refund audit subscription failed", refundError);
+            setError("Refund reconciliation entries could not be loaded. Ask an administrator to publish the refund access rule.");
+          },
+        )
+      : () => undefined;
     return () => {
       unsubscribePatients();
       unsubscribeInvoices();
       unsubscribePayments();
+      unsubscribeRefunds();
     };
-  }, [db]);
+  }, [db, profile.role]);
 
   const selectedPatient = useMemo(() => patients.find((patient) => patient.id === selectedPatientId) ?? null, [patients, selectedPatientId]);
   const subtotal = useMemo(() => items.reduce((sum, item) => sum + Math.max(0, item.quantity) * Math.max(0, item.unitPrice), 0), [items]);
@@ -230,10 +298,11 @@ function BillingWorkspace() {
 
   const stats = useMemo(() => {
     const today = todayKey();
-    const activePayments = payments.filter((payment) => payment.status === "received");
-    const collectedToday = activePayments.filter((payment) => payment.createdAt?.toDate().toISOString().slice(0, 10) === today).reduce((sum, payment) => sum + payment.amount, 0);
+    const activePayments = payments.filter((payment) => ["received", "refunded"].includes(payment.status));
+    const collectedToday = activePayments.filter((payment) => payment.createdAt?.toDate().toISOString().slice(0, 10) === today).reduce((sum, payment) => sum + netPaymentAmount(payment), 0);
     const outstanding = invoices.reduce((sum, invoice) => sum + Number(invoice.balance || 0), 0);
-    return { collectedToday, outstanding, payments: activePayments.length, invoices: invoices.length };
+    const refunded = payments.reduce((sum, payment) => sum + Number(payment.refundedAmount || 0), 0);
+    return { collectedToday, outstanding, payments: activePayments.length, invoices: invoices.length, refunded };
   }, [invoices, payments]);
 
   const paymentsByInvoice = useMemo(() => {
@@ -508,6 +577,101 @@ function BillingWorkspace() {
     }
   }
 
+  function beginRazorpayRefund(payment: PaymentEntry) {
+    if (profile.role !== "admin" || payment.source !== "gateway") return;
+    setRefundingPayment(payment);
+    setRefundAmount(refundablePaymentAmount(payment));
+    setRefundReason("");
+    setRefundConfirmation("");
+    setRefundRequestId(crypto.randomUUID());
+    setError("");
+    setNotice("");
+  }
+
+  async function submitRazorpayRefund(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!refundingPayment || profile.role !== "admin") return;
+
+    const amount = Number(refundAmount || 0);
+    const refundable = refundablePaymentAmount(refundingPayment);
+    if (amount <= 0 || amount > refundable) {
+      setError("Enter a refund amount above zero and not above the refundable balance.");
+      return;
+    }
+    if (refundReason.trim().length < 5) {
+      setError("Enter a clear refund reason of at least 5 characters.");
+      return;
+    }
+    if (refundConfirmation.trim().toUpperCase() !== "REFUND") {
+      setError("Type REFUND to confirm this financial action.");
+      return;
+    }
+
+    setSubmittingRefund(true);
+    setError("");
+    setNotice("");
+    try {
+      const token = await user.getIdToken();
+      const response = await fetch("/api/razorpay/refund", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          requestId: refundRequestId,
+          invoiceId: refundingPayment.invoiceId,
+          paymentDocumentId: refundingPayment.id,
+          amount,
+          reason: refundReason.trim(),
+          confirmed: true,
+        }),
+      });
+      const result = await response.json() as { error?: string; refund?: RefundResult };
+      if (!response.ok || !result.refund) {
+        throw new Error(result.error || "Razorpay could not accept the refund request.");
+      }
+
+      setNotice(`${result.refund.message} ${money(result.refund.amount)} · ${result.refund.invoiceNumber}`);
+      setRefundingPayment(null);
+      setRefundReason("");
+      setRefundConfirmation("");
+    } catch (refundError) {
+      console.error(refundError);
+      setError(refundError instanceof Error ? refundError.message : "The refund request could not be completed.");
+    } finally {
+      setSubmittingRefund(false);
+    }
+  }
+
+  async function syncRazorpayRefund(requestId: string) {
+    if (profile.role !== "admin" || !requestId) return;
+    setSyncingRefundId(requestId);
+    setError("");
+    setNotice("");
+    try {
+      const token = await user.getIdToken();
+      const response = await fetch("/api/razorpay/refund-status", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ requestId }),
+      });
+      const result = await response.json() as { error?: string; refund?: RefundResult };
+      if (!response.ok || !result.refund) {
+        throw new Error(result.error || "The Razorpay refund status could not be refreshed.");
+      }
+      setNotice(result.refund.message);
+    } catch (syncError) {
+      console.error(syncError);
+      setError(syncError instanceof Error ? syncError.message : "The refund status could not be refreshed.");
+    } finally {
+      setSyncingRefundId("");
+    }
+  }
+
   async function startRazorpayPayment() {
     if (!payingInvoice) return;
     const invoice = payingInvoice;
@@ -637,10 +801,11 @@ function BillingWorkspace() {
         <button type="button" onClick={() => { setShowCreate((open) => !open); setError(""); }} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-[#233A59] px-5 py-3 text-sm font-bold text-white hover:bg-[#1b2e47]"><FilePlus2 size={18} /> {showCreate ? "Close invoice" : "New invoice"}</button>
       </div>
 
-      <div className="mt-7 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-7 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         {[
           { label: "Collected today", value: money(stats.collectedToday), icon: Banknote, tone: "bg-emerald-50 text-emerald-700" },
           { label: "Outstanding", value: money(stats.outstanding), icon: WalletCards, tone: "bg-amber-50 text-amber-700" },
+          { label: "Refunded", value: money(stats.refunded), icon: RotateCcw, tone: "bg-rose-50 text-rose-700" },
           { label: "Payment entries", value: String(stats.payments), icon: CreditCard, tone: "bg-blue-50 text-blue-700" },
           { label: "Invoices", value: String(stats.invoices), icon: ReceiptIndianRupee, tone: "bg-violet-50 text-violet-700" },
         ].map(({ label, value, icon: Icon, tone }) => (
@@ -731,8 +896,91 @@ function BillingWorkspace() {
         </section>
       )}
 
+      {refundingPayment && profile.role === "admin" && (
+        <section className="mt-6 rounded-3xl border border-rose-200 bg-rose-50 p-5 sm:p-7">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.14em] text-rose-700">Secure Razorpay refund</p>
+              <h2 className="mt-2 text-xl font-bold text-[#233A59]">Refund {refundingPayment.invoiceNumber} · {refundingPayment.patientName}</h2>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-700">
+                This sends money back through Razorpay. The invoice changes only after Razorpay confirms the refund, and the audit record cannot be deleted.
+              </p>
+            </div>
+            <button type="button" onClick={() => setRefundingPayment(null)} aria-label="Close refund form" className="rounded-lg p-2 text-slate-500 hover:bg-white"><X size={19} /></button>
+          </div>
+
+          <div className="mt-5 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-xl bg-white p-4 ring-1 ring-rose-100"><p className="text-xs font-bold uppercase tracking-wide text-slate-500">Original payment</p><p className="mt-1 font-bold text-[#233A59]">{money(refundingPayment.amount)}</p></div>
+            <div className="rounded-xl bg-white p-4 ring-1 ring-rose-100"><p className="text-xs font-bold uppercase tracking-wide text-slate-500">Already refunded</p><p className="mt-1 font-bold text-rose-700">{money(Number(refundingPayment.refundedAmount || 0))}</p></div>
+            <div className="rounded-xl bg-white p-4 ring-1 ring-rose-100"><p className="text-xs font-bold uppercase tracking-wide text-slate-500">Available to refund</p><p className="mt-1 font-bold text-emerald-700">{money(refundablePaymentAmount(refundingPayment))}</p></div>
+          </div>
+
+          <form onSubmit={submitRazorpayRefund} className="mt-5 grid gap-4 lg:grid-cols-[180px_1fr_220px_auto] lg:items-end">
+            <label className={labelClass}>Refund amount<input required type="number" min="0.01" max={refundablePaymentAmount(refundingPayment)} step="0.01" value={refundAmount} onChange={(event) => setRefundAmount(Number(event.target.value))} className={inputClass} /></label>
+            <label className={labelClass}>Mandatory reason<textarea required minLength={5} maxLength={300} rows={2} value={refundReason} onChange={(event) => setRefundReason(event.target.value)} placeholder="Example: Duplicate payment received" className={inputClass + " resize-none"} /></label>
+            <label className={labelClass}>Type REFUND to confirm<input required autoComplete="off" value={refundConfirmation} onChange={(event) => setRefundConfirmation(event.target.value)} placeholder="REFUND" className={inputClass} /></label>
+            <button type="submit" disabled={submittingRefund || refundReason.trim().length < 5 || refundConfirmation.trim().toUpperCase() !== "REFUND"} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-rose-700 px-5 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">
+              {submittingRefund ? <LoaderCircle size={18} className="animate-spin" /> : <RotateCcw size={18} />}
+              {submittingRefund ? "Sending securely…" : `Refund ${money(refundAmount)}`}
+            </button>
+          </form>
+        </section>
+      )}
+
       {notice && <p className="mt-5 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">{notice}</p>}
       {error && <p className="mt-5 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p>}
+
+      {profile.role === "admin" && (
+        <section className="mt-6 rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#A8864A]">Administrator only</p>
+              <h2 className="mt-1 text-xl font-bold text-[#233A59]">Refund reconciliation</h2>
+              <p className="mt-1 text-sm text-slate-600">Track every Razorpay refund and refresh pending confirmations without creating a second request.</p>
+            </div>
+            <span className="text-xs font-semibold text-slate-500">{refundOperations.length} secure refund {refundOperations.length === 1 ? "record" : "records"}</span>
+          </div>
+
+          {refundOperations.length === 0 ? (
+            <div className="mt-4 rounded-xl border border-dashed border-slate-300 p-5 text-sm text-slate-600">No Razorpay refunds have been requested.</div>
+          ) : (
+            <div className="mt-4 space-y-3">
+              {refundOperations.slice(0, 20).map((operation) => {
+                const isPending = ["initiating", "pending"].includes(operation.status);
+                const statusTone = operation.status === "processed"
+                  ? "bg-emerald-100 text-emerald-800"
+                  : operation.status === "failed"
+                    ? "bg-red-100 text-red-800"
+                    : "bg-amber-100 text-amber-800";
+                return (
+                  <article key={operation.id} className="flex flex-col gap-3 rounded-xl bg-slate-50 p-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <strong className="text-[#233A59]">{operation.invoiceNumber}</strong>
+                        <span className={`rounded-full px-2 py-1 text-xs font-bold capitalize ${statusTone}`}>{operation.status}</span>
+                        <span className="font-bold text-rose-700">{money(operation.amount)}</span>
+                      </div>
+                      <p className="mt-1 text-sm font-semibold text-slate-700">{operation.patientName} · {operation.reason}</p>
+                      <p className="mt-1 break-all text-xs text-slate-500">
+                        Requested {createdDate(operation.createdAt)} by {operation.createdByName}
+                        {operation.refundId ? ` · Refund ${operation.refundId}` : ""}
+                        {operation.reference ? ` · Bank reference ${operation.reference}` : ""}
+                      </p>
+                      {operation.errorMessage && <p className="mt-1 text-xs font-semibold text-red-700">{operation.errorMessage}</p>}
+                    </div>
+                    {isPending && (
+                      <button type="button" onClick={() => void syncRazorpayRefund(operation.requestId)} disabled={syncingRefundId === operation.requestId} className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-[#233A59] disabled:opacity-50">
+                        {syncingRefundId === operation.requestId ? <LoaderCircle size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+                        {syncingRefundId === operation.requestId ? "Refreshing…" : "Sync with Razorpay"}
+                      </button>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
 
       <section className="mt-6 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
         <div className="grid gap-3 md:grid-cols-[1fr_220px]">
@@ -759,20 +1007,36 @@ function BillingWorkspace() {
                 <div className="mt-4 border-t border-slate-100 pt-4">
                   <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Payment history</p>
                   <div className="mt-3 space-y-2">
-                    {invoicePayments.map((payment) => (
-                      <div key={payment.id} className="flex flex-col gap-3 rounded-xl bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-                          <strong className={payment.status === "received" ? "text-emerald-700" : "text-slate-500 line-through"}>{money(payment.amount)}</strong>
-                          <span className="font-semibold text-slate-700">{methodLabel(payment.method)}</span>
-                          <span className="text-slate-500">{payment.source === "gateway" ? "Razorpay" : "Manual"} · {createdDate(payment.createdAt)}</span>
-                          {payment.reference && <span className="text-slate-500">Ref: {payment.reference}</span>}
-                          {payment.status === "reversed" && <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-bold text-amber-800">Reversed · {payment.reversalReason || "Correction recorded"}</span>}
+                    {invoicePayments.map((payment) => {
+                      const refundedAmount = Number(payment.refundedAmount || 0);
+                      const refundable = refundablePaymentAmount(payment);
+                      const refundPending = ["initiating", "pending"].includes(payment.refundStatus || "");
+                      return (
+                        <div key={payment.id} className="flex flex-col gap-3 rounded-xl bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                            <strong className={payment.status === "received" ? "text-emerald-700" : "text-slate-500 line-through"}>{money(payment.amount)}</strong>
+                            {refundedAmount > 0 && <strong className="text-rose-700">Net {money(netPaymentAmount(payment))}</strong>}
+                            <span className="font-semibold text-slate-700">{methodLabel(payment.method)}</span>
+                            <span className="text-slate-500">{payment.source === "gateway" ? "Razorpay" : "Manual"} · {createdDate(payment.createdAt)}</span>
+                            {payment.reference && <span className="break-all text-slate-500">Ref: {payment.reference}</span>}
+                            {payment.status === "reversed" && <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-bold text-amber-800">Reversed · {payment.reversalReason || "Correction recorded"}</span>}
+                            {refundedAmount > 0 && <span className="rounded-full bg-rose-100 px-2 py-1 text-xs font-bold text-rose-800">Refunded {money(refundedAmount)}</span>}
+                            {refundPending && <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-bold text-amber-800">Refund pending</span>}
+                          </div>
+                          {profile.role === "admin" && payment.status === "received" && payment.source === "manual" && (
+                            <button type="button" onClick={() => beginPaymentReversal(payment)} className="inline-flex min-h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-800 hover:bg-amber-50"><RotateCcw size={14} /> Correct payment</button>
+                          )}
+                          {profile.role === "admin" && payment.source === "gateway" && refundable > 0 && !refundPending && (
+                            <button type="button" onClick={() => beginRazorpayRefund(payment)} className="inline-flex min-h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-rose-300 bg-white px-3 py-2 text-xs font-bold text-rose-800 hover:bg-rose-50"><RotateCcw size={14} /> Refund patient</button>
+                          )}
+                          {profile.role === "admin" && refundPending && payment.activeRefundOperationId && (
+                            <button type="button" onClick={() => void syncRazorpayRefund(payment.activeRefundOperationId!)} disabled={syncingRefundId === payment.activeRefundOperationId} className="inline-flex min-h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-[#233A59] disabled:opacity-50">
+                              {syncingRefundId === payment.activeRefundOperationId ? <LoaderCircle size={14} className="animate-spin" /> : <RefreshCw size={14} />} Sync refund
+                            </button>
+                          )}
                         </div>
-                        {profile.role === "admin" && payment.status === "received" && (
-                          <button type="button" onClick={() => beginPaymentReversal(payment)} className="inline-flex min-h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-800 hover:bg-amber-50"><RotateCcw size={14} /> Correct payment</button>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}

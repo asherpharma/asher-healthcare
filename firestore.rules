@@ -257,6 +257,13 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // Refund operations are written only by the secure Cloudflare service
+    // after Razorpay authentication. Administrators can monitor reconciliation.
+    match /refundOperations/{operationId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
     match /labOrders/{orderId} {
       allow read: if isStaff();
       allow create: if isStaff()

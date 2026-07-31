@@ -248,6 +248,7 @@ export async function requireActiveStaff(request, env) {
   return {
     uid: firebaseUser.localId,
     email: firebaseUser.email || "",
+    displayName: staff.data.displayName || firebaseUser.displayName || firebaseUser.email || "Clinic staff",
     role,
   };
 }
@@ -255,7 +256,7 @@ export async function requireActiveStaff(request, env) {
 export async function requireAdminStaff(request, env) {
   const staff = await requireActiveStaff(request, env);
   if (staff.role !== "admin") {
-    throw new HttpError(403, "Only a clinic administrator can manage staff access.");
+    throw new HttpError(403, "Only a clinic administrator can perform this action.");
   }
   return staff;
 }
