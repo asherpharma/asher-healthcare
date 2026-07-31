@@ -1,5 +1,12 @@
-const CACHE_NAME = "asher-public-v1";
-const PUBLIC_ASSETS = ["/", "/manifest.webmanifest", "/images/logo.png"];
+const CACHE_NAME = "asher-public-v2";
+const PUBLIC_ASSETS = [
+  "/",
+  "/offline.html",
+  "/manifest.webmanifest",
+  "/images/logo.png",
+  "/icons/icon-192.png",
+  "/icons/icon-512.png",
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(PUBLIC_ASSETS)));
@@ -13,6 +20,10 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
+self.addEventListener("message", (event) => {
+  if (event.data === "SKIP_WAITING") self.skipWaiting();
+});
+
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   if (request.method !== "GET") return;
@@ -21,11 +32,25 @@ self.addEventListener("fetch", (event) => {
 
   // Never cache authenticated clinic screens or medical/financial information.
   if (url.pathname.startsWith("/admin")) {
-    event.respondWith(fetch(request));
+    event.respondWith(
+      fetch(request).catch(async () => {
+        if (request.mode === "navigate") {
+          return (await caches.match("/offline.html")) || Response.error();
+        }
+        return new Response("The Asher Staff app is offline.", {
+          status: 503,
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        });
+      }),
+    );
     return;
   }
 
-  const isStaticAsset = url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/images/") || url.pathname === "/manifest.webmanifest";
+  const isStaticAsset =
+    url.pathname.startsWith("/_next/static/") ||
+    url.pathname.startsWith("/images/") ||
+    url.pathname.startsWith("/icons/") ||
+    url.pathname === "/manifest.webmanifest";
   if (!isStaticAsset) return;
 
   event.respondWith(

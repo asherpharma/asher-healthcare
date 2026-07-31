@@ -1,19 +1,35 @@
 {
+  "id": "/admin",
   "name": "Asher Healthcare Staff",
   "short_name": "Asher Staff",
   "description": "Secure mobile clinic workspace for Asher Women & Child Healthcare staff.",
-  "start_url": "/admin",
+  "start_url": "/admin?source=pwa",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
   "background_color": "#f8fafc",
   "theme_color": "#233A59",
   "orientation": "portrait-primary",
-  "scope": "/",
+  "scope": "/admin",
+  "categories": ["medical", "business", "productivity"],
+  "prefer_related_applications": false,
   "icons": [
     {
-      "src": "/images/logo.png",
-      "sizes": "any",
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ],
   "shortcuts": [
@@ -31,6 +47,11 @@
       "name": "Billing",
       "short_name": "Billing",
       "url": "/admin/billing"
+    },
+    {
+      "name": "Lab Desk",
+      "short_name": "Lab",
+      "url": "/admin/lab"
     }
   ]
 }
