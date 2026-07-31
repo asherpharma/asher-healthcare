@@ -172,8 +172,10 @@ function normalisePhone(value: string) {
   return digits.length > 10 ? digits.slice(-10) : digits;
 }
 
-function doctorFromAppointment(doctorId: string) {
-  return doctorId === "pediatrics" ? DOCTORS[0] : doctorId === "obg" ? DOCTORS[1] : doctorId;
+function doctorFromAppointment(doctorId?: string) {
+  if (doctorId === "pediatrics") return DOCTORS[0];
+  if (doctorId === "obg") return DOCTORS[1];
+  return doctorId || "Doctor not assigned";
 }
 
 function doctorForProfile(profile: StaffProfile): DoctorName | "" {
@@ -250,7 +252,7 @@ function UnlinkedDoctorProfile({ profile }: { profile: StaffProfile }) {
       <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-blue-50 text-blue-700"><Stethoscope size={28} /></span>
       <h1 className="mt-5 text-3xl font-bold text-[#233A59]">Doctor identity needs linking</h1>
       <p className="mt-3 leading-7 text-slate-600">The account <strong>{profile.displayName}</strong> must be linked to Dr. Lt Col Shafi Ahamad or Dr. Shaik Reshma before consultations can be signed.</p>
-      <p className="mt-4 text-sm font-semibold text-blue-700">Ask an administrator to update this staff account’s display name.</p>
+      <p className="mt-4 text-sm font-semibold text-blue-700">Ask an administrator to assign the doctor in Settings → Staff login access.</p>
     </section>
   );
 }
@@ -374,11 +376,11 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
           id: `appointment-${appointment.id}`,
           appointmentId: appointment.id,
           patientId: patient?.id,
-          patientName: appointment.patientName,
-          phone: appointment.phone,
+          patientName: appointment.patientName || "Unnamed patient",
+          phone: appointment.phone || "",
           doctorName: doctorFromAppointment(appointment.doctorId),
-          time: appointment.preferredTime,
-          reason: appointment.reason,
+          time: appointment.preferredTime || "Walk-in",
+          reason: appointment.reason || "Consultation",
           status: appointment.status,
           source: appointment.source || "website",
         };
@@ -405,7 +407,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
     return entries.sort((left, right) => {
       if (left.status === "completed" && right.status !== "completed") return 1;
       if (right.status === "completed" && left.status !== "completed") return -1;
-      return left.time.localeCompare(right.time);
+      return String(left.time || "Walk-in").localeCompare(String(right.time || "Walk-in"));
     });
   }, [appointments, doctorFilter, patients, profileDoctor, selectedDate]);
 
