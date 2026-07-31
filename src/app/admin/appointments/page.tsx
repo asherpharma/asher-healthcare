@@ -127,6 +127,15 @@ function AppointmentDesk() {
     slots: new Set(),
   });
 
+  useEffect(() => {
+    const openAppointment = () => setShowCreate(true);
+    window.addEventListener("asher:new-appointment", openAppointment);
+    if (new URLSearchParams(window.location.search).get("new") === "1") {
+      window.setTimeout(() => setShowCreate(true), 0);
+    }
+    return () => window.removeEventListener("asher:new-appointment", openAppointment);
+  }, []);
+
   const bookingSlots = useMemo(
     () => dateIsEnabled(schedule, booking.preferredDate)
       ? generateTimeSlots(schedule.doctors[booking.doctorId])

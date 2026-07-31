@@ -2,6 +2,7 @@
 
 import StaffGuard, { type StaffRole, useStaff } from "@/components/admin/StaffGuard";
 import MobileStaffNav from "@/components/admin/MobileStaffNav";
+import StaffCommandCenter from "@/components/admin/StaffCommandCenter";
 import { InstallAppButton, NetworkStatus } from "@/components/pwa/PwaRegister";
 import { firebaseAuth } from "@/firebase/config";
 import { CalendarDays, FlaskConical, LayoutDashboard, ListTodo, LogOut, ReceiptIndianRupee, Settings2, Smartphone, Stethoscope, UserRoundCog, UsersRound, type LucideIcon } from "lucide-react";
@@ -60,6 +61,7 @@ function StaffChrome({ children }: { children: ReactNode }) {
             <div><p className="font-bold text-[#233A59]"><span className="lg:hidden">Asher Staff</span><span className="hidden lg:inline">Asher Healthcare</span></p><p className="hidden text-xs text-slate-500 lg:block">Secure clinic workspace</p></div>
           </Link>
           <div className="flex items-center gap-2 lg:gap-3">
+            <StaffCommandCenter role={profile.role} />
             <NetworkStatus />
             <span className="rounded-full bg-[#233A59] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white lg:hidden">{profile.role}</span>
             <div className="hidden lg:block"><InstallAppButton compact /></div>

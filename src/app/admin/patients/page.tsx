@@ -57,7 +57,7 @@ import {
   UserRound,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type Gender = "female" | "male" | "other";
 type CaseType = "general" | "specialist";
@@ -248,9 +248,27 @@ function PatientRegister() {
   const [deleteTarget, setDeleteTarget] = useState<Patient | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const deepLinkedPatient = useRef("");
 
   useEffect(() => {
     void preloadClinicPdfAssets().catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    const openRegistration = () => setShowForm(true);
+    const openPatient = (event: Event) => {
+      const patientId = (event as CustomEvent<{ patientId?: string }>).detail?.patientId;
+      if (patientId) setSelectedId(patientId);
+    };
+    window.addEventListener("asher:new-patient", openRegistration);
+    window.addEventListener("asher:open-patient", openPatient);
+    if (new URLSearchParams(window.location.search).get("new") === "1") {
+      window.setTimeout(() => setShowForm(true), 0);
+    }
+    return () => {
+      window.removeEventListener("asher:new-patient", openRegistration);
+      window.removeEventListener("asher:open-patient", openPatient);
+    };
   }, []);
 
   useEffect(() => {
@@ -259,6 +277,15 @@ function PatientRegister() {
       setPatients(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Patient));
     });
   }, [db]);
+
+  useEffect(() => {
+    const patientId = new URLSearchParams(window.location.search).get("patient") ?? "";
+    if (!patientId || deepLinkedPatient.current === patientId) return;
+    if (patients.some((patient) => patient.id === patientId)) {
+      deepLinkedPatient.current = patientId;
+      window.setTimeout(() => setSelectedId(patientId), 0);
+    }
+  }, [patients]);
 
   const selectedPatient = useMemo(
     () => patients.find((patient) => patient.id === selectedId) ?? null,
