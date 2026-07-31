@@ -17,6 +17,7 @@ import {
   addDoc,
   collection,
   doc,
+  getDocs,
   limit,
   onSnapshot,
   orderBy,
@@ -26,7 +27,7 @@ import {
   writeBatch,
   type Timestamp,
 } from "firebase/firestore";
-import { getBlob, ref, uploadBytes } from "firebase/storage";
+import { deleteObject, getBlob, ref, uploadBytes } from "firebase/storage";
 import {
   Activity,
   Baby,
@@ -46,6 +47,7 @@ import {
   ShieldCheck,
   Stethoscope,
   Syringe,
+  Trash2,
   UserRound,
   X,
 } from "lucide-react";
@@ -169,6 +171,9 @@ function PatientRegister() {
   const [reports, setReports] = useState<ReportRecord[]>([]);
   const [uploading, setUploading] = useState(false);
   const [reportActionId, setReportActionId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Patient | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     void preloadClinicPdfAssets().catch(() => undefined);
@@ -354,9 +359,62 @@ function PatientRegister() {
     }
   }
 
+  async function deletePatientPermanently() {
+    if (profile.role !== "admin" || !deleteTarget) return;
+    const patientNumber = deleteTarget.patientNumber || deleteTarget.id;
+    if (deleteConfirmation.trim() !== patientNumber) {
+      setMessage("Type the patient ID exactly to confirm deletion.");
+      return;
+    }
+
+    setDeleting(true);
+    setMessage("");
+    try {
+      const patientRef = doc(db, "patients", deleteTarget.id);
+      const collectionNames = ["visits", "prescriptions", "vaccinations", "pregnancyRecords", "reports"] as const;
+      const childSnapshots = await Promise.all(
+        collectionNames.map((name) => getDocs(collection(patientRef, name))),
+      );
+      const childRefs = childSnapshots.flatMap((snapshot) => snapshot.docs.map((item) => item.ref));
+      const reportPaths = childSnapshots[4].docs
+        .map((item) => String(item.data().storagePath || ""))
+        .filter(Boolean);
+
+      while (childRefs.length > 450) {
+        const batch = writeBatch(db);
+        childRefs.splice(0, 450).forEach((recordRef) => batch.delete(recordRef));
+        await batch.commit();
+      }
+
+      const finalBatch = writeBatch(db);
+      childRefs.forEach((recordRef) => finalBatch.delete(recordRef));
+      finalBatch.delete(patientRef);
+      await finalBatch.commit();
+
+      await Promise.allSettled(reportPaths.map((storagePath) => deleteObject(ref(files, storagePath))));
+      setSelectedId(null);
+      setShowEdit(false);
+      setDeleteTarget(null);
+      setDeleteConfirmation("");
+      setVisits([]);
+      setPrescriptions([]);
+      setVaccinations([]);
+      setPregnancyRecords([]);
+      setReports([]);
+      if (lastRegistered?.patient.id === deleteTarget.id) setLastRegistered(null);
+      setMessage(`Patient ${patientNumber} and linked clinical records were deleted. Billing records were retained for audit.`);
+    } catch (error) {
+      console.error("Admin patient deletion failed", error);
+      setMessage("Patient deletion failed. No billing records were changed. Please try again.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   async function saveRecord(event: FormEvent<HTMLFormElement>, collectionName: string, payload: Record<string, unknown>) {
     event.preventDefault();
     if (!selectedPatient) return;
+    const recordForm = event.currentTarget;
     setSaving(true);
     setMessage("");
     try {
@@ -366,7 +424,7 @@ function PatientRegister() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      event.currentTarget.reset();
+      recordForm.reset();
       setMessage("Record saved securely.");
     } catch {
       setMessage("Unable to save this record. Please check access and try again.");
@@ -509,6 +567,25 @@ function PatientRegister() {
         </form>
       )}
 
+      {deleteTarget && profile.role === "admin" && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/65 p-4 backdrop-blur-sm">
+          <form onSubmit={(event) => { event.preventDefault(); void deletePatientPermanently(); }} role="dialog" aria-modal="true" aria-labelledby="delete-patient-title" className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl sm:p-8">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-red-50 text-red-700"><Trash2 size={23} /></div>
+              <button type="button" onClick={() => { setDeleteTarget(null); setDeleteConfirmation(""); }} aria-label="Close patient deletion" className="rounded-xl p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
+            </div>
+            <h2 id="delete-patient-title" className="mt-5 text-2xl font-bold text-[#233A59]">Permanently delete patient?</h2>
+            <p className="mt-3 leading-7 text-slate-600">This removes <strong>{deleteTarget.fullName}</strong> and all linked visits, prescriptions, vaccinations, pregnancy records, and uploaded reports. Billing, receipts, and payment audit records are retained.</p>
+            <div className="mt-5 rounded-2xl bg-red-50 p-4 text-sm text-red-900 ring-1 ring-red-100">Only an administrator can complete this action. It cannot be undone.</div>
+            <label className={labelClass + " mt-5 block"}>Type <strong>{deleteTarget.patientNumber || deleteTarget.id}</strong> to confirm<input value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} autoComplete="off" className={inputClass} /></label>
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <button type="button" onClick={() => { setDeleteTarget(null); setDeleteConfirmation(""); }} disabled={deleting} className="min-h-11 rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold text-slate-700 disabled:opacity-60">Cancel</button>
+              <button type="submit" disabled={deleting || deleteConfirmation.trim() !== (deleteTarget.patientNumber || deleteTarget.id)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-red-700 px-5 py-3 text-sm font-bold text-white hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-50">{deleting ? <LoaderCircle size={18} className="animate-spin" /> : <Trash2 size={18} />}{deleting ? "Deleting…" : "Delete patient permanently"}</button>
+            </div>
+          </form>
+        </div>
+      )}
+
       <div className="mt-7 grid gap-6 xl:grid-cols-[0.72fr_1.28fr]">
         <section>
           <label className="relative block"><Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={19} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, mobile or patient ID" className="w-full rounded-2xl border border-slate-200 bg-white py-3.5 pl-12 pr-4 outline-none focus:border-[#233A59]" /></label>
@@ -533,7 +610,17 @@ function PatientRegister() {
           ) : (
             <div className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-200">
               <div className="bg-[#233A59] p-6 text-white sm:p-8">
-                <div className="flex flex-wrap justify-between gap-5"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-[#D4B873]">{selectedPatient.patientNumber ?? "Patient profile"}</p><h2 className="mt-2 text-2xl font-bold">{selectedPatient.fullName}</h2><p className="mt-2 text-sm text-slate-200">{selectedPatient.phone} · DOB {selectedPatient.dateOfBirth}{selectedPatient.doctorName ? " · " + selectedPatient.doctorName : ""}</p></div><div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10"><ShieldCheck size={27} /></div></div>
+                <div className="flex flex-wrap justify-between gap-5">
+                  <div><p className="text-xs font-bold uppercase tracking-[0.18em] text-[#D4B873]">{selectedPatient.patientNumber ?? "Patient profile"}</p><h2 className="mt-2 text-2xl font-bold">{selectedPatient.fullName}</h2><p className="mt-2 text-sm text-slate-200">{selectedPatient.phone} · DOB {selectedPatient.dateOfBirth}{selectedPatient.doctorName ? " · " + selectedPatient.doctorName : ""}</p></div>
+                  <div className="flex items-center gap-3">
+                    {profile.role === "admin" && (
+                      <button type="button" onClick={() => { setDeleteTarget(selectedPatient); setDeleteConfirmation(""); setMessage(""); }} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-red-300/60 bg-red-950/20 px-4 py-2 text-sm font-bold text-red-100 hover:bg-red-950/40">
+                        <Trash2 size={17} /> Delete patient
+                      </button>
+                    )}
+                    <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10"><ShieldCheck size={27} /></div>
+                  </div>
+                </div>
               </div>
               <div className="flex gap-2 overflow-x-auto border-b border-slate-200 p-3">
                 {tabs.map(({ key, label, icon: Icon, count }) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={"inline-flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-bold " + (activeTab === key ? "bg-[#233A59] text-white" : "text-slate-600 hover:bg-slate-100")}><Icon size={16} />{label}{typeof count === "number" && <span className="rounded-full bg-white/15 px-1.5 text-xs">{count}</span>}</button>)}
