@@ -4,7 +4,7 @@ import StaffGuard, { useStaff } from "@/components/admin/StaffGuard";
 import MobileStaffNav from "@/components/admin/MobileStaffNav";
 import { InstallAppButton, NetworkStatus } from "@/components/pwa/PwaRegister";
 import { firebaseAuth } from "@/firebase/config";
-import { CalendarDays, FlaskConical, LayoutDashboard, LogOut, ReceiptIndianRupee, Settings2, Stethoscope, UsersRound } from "lucide-react";
+import { CalendarDays, FlaskConical, LayoutDashboard, ListTodo, LogOut, ReceiptIndianRupee, Settings2, Stethoscope, UsersRound } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -14,6 +14,7 @@ const navigation = [
   { href: "/admin", label: "Overview", icon: LayoutDashboard },
   { href: "/admin/appointments", label: "Appointments", icon: CalendarDays },
   { href: "/admin/patients", label: "Patients", icon: UsersRound },
+  { href: "/admin/tasks", label: "Tasks & follow-ups", icon: ListTodo },
   { href: "/admin/billing", label: "Billing", icon: ReceiptIndianRupee },
   { href: "/admin/lab", label: "Lab", icon: FlaskConical },
   { href: "/admin/settings", label: "Settings", icon: Settings2, adminOnly: true },
@@ -56,7 +57,7 @@ function StaffChrome({ children }: { children: ReactNode }) {
             })}
           </nav>
         </aside>
-        <main id="staff-app-content">{children}</main>
+        <main id="main-content">{children}</main>
       </div>
       <MobileStaffNav role={profile.role} onLogout={() => void logOut()} />
     </div>

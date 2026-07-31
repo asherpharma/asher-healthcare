@@ -5,6 +5,7 @@ import {
   CalendarDays,
   FlaskConical,
   LayoutDashboard,
+  ListTodo,
   LogOut,
   Menu,
   ReceiptIndianRupee,
@@ -114,6 +115,14 @@ export default function MobileStaffNav({
             </div>
 
             <div className="mt-5 grid grid-cols-2 gap-3">
+              <Link
+                href="/admin/tasks"
+                onClick={() => setMoreOpen(false)}
+                className="flex min-h-24 flex-col justify-between rounded-2xl bg-blue-50 p-4 font-bold text-blue-800"
+              >
+                <ListTodo size={24} />
+                Tasks & follow-ups
+              </Link>
               <Link
                 href="/admin/lab"
                 onClick={() => setMoreOpen(false)}

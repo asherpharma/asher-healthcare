@@ -6,10 +6,10 @@ import { CalendarDays, Menu, Phone, ShieldCheck, X } from "lucide-react";
 import { useState } from "react";
 
 const links = [
-  { label: "Services", href: "#services" },
-  { label: "Doctors", href: "#doctors" },
-  { label: "Clinic", href: "#clinic" },
-  { label: "Contact", href: "#contact" },
+  { label: "Services", href: "/#services" },
+  { label: "Doctors", href: "/#doctors" },
+  { label: "Clinic", href: "/#clinic" },
+  { label: "Contact", href: "/#contact" },
 ];
 
 export default function Navbar() {
@@ -31,14 +31,14 @@ export default function Navbar() {
           </Link>
 
           <nav className="desktop-nav" aria-label="Main navigation">
-            {links.map((link) => <a key={link.href} href={link.href}>{link.label}</a>)}
+            {links.map((link) => <Link key={link.href} href={link.href}>{link.label}</Link>)}
           </nav>
 
           <div className="nav-actions">
             <Link className="staff-link" href="/admin/login">Staff login</Link>
-            <a className="button button-primary button-small" href="#appointment">
+            <Link className="button button-primary button-small" href="/#appointment">
               <CalendarDays size={18} /> Book appointment
-            </a>
+            </Link>
           </div>
 
           <button className="menu-button" onClick={() => setOpen(!open)} aria-label="Toggle navigation" aria-expanded={open}>
@@ -48,9 +48,9 @@ export default function Navbar() {
 
         {open && (
           <div className="mobile-nav">
-            {links.map((link) => <a key={link.href} href={link.href} onClick={() => setOpen(false)}>{link.label}</a>)}
+            {links.map((link) => <Link key={link.href} href={link.href} onClick={() => setOpen(false)}>{link.label}</Link>)}
             <Link href="/admin/login" onClick={() => setOpen(false)}>Staff login</Link>
-            <a className="button button-primary" href="#appointment" onClick={() => setOpen(false)}>Book appointment</a>
+            <Link className="button button-primary" href="/#appointment" onClick={() => setOpen(false)}>Book appointment</Link>
           </div>
         )}
       </header>

@@ -44,6 +44,11 @@
       "url": "/admin/patients"
     },
     {
+      "name": "Tasks & Follow-ups",
+      "short_name": "Tasks",
+      "url": "/admin/tasks"
+    },
+    {
       "name": "Billing",
       "short_name": "Billing",
       "url": "/admin/billing"

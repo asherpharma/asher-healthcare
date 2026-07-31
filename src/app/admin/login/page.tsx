@@ -29,7 +29,7 @@ function LoginForm() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 px-6 py-10 sm:py-16">
+    <main id="main-content" className="min-h-screen bg-slate-50 px-6 py-10 sm:py-16">
       <div className="mx-auto max-w-lg">
         <Link href="/" className="inline-flex items-center gap-2 text-sm font-bold text-[#233A59] hover:text-[#A8864A]"><ArrowLeft size={16} />Back to website</Link>
         <section className="mt-8 rounded-[2rem] border border-slate-200 bg-white p-8 shadow-xl shadow-slate-200/60 sm:p-10">

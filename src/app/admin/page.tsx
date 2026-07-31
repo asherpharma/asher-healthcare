@@ -2,7 +2,7 @@
 
 import AdminShell from "@/components/admin/AdminShell";
 import { firestore } from "@/firebase/config";
-import { collection, getCountFromServer, query, where } from "firebase/firestore";
+import { collection, getCountFromServer, getDocs, query, where } from "firebase/firestore";
 import {
   ArrowRight,
   CalendarPlus,
@@ -11,6 +11,7 @@ import {
   ClipboardPlus,
   Clock3,
   FlaskConical,
+  ListTodo,
   LoaderCircle,
   ReceiptIndianRupee,
   RefreshCw,
@@ -29,6 +30,8 @@ type DashboardStats = {
   requested: number;
   confirmed: number;
   completed: number;
+  openTasks: number;
+  dueTasks: number;
 };
 
 const emptyStats: DashboardStats = {
@@ -38,6 +41,8 @@ const emptyStats: DashboardStats = {
   requested: 0,
   confirmed: 0,
   completed: 0,
+  openTasks: 0,
+  dueTasks: 0,
 };
 
 function clinicDate() {
@@ -57,13 +62,16 @@ async function fetchDashboardStats(): Promise<DashboardStats> {
   }
 
   const appointments = collection(firestore, "appointments");
-  const [all, today, patients, requested, confirmed, completed] = await Promise.all([
+  const tasks = collection(firestore, "staffTasks");
+  const [all, today, patients, requested, confirmed, completed, openTasks, todayTasks] = await Promise.all([
     getCountFromServer(appointments),
     getCountFromServer(query(appointments, where("preferredDate", "==", clinicDate()))),
     getCountFromServer(collection(firestore, "patients")),
     getCountFromServer(query(appointments, where("status", "==", "requested"))),
     getCountFromServer(query(appointments, where("status", "==", "confirmed"))),
     getCountFromServer(query(appointments, where("status", "==", "completed"))),
+    getCountFromServer(query(tasks, where("status", "==", "open"))),
+    getDocs(query(tasks, where("dueDate", "==", clinicDate()))),
   ]);
 
   return {
@@ -73,6 +81,8 @@ async function fetchDashboardStats(): Promise<DashboardStats> {
     requested: requested.data().count,
     confirmed: confirmed.data().count,
     completed: completed.data().count,
+    openTasks: openTasks.data().count,
+    dueTasks: todayTasks.docs.filter((task) => task.data().status === "open").length,
   };
 }
 
@@ -158,6 +168,13 @@ function DashboardContent() {
       tone: "bg-rose-50 text-rose-700",
       hint: "Registered patient records",
     },
+    {
+      label: "Open follow-ups",
+      value: stats.openTasks,
+      icon: ListTodo,
+      tone: "bg-cyan-50 text-cyan-700",
+      hint: stats.dueTasks > 0 ? `${stats.dueTasks} due today` : "No tasks due today",
+    },
   ];
 
   const quickActions = [
@@ -184,6 +201,12 @@ function DashboardContent() {
       label: "Lab report",
       icon: FlaskConical,
       tone: "bg-amber-50 text-amber-800",
+    },
+    {
+      href: "/admin/tasks",
+      label: "Add follow-up",
+      icon: ListTodo,
+      tone: "bg-cyan-50 text-cyan-800",
     },
   ];
 
@@ -223,7 +246,7 @@ function DashboardContent() {
             <h2 className="mt-1 text-lg font-bold text-[#233A59]">Start at the front desk</h2>
           </div>
         </div>
-        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
           {quickActions.map(({ href, label, icon: Icon, tone }) => (
             <Link
               key={label}

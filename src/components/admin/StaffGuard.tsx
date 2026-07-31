@@ -72,7 +72,7 @@ export default function StaffGuard({ children }: { children: ReactNode }) {
 
   if (!isFirebaseConfigured) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
+      <main id="main-content" className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
         <section className="max-w-lg rounded-3xl bg-white p-8 shadow-xl ring-1 ring-slate-200">
           <ShieldAlert className="text-amber-600" size={34} />
           <h1 className="mt-5 text-2xl font-bold text-[#233A59]">Secure portal is not connected yet</h1>
@@ -84,7 +84,7 @@ export default function StaffGuard({ children }: { children: ReactNode }) {
 
   if (error) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
+      <main id="main-content" className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
         <section className="max-w-lg rounded-3xl bg-white p-8 text-center shadow-xl ring-1 ring-slate-200">
           <ShieldAlert className="mx-auto text-red-600" size={34} />
           <h1 className="mt-5 text-2xl font-bold text-[#233A59]">Access check failed</h1>
@@ -97,7 +97,7 @@ export default function StaffGuard({ children }: { children: ReactNode }) {
 
   if (!session) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-50">
+      <main id="main-content" className="flex min-h-screen items-center justify-center bg-slate-50">
         <div className="flex items-center gap-3 font-semibold text-[#233A59]"><LoaderCircle className="animate-spin" />Verifying secure access…</div>
       </main>
     );

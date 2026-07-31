@@ -213,6 +213,70 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    match /staffTasks/{taskId} {
+      allow read: if isStaff();
+      allow create: if isStaff()
+        && request.resource.data.keys().hasAll([
+          'title', 'details', 'type', 'priority', 'status', 'dueDate', 'dueTime',
+          'patientId', 'patientName', 'assignedTo', 'assignedToName',
+          'createdBy', 'createdAt', 'updatedAt', 'completedAt', 'completedBy'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'title', 'details', 'type', 'priority', 'status', 'dueDate', 'dueTime',
+          'patientId', 'patientName', 'assignedTo', 'assignedToName',
+          'createdBy', 'createdAt', 'updatedAt', 'completedAt', 'completedBy'
+        ])
+        && request.resource.data.title is string
+        && request.resource.data.title.size() >= 2
+        && request.resource.data.title.size() <= 120
+        && request.resource.data.details is string
+        && request.resource.data.details.size() <= 1000
+        && request.resource.data.type in ['follow_up', 'vaccination', 'lab', 'payment', 'callback', 'general']
+        && request.resource.data.priority in ['low', 'medium', 'high', 'urgent']
+        && request.resource.data.status == 'open'
+        && request.resource.data.dueDate is string
+        && request.resource.data.dueDate.size() == 10
+        && request.resource.data.dueTime is string
+        && request.resource.data.dueTime.size() == 5
+        && request.resource.data.patientId is string
+        && request.resource.data.patientId.size() <= 40
+        && request.resource.data.patientName is string
+        && request.resource.data.patientName.size() <= 100
+        && request.resource.data.assignedTo is string
+        && request.resource.data.assignedTo.size() <= 128
+        && (
+          request.resource.data.assignedTo == ''
+          || request.resource.data.assignedTo == request.auth.uid
+          || isAdmin()
+        )
+        && request.resource.data.assignedToName is string
+        && request.resource.data.assignedToName.size() <= 100
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.completedAt == null
+        && request.resource.data.completedBy == '';
+      allow update: if isStaff()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'updatedAt', 'completedAt', 'completedBy'
+        ])
+        && request.resource.data.status in ['open', 'completed']
+        && request.resource.data.updatedAt == request.time
+        && (
+          (
+            request.resource.data.status == 'completed'
+            && request.resource.data.completedAt == request.time
+            && request.resource.data.completedBy == request.auth.uid
+          )
+          || (
+            request.resource.data.status == 'open'
+            && request.resource.data.completedAt == null
+            && request.resource.data.completedBy == ''
+          )
+        );
+      allow delete: if isAdmin();
+    }
+
     match /staff/{staffId} {
       allow read: if signedIn() && (request.auth.uid == staffId || isAdmin());
       allow create, update, delete: if isAdmin();

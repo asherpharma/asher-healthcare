@@ -95,6 +95,7 @@ export default function RootLayout({
         id="top"
         className={`${geist.variable} ${playfair.variable}`}
       >
+        <a className="skip-link" href="#main-content">Skip to main content</a>
         <PwaRegister />
         {children}
 

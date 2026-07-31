@@ -34,7 +34,7 @@ export default function Home() {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(clinicSchema) }}
       />
       <Navbar />
-      <main>
+      <main id="main-content">
         <Hero />
         <Services />
         <WhyChooseUs />
