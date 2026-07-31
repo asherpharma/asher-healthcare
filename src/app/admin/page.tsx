@@ -2,7 +2,7 @@
 
 import AdminShell from "@/components/admin/AdminShell";
 import { firestore } from "@/firebase/config";
-import { collection, getCountFromServer, getDocs, query, where } from "firebase/firestore";
+import { collection, getDocs } from "firebase/firestore";
 import {
   ArrowRight,
   CalendarPlus,
@@ -61,28 +61,24 @@ async function fetchDashboardStats(): Promise<DashboardStats> {
     throw new Error("Firebase is not configured for this environment.");
   }
 
-  const appointments = collection(firestore, "appointments");
-  const tasks = collection(firestore, "staffTasks");
-  const [all, today, patients, requested, confirmed, completed, openTasks, todayTasks] = await Promise.all([
-    getCountFromServer(appointments),
-    getCountFromServer(query(appointments, where("preferredDate", "==", clinicDate()))),
-    getCountFromServer(collection(firestore, "patients")),
-    getCountFromServer(query(appointments, where("status", "==", "requested"))),
-    getCountFromServer(query(appointments, where("status", "==", "confirmed"))),
-    getCountFromServer(query(appointments, where("status", "==", "completed"))),
-    getCountFromServer(query(tasks, where("status", "==", "open"))),
-    getDocs(query(tasks, where("dueDate", "==", clinicDate()))),
+  const [appointments, patients, tasks] = await Promise.all([
+    getDocs(collection(firestore, "appointments")),
+    getDocs(collection(firestore, "patients")),
+    getDocs(collection(firestore, "staffTasks")),
   ]);
+  const date = clinicDate();
+  const appointmentRecords = appointments.docs.map((appointment) => appointment.data());
+  const taskRecords = tasks.docs.map((task) => task.data());
 
   return {
-    appointments: all.data().count,
-    today: today.data().count,
-    patients: patients.data().count,
-    requested: requested.data().count,
-    confirmed: confirmed.data().count,
-    completed: completed.data().count,
-    openTasks: openTasks.data().count,
-    dueTasks: todayTasks.docs.filter((task) => task.data().status === "open").length,
+    appointments: appointmentRecords.length,
+    today: appointmentRecords.filter((appointment) => appointment.preferredDate === date).length,
+    patients: patients.size,
+    requested: appointmentRecords.filter((appointment) => appointment.status === "requested").length,
+    confirmed: appointmentRecords.filter((appointment) => appointment.status === "confirmed").length,
+    completed: appointmentRecords.filter((appointment) => appointment.status === "completed").length,
+    openTasks: taskRecords.filter((task) => task.status === "open").length,
+    dueTasks: taskRecords.filter((task) => task.status === "open" && task.dueDate === date).length,
   };
 }
 
