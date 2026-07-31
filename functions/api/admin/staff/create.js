@@ -14,6 +14,7 @@ import {
 } from "../../../../server/razorpay/http.js";
 
 const STAFF_ROLES = ["admin", "doctor", "reception"];
+const DOCTOR_NAMES = ["Dr. Lt Col Shafi Ahamad", "Dr. Shaik Reshma"];
 
 export async function onRequestPost(context) {
   let createdUid = "";
@@ -25,6 +26,7 @@ export async function onRequestPost(context) {
     const email = String(body.email || "").trim().toLowerCase();
     const password = String(body.password || "");
     const role = String(body.role || "");
+    const doctorName = String(body.doctorName || "").trim();
 
     if (displayName.length < 2 || displayName.length > 100) {
       throw new HttpError(400, "Enter the staff member’s full name.");
@@ -37,6 +39,9 @@ export async function onRequestPost(context) {
     }
     if (!STAFF_ROLES.includes(role)) {
       throw new HttpError(400, "Choose a valid staff role.");
+    }
+    if (role === "doctor" && !DOCTOR_NAMES.includes(doctorName)) {
+      throw new HttpError(400, "Assign this login to one of the clinic doctors.");
     }
 
     const user = await createAuthUser(context.env, {
@@ -52,6 +57,7 @@ export async function onRequestPost(context) {
         displayName,
         email,
         role,
+        doctorName: role === "doctor" ? doctorName : "",
         active: true,
         createdBy: administrator.uid,
         createdAt: now,

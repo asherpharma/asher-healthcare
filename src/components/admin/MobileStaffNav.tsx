@@ -10,6 +10,7 @@ import {
   Menu,
   ReceiptIndianRupee,
   Settings2,
+  Stethoscope,
   UsersRound,
   X,
 } from "lucide-react";
@@ -20,6 +21,7 @@ import { useState } from "react";
 const primaryNavigation = [
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard, adminOnly: true },
   { href: "/admin/appointments", label: "Appointments", icon: CalendarDays },
+  { href: "/admin/consultations", label: "Consultations", icon: Stethoscope, roles: ["admin", "doctor"] },
   { href: "/admin/patients", label: "Patients", icon: UsersRound },
   { href: "/admin/billing", label: "Billing", icon: ReceiptIndianRupee },
 ];
@@ -33,7 +35,10 @@ export default function MobileStaffNav({
 }) {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
-  const visibleNavigation = primaryNavigation.filter((item) => !item.adminOnly || role === "admin");
+  const visibleNavigation = primaryNavigation.filter((item) =>
+    (!item.adminOnly || role === "admin")
+    && (!item.roles || item.roles.includes(role)),
+  );
 
   return (
     <>

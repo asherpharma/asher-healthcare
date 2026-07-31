@@ -290,6 +290,44 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Clinical audit entries are immutable. Doctors and administrators can
+    // append a consultation-completion event, while only administrators can
+    // review the clinic-wide audit trail.
+    match /auditLogs/{auditId} {
+      allow read: if isAdmin();
+      allow create: if isStaff()
+        && staffProfile().data.role in ['admin', 'doctor']
+        && request.resource.data.keys().hasAll([
+          'eventType', 'patientId', 'patientName', 'doctorName',
+          'appointmentId', 'consultationId', 'actorUid', 'actorName', 'createdAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'eventType', 'patientId', 'patientName', 'doctorName',
+          'appointmentId', 'consultationId', 'actorUid', 'actorName', 'createdAt'
+        ])
+        && request.resource.data.eventType == 'consultation.completed'
+        && request.resource.data.patientId is string
+        && request.resource.data.patientId.size() > 0
+        && request.resource.data.patientId.size() <= 40
+        && request.resource.data.patientName is string
+        && request.resource.data.patientName.size() >= 2
+        && request.resource.data.patientName.size() <= 100
+        && request.resource.data.doctorName is string
+        && request.resource.data.doctorName.size() >= 2
+        && request.resource.data.doctorName.size() <= 100
+        && request.resource.data.appointmentId is string
+        && request.resource.data.appointmentId.size() <= 40
+        && request.resource.data.consultationId is string
+        && request.resource.data.consultationId.size() > 0
+        && request.resource.data.consultationId.size() <= 40
+        && request.resource.data.actorUid == request.auth.uid
+        && request.resource.data.actorName is string
+        && request.resource.data.actorName.size() >= 2
+        && request.resource.data.actorName.size() <= 100
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+
     match /staff/{staffId} {
       allow read: if signedIn() && (request.auth.uid == staffId || isAdmin());
       allow create, update, delete: if isAdmin();

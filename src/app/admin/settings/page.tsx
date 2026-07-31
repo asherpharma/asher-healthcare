@@ -41,6 +41,7 @@ type StaffRecord = {
   displayName: string;
   email: string;
   role: StaffRole;
+  doctorName?: string;
   active: boolean;
   createdAt?: Timestamp;
 };
@@ -317,6 +318,7 @@ function StaffAccessManager() {
           email: String(data.get("email") || "").trim(),
           password: String(data.get("password") || ""),
           role: String(data.get("role") || ""),
+          doctorName: String(data.get("doctorName") || ""),
         }),
       });
       const result = await response.json().catch(() => ({}));
@@ -330,7 +332,7 @@ function StaffAccessManager() {
     }
   }
 
-  async function updateStaffAccess(record: StaffRecord, changes: Partial<Pick<StaffRecord, "active" | "role">>) {
+  async function updateStaffAccess(record: StaffRecord, changes: Partial<Pick<StaffRecord, "active" | "role" | "doctorName">>) {
     if (!firestore || record.uid === profile.uid && changes.active === false) return;
     setUpdatingUid(record.uid);
     setNotice("");
@@ -361,7 +363,7 @@ function StaffAccessManager() {
         </div>
       </div>
 
-      <form onSubmit={createStaff} className="mt-7 grid gap-4 rounded-2xl bg-slate-50 p-5 sm:grid-cols-2 xl:grid-cols-4">
+      <form onSubmit={createStaff} className="mt-7 grid gap-4 rounded-2xl bg-slate-50 p-5 sm:grid-cols-2 xl:grid-cols-5">
         <label className="text-sm font-bold text-slate-700">
           Staff name
           <input name="displayName" required minLength={2} maxLength={100} placeholder="Full name" className={inputClass} />
@@ -380,7 +382,14 @@ function StaffAccessManager() {
             {roles.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}
           </select>
         </label>
-        <div className="sm:col-span-2 xl:col-span-4">
+        <label className="text-sm font-bold text-slate-700">
+          Doctor assignment
+          <select name="doctorName" defaultValue="" className={inputClass}>
+            <option value="">Not a doctor account</option>
+            {DOCTORS.map((doctor) => <option key={doctor.id} value={doctor.name}>{doctor.name}</option>)}
+          </select>
+        </label>
+        <div className="sm:col-span-2 xl:col-span-5">
           <button
             type="submit"
             disabled={creating}
@@ -396,8 +405,8 @@ function StaffAccessManager() {
       {notice && <p className="mt-5 flex items-center gap-2 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800"><CheckCircle2 size={18} />{notice}</p>}
 
       <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200">
-        <div className="grid grid-cols-[1fr_auto] gap-3 bg-slate-50 px-4 py-3 text-xs font-bold uppercase tracking-[0.12em] text-slate-500 sm:grid-cols-[1.4fr_1fr_1fr]">
-          <span>Staff member</span><span className="hidden sm:block">Role</span><span>Access</span>
+        <div className="grid grid-cols-[1fr_auto] gap-3 bg-slate-50 px-4 py-3 text-xs font-bold uppercase tracking-[0.12em] text-slate-500 sm:grid-cols-[1.4fr_1.2fr_1fr]">
+          <span>Staff member</span><span className="hidden sm:block">Role / doctor</span><span>Access</span>
         </div>
         {loading ? (
           <div className="flex items-center gap-3 p-5 text-sm text-slate-500"><LoaderCircle size={18} className="animate-spin" />Loading staff access…</div>
@@ -408,20 +417,37 @@ function StaffAccessManager() {
             const updating = updatingUid === record.uid;
             const isSelf = record.uid === profile.uid;
             return (
-              <div key={record.uid} className="grid grid-cols-[1fr_auto] items-center gap-3 border-t border-slate-200 px-4 py-4 sm:grid-cols-[1.4fr_1fr_1fr]">
+              <div key={record.uid} className="grid grid-cols-[1fr_auto] items-center gap-3 border-t border-slate-200 px-4 py-4 sm:grid-cols-[1.4fr_1.2fr_1fr]">
                 <div>
                   <p className="font-bold text-[#233A59]">{record.displayName || "Clinic staff"}{isSelf ? " (You)" : ""}</p>
                   <p className="mt-1 text-xs text-slate-500">{record.email}</p>
                 </div>
-                <select
-                  value={record.role}
-                  disabled={updating || isSelf}
-                  onChange={(event) => void updateStaffAccess(record, { role: event.target.value as StaffRole })}
-                  className="hidden h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 sm:block"
-                  aria-label={`Role for ${record.displayName}`}
-                >
-                  {roles.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}
-                </select>
+                <div className="hidden space-y-2 sm:block">
+                  <select
+                    value={record.role}
+                    disabled={updating || isSelf}
+                    onChange={(event) => {
+                      const role = event.target.value as StaffRole;
+                      void updateStaffAccess(record, { role, ...(role === "doctor" ? {} : { doctorName: "" }) });
+                    }}
+                    className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700"
+                    aria-label={`Role for ${record.displayName}`}
+                  >
+                    {roles.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}
+                  </select>
+                  {record.role === "doctor" ? (
+                    <select
+                      value={record.doctorName || ""}
+                      disabled={updating}
+                      onChange={(event) => void updateStaffAccess(record, { doctorName: event.target.value })}
+                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
+                      aria-label={`Doctor assignment for ${record.displayName}`}
+                    >
+                      <option value="">Assign doctor</option>
+                      {DOCTORS.map((doctor) => <option key={doctor.id} value={doctor.name}>{doctor.name}</option>)}
+                    </select>
+                  ) : null}
+                </div>
                 <button
                   type="button"
                   disabled={updating || isSelf}

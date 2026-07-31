@@ -14,6 +14,7 @@ export type StaffProfile = {
   displayName: string;
   email: string;
   role: StaffRole;
+  doctorName?: string;
 };
 
 type StaffContextValue = {
@@ -62,6 +63,7 @@ export default function StaffGuard({ children }: { children: ReactNode }) {
             displayName: String(data.displayName || user.displayName || "Clinic staff"),
             email: String(data.email || user.email || ""),
             role,
+            doctorName: String(data.doctorName || ""),
           },
         });
       } catch {

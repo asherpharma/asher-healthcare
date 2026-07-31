@@ -1,18 +1,27 @@
 "use client";
 
-import StaffGuard, { useStaff } from "@/components/admin/StaffGuard";
+import StaffGuard, { type StaffRole, useStaff } from "@/components/admin/StaffGuard";
 import MobileStaffNav from "@/components/admin/MobileStaffNav";
 import { InstallAppButton, NetworkStatus } from "@/components/pwa/PwaRegister";
 import { firebaseAuth } from "@/firebase/config";
-import { CalendarDays, FlaskConical, LayoutDashboard, ListTodo, LogOut, ReceiptIndianRupee, Settings2, Stethoscope, UsersRound } from "lucide-react";
+import { CalendarDays, FlaskConical, LayoutDashboard, ListTodo, LogOut, ReceiptIndianRupee, Settings2, Stethoscope, UsersRound, type LucideIcon } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 
-const navigation = [
+type NavigationItem = {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  adminOnly?: boolean;
+  roles?: StaffRole[];
+};
+
+const navigation: NavigationItem[] = [
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard, adminOnly: true },
   { href: "/admin/appointments", label: "Appointments", icon: CalendarDays },
+  { href: "/admin/consultations", label: "Consultations", icon: Stethoscope, roles: ["admin", "doctor"] },
   { href: "/admin/patients", label: "Patients", icon: UsersRound },
   { href: "/admin/tasks", label: "Tasks & follow-ups", icon: ListTodo },
   { href: "/admin/billing", label: "Billing", icon: ReceiptIndianRupee },
@@ -50,7 +59,10 @@ function StaffChrome({ children }: { children: ReactNode }) {
         <aside className="hidden rounded-2xl bg-[#233A59] p-3 text-white lg:block lg:min-h-[calc(100vh-8.5rem)]">
           <div className="flex items-center gap-2 px-3 py-3 text-xs font-bold uppercase tracking-[0.16em] text-white/60"><Stethoscope size={15} />Staff menu</div>
           <nav className="grid grid-cols-1 gap-2">
-            {navigation.filter((item) => !item.adminOnly || profile.role === "admin").map((item) => {
+            {navigation.filter((item) =>
+              (!item.adminOnly || profile.role === "admin")
+              && (!item.roles || item.roles.includes(profile.role)),
+            ).map((item) => {
               const Icon = item.icon;
               const active = item.href === "/admin" ? pathname === item.href : pathname.startsWith(item.href);
               return <Link key={item.href} href={item.href} style={active ? { color: "#233A59" } : undefined} className={"flex items-center gap-2 rounded-xl px-3 py-3 text-sm font-bold transition " + (active ? "bg-white" : "text-white/80 hover:bg-white/10 hover:text-white")}><Icon size={18} />{item.label}</Link>;
