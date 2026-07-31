@@ -1,6 +1,9 @@
 "use client";
 
 import AdminShell from "@/components/admin/AdminShell";
+import ReceptionPayment, {
+  type ReceptionInvoice,
+} from "@/components/admin/ReceptionPayment";
 import { useStaff } from "@/components/admin/StaffGuard";
 import { firestore, storage } from "@/firebase/config";
 import { preloadClinicPdfAssets } from "@/lib/clinic-pdf";
@@ -19,8 +22,8 @@ import {
   orderBy,
   query,
   serverTimestamp,
-  setDoc,
   updateDoc,
+  writeBatch,
   type Timestamp,
 } from "firebase/firestore";
 import { getBlob, ref, uploadBytes } from "firebase/storage";
@@ -49,6 +52,8 @@ import {
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type Gender = "female" | "male" | "other";
+type CaseType = "general" | "specialist";
+type Specialty = "" | "pediatrics" | "obg";
 type Patient = {
   id: string;
   patientNumber?: string;
@@ -57,6 +62,11 @@ type Patient = {
   dateOfBirth: string;
   gender: Gender;
   doctorName?: string;
+  caseType?: CaseType;
+  specialty?: Specialty;
+  consultationFee?: number;
+  registrationInvoiceId?: string;
+  registrationInvoiceNumber?: string;
   address: string;
   allergies: string;
   medicalHistory: string;
@@ -107,6 +117,11 @@ type ReportRecord = BaseRecord & {
   notes: string;
 };
 type TabKey = "overview" | "visits" | "prescriptions" | "vaccinations" | "pregnancy" | "reports";
+type RegistrationResult = {
+  patient: Patient & { doctorName: string };
+  invoice: ReceptionInvoice;
+  consultationLabel: string;
+};
 
 const inputClass = "mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 font-normal text-slate-900 outline-none transition focus:border-[#233A59] focus:ring-2 focus:ring-[#233A59]/10";
 const labelClass = "text-sm font-bold text-slate-700";
@@ -125,6 +140,12 @@ function formatFileSize(bytes: number) {
   return (bytes / (1024 * 1024)).toFixed(1) + " MB";
 }
 
+function registrationInvoiceNumber() {
+  const date = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+  const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 6).toUpperCase();
+  return `ASH-${date}-${suffix}`;
+}
+
 function PatientRegister() {
   const { user, profile } = useStaff();
   const db = firestore!;
@@ -135,7 +156,10 @@ function PatientRegister() {
   const [showEdit, setShowEdit] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
-  const [lastRegistered, setLastRegistered] = useState<Patient | null>(null);
+  const [lastRegistered, setLastRegistered] = useState<RegistrationResult | null>(null);
+  const [caseType, setCaseType] = useState<CaseType>("general");
+  const [specialty, setSpecialty] = useState<Specialty>("");
+  const [generalDoctor, setGeneralDoctor] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
   const [visits, setVisits] = useState<VisitRecord[]>([]);
@@ -193,32 +217,110 @@ function PatientRegister() {
     setMessage("");
     const form = new FormData(event.currentTarget);
     const patientRef = doc(collection(db, "patients"));
+    const invoiceRef = doc(collection(db, "invoices"));
     const patientNumber = "ASH-" + patientRef.id.slice(0, 7).toUpperCase();
+    const consultationFee = caseType === "general" ? 250 : 500;
+    const consultationLabel = caseType === "general"
+      ? "General consultation"
+      : specialty === "pediatrics"
+        ? "Pediatric consultation"
+        : "Obstetrics & Gynaecology consultation";
+    const doctorName = caseType === "general"
+      ? generalDoctor
+      : specialty === "pediatrics"
+        ? "Dr. Lt Col Shafi Ahamad"
+        : specialty === "obg"
+          ? "Dr. Shaik Reshma"
+          : "";
+    if (!doctorName) {
+      setSaving(false);
+      setMessage("Select the consulting doctor or specialist department.");
+      return;
+    }
+    const number = registrationInvoiceNumber();
     const patientData = {
       patientNumber,
       fullName: text(form, "fullName"),
       phone: text(form, "phone"),
       dateOfBirth: text(form, "dateOfBirth"),
       gender: text(form, "gender") as Gender,
-      doctorName: text(form, "doctorName"),
+      doctorName,
+      caseType,
+      specialty: caseType === "specialist" ? specialty : "" as Specialty,
+      consultationFee,
+      registrationInvoiceId: invoiceRef.id,
+      registrationInvoiceNumber: number,
       address: text(form, "address"),
       allergies: text(form, "allergies"),
       medicalHistory: text(form, "medicalHistory"),
     };
+    const invoiceData = {
+      invoiceNumber: number,
+      patientId: patientRef.id,
+      patientNumber,
+      patientName: patientData.fullName,
+      patientPhone: patientData.phone,
+      items: [{
+        description: consultationLabel,
+        quantity: 1,
+        unitPrice: consultationFee,
+        amount: consultationFee,
+      }],
+      subtotal: consultationFee,
+      discount: 0,
+      total: consultationFee,
+      amountPaid: 0,
+      balance: consultationFee,
+      paymentStatus: "unpaid",
+      paymentMethod: "not_recorded",
+      paymentReference: "",
+      notes: "Created automatically during reception registration.",
+      createdBy: user.uid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      paidAt: null,
+    };
     try {
-      await setDoc(patientRef, {
+      const batch = writeBatch(db);
+      batch.set(patientRef, {
         ...patientData,
         createdBy: user.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+      batch.set(invoiceRef, invoiceData);
+      await batch.commit();
       event.currentTarget.reset();
+      setCaseType("general");
+      setSpecialty("");
+      setGeneralDoctor("");
       setShowForm(false);
       setSelectedId(patientRef.id);
-      setLastRegistered({ id: patientRef.id, ...patientData });
-      setMessage("Patient registered securely. The prescription letterhead is ready.");
+      setLastRegistered({
+        patient: { id: patientRef.id, ...patientData },
+        invoice: {
+          id: invoiceRef.id,
+          patientId: patientRef.id,
+          patientNumber,
+          invoiceNumber: number,
+          patientName: patientData.fullName,
+          patientPhone: patientData.phone,
+          items: invoiceData.items,
+          subtotal: consultationFee,
+          discount: 0,
+          total: consultationFee,
+          amountPaid: 0,
+          balance: consultationFee,
+          paymentStatus: "unpaid",
+          paymentMethod: "not_recorded",
+          paymentReference: "",
+          notes: invoiceData.notes,
+        },
+        consultationLabel,
+      });
+      setMessage("Patient registered securely. Collect the consultation fee to release the receipt and prescription.");
     } catch {
-      setMessage("Patient registration failed. Please check access and try again.");
+      setMessage("Patient registration and consultation invoice could not be created. Please check access and try again.");
     } finally {
       setSaving(false);
     }
@@ -371,18 +473,11 @@ function PatientRegister() {
 
       {message && <p className="mt-5 rounded-xl bg-blue-50 px-4 py-3 text-sm font-medium text-blue-800">{message}</p>}
       {lastRegistered && (
-        <div className="mt-4 flex flex-col gap-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="font-bold text-emerald-900">Blank prescription prepared for {lastRegistered.fullName}</p>
-            <p className="mt-1 text-sm text-emerald-800">
-              Patient ID, mobile number, age and {lastRegistered.doctorName} are already included.
-            </p>
-          </div>
-          <PrescriptionDocumentActions
-            patient={lastRegistered}
-            doctorName={lastRegistered.doctorName ?? ""}
-          />
-        </div>
+        <ReceptionPayment
+          patient={lastRegistered.patient}
+          invoice={lastRegistered.invoice}
+          consultationLabel={lastRegistered.consultationLabel}
+        />
       )}
 
       {showForm && (
@@ -395,11 +490,20 @@ function PatientRegister() {
           <label className={labelClass}>Mobile number<input name="phone" type="tel" required minLength={10} maxLength={20} className={inputClass} /></label>
           <label className={labelClass}>Date of birth<input name="dateOfBirth" type="date" required className={inputClass} /></label>
           <label className={labelClass}>Gender<select name="gender" required defaultValue="" className={inputClass}><option value="" disabled>Select</option><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option></select></label>
-          <label className={labelClass + " sm:col-span-2"}>Consulting doctor<select name="doctorName" required defaultValue="" className={inputClass}><option value="" disabled>Select doctor</option><option>Dr. Lt Col Shafi Ahamad</option><option>Dr. Shaik Reshma</option></select></label>
+          <label className={labelClass}>Case category<select value={caseType} onChange={(event) => { setCaseType(event.target.value as CaseType); setSpecialty(""); }} className={inputClass}><option value="general">General case · ₹250</option><option value="specialist">Specialist case · ₹500</option></select></label>
+          {caseType === "specialist" ? (
+            <label className={labelClass}>Specialist department<select required value={specialty} onChange={(event) => setSpecialty(event.target.value as Specialty)} className={inputClass}><option value="" disabled>Select department</option><option value="pediatrics">Pediatrics · Dr. Lt Col Shafi Ahamad</option><option value="obg">Obstetrics & Gynaecology · Dr. Shaik Reshma</option></select></label>
+          ) : (
+            <label className={labelClass}>Consulting doctor<select required value={generalDoctor} onChange={(event) => setGeneralDoctor(event.target.value)} className={inputClass}><option value="" disabled>Select doctor</option><option>Dr. Lt Col Shafi Ahamad</option><option>Dr. Shaik Reshma</option></select></label>
+          )}
+          <div className="sm:col-span-2 flex flex-col gap-3 rounded-2xl bg-blue-50 p-4 ring-1 ring-blue-100 sm:flex-row sm:items-center sm:justify-between">
+            <div><p className="text-xs font-bold uppercase tracking-wider text-blue-700">Consultation charge</p><p className="mt-1 text-sm font-semibold text-slate-700">{caseType === "general" ? "General consultation" : specialty === "pediatrics" ? "Pediatric specialist consultation" : specialty === "obg" ? "OBG specialist consultation" : "Select the specialist department"}</p></div>
+            <strong className="text-2xl text-[#233A59]">{caseType === "general" ? "₹250" : "₹500"}</strong>
+          </div>
           <label className={labelClass + " sm:col-span-2"}>Address<textarea name="address" rows={2} required maxLength={300} className={inputClass} /></label>
           <label className={labelClass}>Known allergies<textarea name="allergies" rows={3} maxLength={500} className={inputClass} /></label>
           <label className={labelClass}>Medical history<textarea name="medicalHistory" rows={3} maxLength={1000} className={inputClass} /></label>
-          <div className="flex gap-3 sm:col-span-2"><SaveButton saving={saving} label="Save & prepare prescription" /><button type="button" onClick={() => setShowForm(false)} className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold text-slate-700">Cancel</button></div>
+          <div className="flex gap-3 sm:col-span-2"><SaveButton saving={saving} label="Register & continue to payment" /><button type="button" onClick={() => setShowForm(false)} className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold text-slate-700">Cancel</button></div>
         </form>
       )}
 
@@ -570,6 +674,14 @@ function Overview({ patient, showEdit, setShowEdit, editPatient, saving }: { pat
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
         <Info label="Consulting doctor" value={patient.doctorName || "Not assigned"} />
+        <Info
+          label="Registration case"
+          value={patient.caseType === "specialist"
+            ? `${patient.specialty === "pediatrics" ? "Pediatric" : patient.specialty === "obg" ? "OBG" : "Specialist"} · ₹${patient.consultationFee ?? 500}`
+            : patient.caseType === "general"
+              ? `General · ₹${patient.consultationFee ?? 250}`
+              : "Legacy patient · fee not classified"}
+        />
         <Info label="Gender" value={patient.gender} />
         <Info label="Address" value={patient.address} />
         <Info label="Known allergies" value={patient.allergies || "None recorded"} alert={Boolean(patient.allergies)} />

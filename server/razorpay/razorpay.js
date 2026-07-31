@@ -32,6 +32,24 @@ export function createRazorpayOrder(env, details) {
   });
 }
 
+export function createRazorpayQrCode(env, details) {
+  return razorpayRequest(env, "/payments/qr_codes", {
+    method: "POST",
+    body: JSON.stringify(details),
+  });
+}
+
+export function fetchRazorpayQrCode(env, qrId) {
+  return razorpayRequest(env, `/payments/qr_codes/${encodeURIComponent(qrId)}`);
+}
+
+export function fetchRazorpayQrCodePayments(env, qrId) {
+  return razorpayRequest(
+    env,
+    `/payments/qr_codes/${encodeURIComponent(qrId)}/payments?count=10`,
+  );
+}
+
 export function fetchRazorpayPayment(env, paymentId) {
   return razorpayRequest(env, `/payments/${encodeURIComponent(paymentId)}`);
 }

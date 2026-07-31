@@ -66,6 +66,12 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Explicit collection-group access is required for the cross-invoice
+    // payment audit feed. Writes remain restricted to the invoice path below.
+    match /{path=**}/payments/{paymentId} {
+      allow read: if isStaff();
+    }
+
     match /invoices/{invoiceId} {
       allow read: if isStaff();
       allow create: if isStaff()
@@ -287,6 +293,8 @@ service cloud.firestore {
       allow create: if isStaff()
         && request.resource.data.keys().hasOnly([
           'patientNumber', 'fullName', 'phone', 'dateOfBirth', 'gender', 'address',
+          'doctorName', 'caseType', 'specialty', 'consultationFee',
+          'registrationInvoiceId', 'registrationInvoiceNumber',
           'allergies', 'medicalHistory', 'createdBy', 'createdAt', 'updatedAt'
         ])
         && request.resource.data.patientNumber is string
@@ -300,6 +308,26 @@ service cloud.firestore {
         && request.resource.data.dateOfBirth is string
         && request.resource.data.dateOfBirth.size() == 10
         && request.resource.data.gender in ['female', 'male', 'other']
+        && request.resource.data.doctorName in [
+          'Dr. Lt Col Shafi Ahamad',
+          'Dr. Shaik Reshma'
+        ]
+        && request.resource.data.caseType in ['general', 'specialist']
+        && request.resource.data.specialty in ['', 'pediatrics', 'obg']
+        && (
+          (request.resource.data.caseType == 'general'
+            && request.resource.data.specialty == ''
+            && request.resource.data.consultationFee == 250)
+          || (request.resource.data.caseType == 'specialist'
+            && request.resource.data.specialty in ['pediatrics', 'obg']
+            && request.resource.data.consultationFee == 500)
+        )
+        && request.resource.data.registrationInvoiceId is string
+        && request.resource.data.registrationInvoiceId.size() > 0
+        && request.resource.data.registrationInvoiceId.size() <= 128
+        && request.resource.data.registrationInvoiceNumber is string
+        && request.resource.data.registrationInvoiceNumber.size() >= 8
+        && request.resource.data.registrationInvoiceNumber.size() <= 40
         && request.resource.data.address is string
         && request.resource.data.address.size() <= 300
         && request.resource.data.allergies is string
@@ -311,9 +339,13 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time;
       allow update: if isStaff()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'fullName', 'phone', 'dateOfBirth', 'gender', 'address', 'allergies',
+          'fullName', 'phone', 'dateOfBirth', 'gender', 'doctorName', 'address', 'allergies',
           'medicalHistory', 'updatedAt'
         ])
+        && request.resource.data.doctorName in [
+          'Dr. Lt Col Shafi Ahamad',
+          'Dr. Shaik Reshma'
+        ]
         && request.resource.data.updatedAt == request.time;
       allow delete: if isAdmin();
 

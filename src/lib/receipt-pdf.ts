@@ -27,7 +27,7 @@ function labelMethod(value: string) {
   return value ? value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()) : "Not recorded";
 }
 
-export async function downloadReceiptPdf(invoice: ReceiptInvoice) {
+async function createReceiptPdf(invoice: ReceiptInvoice) {
   const pdf = new jsPDF({ unit: "mm", format: "a4" });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const margin = 16;
@@ -147,5 +147,33 @@ export async function downloadReceiptPdf(invoice: ReceiptInvoice) {
     }
   }
 
+  return pdf;
+}
+
+function openPrintPage() {
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) {
+    throw new Error("Allow pop-ups for this site to open the receipt print preview.");
+  }
+  printWindow.document.title = "Print payment receipt";
+  printWindow.document.body.textContent = "Preparing receipt print preview...";
+  return printWindow;
+}
+
+export async function downloadReceiptPdf(invoice: ReceiptInvoice) {
+  const pdf = await createReceiptPdf(invoice);
   pdf.save(invoice.invoiceNumber + "-receipt.pdf");
+}
+
+export async function printReceiptPdf(invoice: ReceiptInvoice) {
+  const printWindow = openPrintPage();
+  try {
+    const pdf = await createReceiptPdf(invoice);
+    const pdfUrl = String(pdf.output("bloburl"));
+    printWindow.location.replace(pdfUrl);
+    window.setTimeout(() => URL.revokeObjectURL(pdfUrl), 5 * 60_000);
+  } catch (error) {
+    printWindow.close();
+    throw error;
+  }
 }

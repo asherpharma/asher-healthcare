@@ -198,9 +198,18 @@ function BillingWorkspace() {
       },
     );
     const unsubscribePayments = onSnapshot(
-      query(collectionGroup(db, "payments"), orderBy("createdAt", "desc"), limit(500)),
-      (snapshot) => setPayments(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as PaymentEntry)),
-      () => setError("Payment audit entries could not be loaded."),
+      query(collectionGroup(db, "payments"), limit(500)),
+      (snapshot) => setPayments(
+        snapshot.docs
+          .map((item) => ({ id: item.id, ...item.data() }) as PaymentEntry)
+          .sort((left, right) =>
+            (right.createdAt?.toMillis() ?? 0) - (left.createdAt?.toMillis() ?? 0),
+          ),
+      ),
+      (auditError) => {
+        console.error("Payment audit subscription failed", auditError);
+        setError("Payment audit entries could not be loaded. Refresh once or ask an administrator to verify payment-audit access.");
+      },
     );
     return () => {
       unsubscribePatients();
