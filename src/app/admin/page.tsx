@@ -1,6 +1,5 @@
 "use client";
 
-import AdminShell from "@/components/admin/AdminShell";
 import { useStaff } from "@/components/admin/StaffGuard";
 import { firestore } from "@/firebase/config";
 import {
@@ -710,5 +709,5 @@ function DashboardAccess() {
 }
 
 export default function AdminPage() {
-  return <AdminShell><DashboardAccess /></AdminShell>;
+  return <DashboardAccess />;
 }

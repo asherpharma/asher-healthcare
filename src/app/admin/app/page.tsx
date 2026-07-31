@@ -1,6 +1,5 @@
 "use client";
 
-import AdminShell from "@/components/admin/AdminShell";
 import { InstallAppButton } from "@/components/pwa/PwaRegister";
 import {
   Apple,
@@ -24,7 +23,6 @@ const appFeatures = [
 
 export default function StaffAppPage() {
   return (
-    <AdminShell>
       <div className="mx-auto max-w-5xl space-y-6">
         <section className="overflow-hidden rounded-[30px] bg-[#0f2c46] text-white shadow-2xl">
           <div className="relative p-6 sm:p-9">
@@ -110,6 +108,5 @@ export default function StaffAppPage() {
           <Link href="/admin" className="mt-6 inline-flex min-h-12 w-full items-center justify-center rounded-2xl bg-[#233A59] px-5 text-sm font-bold text-white sm:w-auto">Open app home</Link>
         </section>
       </div>
-    </AdminShell>
   );
 }

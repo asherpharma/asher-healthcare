@@ -1,6 +1,5 @@
 "use client";
 
-import AdminShell from "@/components/admin/AdminShell";
 import { type StaffProfile, useStaff } from "@/components/admin/StaffGuard";
 import { firestore } from "@/firebase/config";
 import { preloadClinicPdfAssets } from "@/lib/clinic-pdf";
@@ -786,5 +785,5 @@ function ConsultationAccess() {
 }
 
 export default function ConsultationsPage() {
-  return <AdminShell><ConsultationAccess /></AdminShell>;
+  return <ConsultationAccess />;
 }

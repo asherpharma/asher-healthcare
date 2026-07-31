@@ -1,6 +1,5 @@
 "use client";
 
-import AdminShell from "@/components/admin/AdminShell";
 import { firebaseAuth, firestore } from "@/firebase/config";
 import { useAppointmentSchedule } from "@/hooks/useAppointmentSchedule";
 import {
@@ -424,7 +423,7 @@ function AppointmentDesk() {
         <div className="mt-8 rounded-3xl border border-dashed border-slate-300 bg-white p-10 text-center"><Search className="mx-auto text-slate-400" size={32} /><h2 className="mt-4 text-lg font-bold text-[#233A59]">No matching appointments</h2><p className="mt-2 text-sm text-slate-600">Adjust or clear the filters to see more requests.</p><button type="button" onClick={clearFilters} className="mt-5 rounded-xl bg-[#233A59] px-4 py-2.5 text-sm font-bold text-white">Clear filters</button></div>
       )}
 
-      <div className="mt-6 space-y-4">
+      <div className="performance-list mt-6 space-y-4">
         {filteredItems.map((item) => {
           const isUpdating = updatingId === item.id;
           const message = "Hello " + item.patientName + ", your appointment request at Asher Women & Child Healthcare for " + prettyDate(item.preferredDate) + " at " + formatAppointmentTime(item.preferredTime) + " with " + doctorName(item.doctorId) + " has been received. Please reply here if you need help.";
@@ -470,5 +469,5 @@ function AppointmentDesk() {
 }
 
 export default function AppointmentsPage() {
-  return <AdminShell><AppointmentDesk /></AdminShell>;
+  return <AppointmentDesk />;
 }

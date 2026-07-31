@@ -1,6 +1,5 @@
 "use client";
 
-import AdminShell from "@/components/admin/AdminShell";
 import ReceptionPayment, {
   type ReceptionInvoice,
 } from "@/components/admin/ReceptionPayment";
@@ -225,6 +224,7 @@ function PatientRegister() {
   const files = storage!;
   const [patients, setPatients] = useState<Patient[]>([]);
   const [search, setSearch] = useState("");
+  const [visibleCount, setVisibleCount] = useState(20);
   const [showForm, setShowForm] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -312,6 +312,11 @@ function PatientRegister() {
       [patient.fullName, patient.phone, patient.patientNumber ?? ""].some((value) => value.toLowerCase().includes(term)),
     );
   }, [patients, search]);
+
+  const visiblePatients = useMemo(
+    () => search.trim() ? filtered : filtered.slice(0, visibleCount),
+    [filtered, search, visibleCount],
+  );
 
   async function addPatient(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -643,7 +648,7 @@ function PatientRegister() {
       )}
 
       {showForm && (
-        <form onSubmit={addPatient} className={cardClass + " mt-6 grid gap-4 sm:grid-cols-2"}>
+        <form onSubmit={addPatient} className={cardClass + " fixed inset-0 z-[75] grid content-start gap-4 overflow-y-auto rounded-none p-4 pb-28 sm:static sm:mt-6 sm:grid-cols-2 sm:rounded-3xl sm:p-6"}>
           <div className="flex items-center justify-between sm:col-span-2">
             <div><p className="text-xs font-bold uppercase tracking-widest text-[#A8864A]">Registration</p><h2 className="mt-1 text-xl font-bold text-[#233A59]">New patient</h2></div>
             <button type="button" onClick={() => setShowForm(false)} aria-label="Close registration"><X size={20} /></button>
@@ -689,13 +694,13 @@ function PatientRegister() {
       )}
 
       <div className="mt-7 grid gap-6 xl:grid-cols-[0.72fr_1.28fr]">
-        <section>
+        <section className={selectedPatient ? "hidden xl:block" : "block"}>
           <label className="relative block"><Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={19} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, mobile or patient ID" className="w-full rounded-2xl border border-slate-200 bg-white py-3.5 pl-12 pr-4 outline-none focus:border-[#233A59]" /></label>
-          <div className="mt-5 space-y-3">
-            {filtered.map((patient) => {
+          <div className="performance-list mt-4 space-y-2 xl:max-h-[calc(100dvh-14rem)] xl:overflow-y-auto xl:pr-2">
+            {visiblePatients.map((patient) => {
               const selected = patient.id === selectedId;
               return (
-                <button key={patient.id} type="button" onClick={() => { setSelectedId(patient.id); setActiveTab("overview"); setShowEdit(false); }} className={"flex w-full items-center gap-4 rounded-2xl p-4 text-left shadow-sm ring-1 transition " + (selected ? "bg-[#233A59] text-white ring-[#233A59]" : "bg-white text-slate-700 ring-slate-200 hover:ring-[#A8864A]")}>
+                <button key={patient.id} type="button" onClick={() => { setSelectedId(patient.id); setActiveTab("overview"); setShowEdit(false); window.scrollTo({ top: 0, behavior: "smooth" }); }} className={"flex w-full items-center gap-3 rounded-2xl p-3.5 text-left shadow-sm ring-1 transition " + (selected ? "bg-[#233A59] text-white ring-[#233A59]" : "bg-white text-slate-700 ring-slate-200 hover:ring-[#A8864A]")}>
                   <span className={"flex h-11 w-11 shrink-0 items-center justify-center rounded-xl " + (selected ? "bg-white/10" : "bg-blue-50 text-blue-700")}><UserRound size={20} /></span>
                   <span className="min-w-0 flex-1"><span className="block truncate font-bold">{patient.fullName}</span><span className={"mt-1 block text-xs " + (selected ? "text-slate-200" : "text-slate-500")}>{patient.patientNumber ?? "Patient"} · {patient.phone}</span></span>
                   <ChevronRight size={18} />
@@ -703,16 +708,20 @@ function PatientRegister() {
               );
             })}
           </div>
+          {!search.trim() && visiblePatients.length < filtered.length && (
+            <button type="button" onClick={() => setVisibleCount((count) => count + 20)} className="mt-3 min-h-11 w-full rounded-xl border border-slate-200 bg-white text-sm font-bold text-[#233A59]">Show 20 more patients</button>
+          )}
           {filtered.length === 0 && <div className={cardClass + " mt-5 text-center"}><UserRound className="mx-auto text-[#A8864A]" size={34} /><p className="mt-4 font-bold text-[#233A59]">No matching patients</p></div>}
         </section>
 
-        <section>
+        <section className={!selectedPatient ? "hidden xl:block" : "block"}>
           {!selectedPatient ? (
             <div className={cardClass + " flex min-h-80 flex-col items-center justify-center text-center"}><NotebookTabs className="text-[#A8864A]" size={42} /><h2 className="mt-5 text-xl font-bold text-[#233A59]">Select a patient</h2><p className="mt-2 max-w-sm text-sm leading-6 text-slate-600">Open a profile to review visits, prescriptions, vaccinations and pregnancy follow-up.</p></div>
           ) : (
-            <div className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-200">
-              <div className="bg-[#233A59] p-6 text-white sm:p-8">
+            <div className="rounded-3xl bg-white shadow-sm ring-1 ring-slate-200">
+              <div className="rounded-t-3xl bg-[#233A59] p-5 text-white sm:p-8">
                 <div className="flex flex-wrap justify-between gap-5">
+                  <button type="button" onClick={() => { setSelectedId(null); setShowEdit(false); }} className="inline-flex min-h-10 w-full items-center gap-2 rounded-xl bg-white/10 px-3 text-sm font-bold text-white xl:hidden"><ChevronRight className="rotate-180" size={17} /> All patients</button>
                   <div><p className="text-xs font-bold uppercase tracking-[0.18em] text-[#D4B873]">{selectedPatient.patientNumber ?? "Patient profile"}</p><h2 className="mt-2 text-2xl font-bold">{selectedPatient.fullName}</h2><p className="mt-2 text-sm text-slate-200">{selectedPatient.phone} · DOB {selectedPatient.dateOfBirth}{selectedPatient.doctorName ? " · " + selectedPatient.doctorName : ""}</p></div>
                   <div className="flex items-center gap-3">
                     {profile.role === "admin" && (
@@ -724,7 +733,7 @@ function PatientRegister() {
                   </div>
                 </div>
               </div>
-              <div className="flex gap-2 overflow-x-auto border-b border-slate-200 p-3">
+              <div className="sticky top-[65px] z-20 flex gap-2 overflow-x-auto border-b border-slate-200 bg-white p-2.5 shadow-sm sm:top-[69px]">
                 {tabs.map(({ key, label, icon: Icon, count }) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={"inline-flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-bold " + (activeTab === key ? "bg-[#233A59] text-white" : "text-slate-600 hover:bg-slate-100")}><Icon size={16} />{label}{typeof count === "number" && <span className="rounded-full bg-white/15 px-1.5 text-xs">{count}</span>}</button>)}
               </div>
               <div className="p-5 sm:p-7">
@@ -1123,5 +1132,5 @@ function Empty({ label }: { label: string }) {
 }
 
 export default function PatientsPage() {
-  return <AdminShell><PatientRegister /></AdminShell>;
+  return <PatientRegister />;
 }

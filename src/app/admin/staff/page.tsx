@@ -1,6 +1,5 @@
 "use client";
 
-import AdminShell from "@/components/admin/AdminShell";
 import StaffAccessManager from "@/components/admin/StaffAccessManager";
 import { useStaff } from "@/components/admin/StaffGuard";
 import { ShieldCheck } from "lucide-react";
@@ -22,9 +21,5 @@ function StaffAccessContent() {
 }
 
 export default function StaffAccessPage() {
-  return (
-    <AdminShell>
-      <StaffAccessContent />
-    </AdminShell>
-  );
+  return <StaffAccessContent />;
 }

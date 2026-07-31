@@ -1,6 +1,5 @@
 "use client";
 
-import AdminShell from "@/components/admin/AdminShell";
 import { useStaff, type StaffRole } from "@/components/admin/StaffGuard";
 import { firestore } from "@/firebase/config";
 import { useAppointmentSchedule } from "@/hooks/useAppointmentSchedule";
@@ -501,5 +500,5 @@ function SettingsContent() {
 }
 
 export default function SettingsPage() {
-  return <AdminShell><SettingsContent /></AdminShell>;
+  return <SettingsContent />;
 }

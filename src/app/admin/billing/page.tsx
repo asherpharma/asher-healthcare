@@ -1,6 +1,5 @@
 "use client";
 
-import AdminShell from "@/components/admin/AdminShell";
 import { useStaff } from "@/components/admin/StaffGuard";
 import { firestore } from "@/firebase/config";
 import { downloadReceiptPdf, type ReceiptInvoice } from "@/lib/receipt-pdf";
@@ -617,7 +616,7 @@ function BillingWorkspace() {
       {loading && <div className="mt-10 flex items-center gap-3 text-slate-600"><LoaderCircle className="animate-spin" /> Loading secure billing records…</div>}
       {!loading && filteredInvoices.length === 0 && <div className="mt-8 rounded-3xl border border-dashed border-slate-300 bg-white p-10 text-center"><ReceiptIndianRupee className="mx-auto text-[#A8864A]" size={36} /><h2 className="mt-4 text-xl font-bold text-[#233A59]">No matching invoices</h2><p className="mt-2 text-slate-600">Create the first patient invoice or adjust the filters.</p></div>}
 
-      <div className="mt-6 space-y-4">
+      <div className="performance-list mt-6 space-y-4">
         {filteredInvoices.map((invoice) => (
           <article key={invoice.id} className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
             <div className="grid gap-5 xl:grid-cols-[1fr_1fr_auto] xl:items-center">
@@ -633,5 +632,5 @@ function BillingWorkspace() {
 }
 
 export default function BillingPage() {
-  return <AdminShell><BillingWorkspace /></AdminShell>;
+  return <BillingWorkspace />;
 }

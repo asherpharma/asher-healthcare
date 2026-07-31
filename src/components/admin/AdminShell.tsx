@@ -8,7 +8,7 @@ import { CalendarDays, FlaskConical, LayoutDashboard, ListTodo, LogOut, ReceiptI
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 type NavigationItem = {
   href: string;
@@ -36,6 +36,16 @@ function StaffChrome({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { profile } = useStaff();
 
+  useEffect(() => {
+    const priorityRoutes = profile.role === "doctor"
+      ? ["/admin/consultations", "/admin/appointments", "/admin/patients"]
+      : profile.role === "reception"
+        ? ["/admin/appointments", "/admin/patients", "/admin/billing", "/admin/lab"]
+        : ["/admin/appointments", "/admin/patients", "/admin/billing", "/admin/staff"];
+    const timeout = window.setTimeout(() => priorityRoutes.forEach((route) => router.prefetch(route)), 500);
+    return () => window.clearTimeout(timeout);
+  }, [profile.role, router]);
+
   async function logOut() {
     if (firebaseAuth) await firebaseAuth.signOut();
     router.replace("/admin/login");
@@ -57,7 +67,8 @@ function StaffChrome({ children }: { children: ReactNode }) {
           </div>
         </div>
       </header>
-      <div className="mx-auto grid max-w-[1440px] gap-6 px-4 py-5 pb-28 sm:px-5 lg:grid-cols-[230px_1fr] lg:px-8 lg:py-8">
+      <NavigationFeedback />
+      <div className="mx-auto grid max-w-[1440px] gap-5 px-3 py-4 pb-28 sm:px-5 lg:grid-cols-[230px_1fr] lg:gap-6 lg:px-8 lg:py-8">
         <aside className="hidden rounded-2xl bg-[#233A59] p-3 text-white lg:block lg:min-h-[calc(100vh-8.5rem)]">
           <div className="flex items-center gap-2 px-3 py-3 text-xs font-bold uppercase tracking-[0.16em] text-white/60"><Stethoscope size={15} />Staff menu</div>
           <nav className="grid grid-cols-1 gap-2">
@@ -79,5 +90,42 @@ function StaffChrome({ children }: { children: ReactNode }) {
 }
 
 export default function AdminShell({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
+
+  if (pathname === "/admin/login") return children;
   return <StaffGuard><StaffChrome>{children}</StaffChrome></StaffGuard>;
+}
+
+function NavigationFeedback() {
+  const pathname = usePathname();
+  const [targetPath, setTargetPath] = useState<string | null>(null);
+  const moving = Boolean(targetPath && targetPath !== pathname);
+
+  useEffect(() => {
+    function handleClick(event: MouseEvent) {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const link = target.closest<HTMLAnchorElement>('a[href^="/admin"]');
+      if (!link || link.target === "_blank" || link.pathname === window.location.pathname) return;
+      setTargetPath(link.pathname);
+    }
+
+    document.addEventListener("click", handleClick);
+    return () => document.removeEventListener("click", handleClick);
+  }, []);
+
+  useEffect(() => {
+    if (!targetPath) return;
+    const timeout = window.setTimeout(() => setTargetPath(null), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [targetPath]);
+
+  return (
+    <div
+      aria-hidden="true"
+      className={"pointer-events-none fixed inset-x-0 top-0 z-[100] h-1 overflow-hidden transition-opacity " + (moving ? "opacity-100" : "opacity-0")}
+    >
+      <span className="block h-full w-1/2 animate-[staff-route-progress_1s_ease-in-out_infinite] rounded-full bg-[#D4A75F] shadow-[0_0_14px_rgba(212,167,95,0.8)]" />
+    </div>
+  );
 }

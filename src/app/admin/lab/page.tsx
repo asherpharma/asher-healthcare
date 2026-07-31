@@ -1,6 +1,5 @@
 "use client";
 
-import AdminShell from "@/components/admin/AdminShell";
 import { useStaff } from "@/components/admin/StaffGuard";
 import { firestore, storage } from "@/firebase/config";
 import {
@@ -335,7 +334,7 @@ function LabDesk() {
         </div>
       </div>
 
-      <div className="mt-5 space-y-4">
+      <div className="performance-list mt-5 space-y-4">
         {loading && <div className={cardClass + " flex items-center gap-3 text-slate-600"}><LoaderCircle className="animate-spin" size={20} /> Loading lab orders…</div>}
         {!loading && filteredOrders.length === 0 && <div className={cardClass + " py-12 text-center"}><FlaskConical className="mx-auto text-slate-300" size={42} /><p className="mt-4 font-semibold text-slate-600">No laboratory orders found.</p></div>}
         {filteredOrders.map((order) => (
@@ -397,5 +396,5 @@ function LabDesk() {
 }
 
 export default function LabPage() {
-  return <AdminShell><LabDesk /></AdminShell>;
+  return <LabDesk />;
 }
