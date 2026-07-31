@@ -32,6 +32,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 
 type PatientSearchRecord = {
   id: string;
@@ -237,7 +238,7 @@ export default function StaffCommandCenter({ role }: { role: StaffRole }) {
         <kbd className="rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-bold text-slate-400">Ctrl K</kbd>
       </button>
 
-      {open ? (
+      {open ? createPortal((
         <div className="fixed inset-0 z-[90] flex items-end justify-center lg:items-start lg:overflow-y-auto lg:px-6 lg:py-[8vh]">
           <button
             type="button"
@@ -327,7 +328,7 @@ export default function StaffCommandCenter({ role }: { role: StaffRole }) {
             </div>
           </section>
         </div>
-      ) : null}
+      ), document.body) : null}
     </>
   );
 }
