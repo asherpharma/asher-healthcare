@@ -5,13 +5,17 @@ import { firestore } from "@/firebase/config";
 import { collection, getCountFromServer, query, where } from "firebase/firestore";
 import {
   ArrowRight,
+  CalendarPlus,
   CalendarCheck2,
   CheckCircle2,
   ClipboardPlus,
   Clock3,
+  FlaskConical,
   LoaderCircle,
+  ReceiptIndianRupee,
   RefreshCw,
   ShieldCheck,
+  UserPlus,
   UserRoundCheck,
   UsersRound,
 } from "lucide-react";
@@ -156,6 +160,33 @@ function DashboardContent() {
     },
   ];
 
+  const quickActions = [
+    {
+      href: "/admin/patients",
+      label: "Register patient",
+      icon: UserPlus,
+      tone: "bg-blue-50 text-blue-800",
+    },
+    {
+      href: "/admin/appointments",
+      label: "Add appointment",
+      icon: CalendarPlus,
+      tone: "bg-violet-50 text-violet-800",
+    },
+    {
+      href: "/admin/billing",
+      label: "Collect payment",
+      icon: ReceiptIndianRupee,
+      tone: "bg-emerald-50 text-emerald-800",
+    },
+    {
+      href: "/admin/lab",
+      label: "Lab report",
+      icon: FlaskConical,
+      tone: "bg-amber-50 text-amber-800",
+    },
+  ];
+
   return (
     <div>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -182,6 +213,32 @@ function DashboardContent() {
           {error}
         </div>
       ) : null}
+
+      <section className="mt-6 lg:mt-8">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.15em] text-[#A8864A]">
+              Quick actions
+            </p>
+            <h2 className="mt-1 text-lg font-bold text-[#233A59]">Start at the front desk</h2>
+          </div>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {quickActions.map(({ href, label, icon: Icon, tone }) => (
+            <Link
+              key={label}
+              href={href}
+              className={
+                "flex min-h-28 flex-col justify-between rounded-2xl p-4 text-sm font-bold shadow-sm ring-1 ring-black/5 transition active:scale-[0.98] " +
+                tone
+              }
+            >
+              <Icon size={24} />
+              <span>{label}</span>
+            </Link>
+          ))}
+        </div>
+      </section>
 
       <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {cards.map(({ label, value, icon: Icon, tone, hint }) => (
