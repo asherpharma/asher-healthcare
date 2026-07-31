@@ -627,7 +627,7 @@ function PatientRegister() {
 
   return (
     <div>
-      <div className="flex flex-wrap items-end justify-between gap-4">
+      <div className="staff-page-heading flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="text-sm font-bold uppercase tracking-[0.16em] text-[#A8864A]">Patient register</p>
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-[#233A59]">Patient records</h1>
@@ -648,7 +648,7 @@ function PatientRegister() {
       )}
 
       {showForm && (
-        <form onSubmit={addPatient} className={cardClass + " fixed inset-0 z-[75] grid content-start gap-4 overflow-y-auto rounded-none p-4 pb-28 sm:static sm:mt-6 sm:grid-cols-2 sm:rounded-3xl sm:p-6"}>
+        <form onSubmit={addPatient} className={cardClass + " fixed inset-0 z-[75] grid content-start gap-4 overflow-y-auto rounded-none p-4 pb-28 lg:static lg:mt-6 lg:grid-cols-2 lg:rounded-3xl lg:p-6"}>
           <div className="flex items-center justify-between sm:col-span-2">
             <div><p className="text-xs font-bold uppercase tracking-widest text-[#A8864A]">Registration</p><h2 className="mt-1 text-xl font-bold text-[#233A59]">New patient</h2></div>
             <button type="button" onClick={() => setShowForm(false)} aria-label="Close registration"><X size={20} /></button>

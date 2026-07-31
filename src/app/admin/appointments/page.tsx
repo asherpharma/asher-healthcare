@@ -307,13 +307,13 @@ function AppointmentDesk() {
 
   return (
     <div>
-      <div className="flex flex-wrap items-end justify-between gap-4">
+      <div className="staff-page-heading flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="text-sm font-bold uppercase tracking-[0.16em] text-[#A8864A]">Appointment desk</p>
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-[#233A59] sm:text-4xl">Daily clinic schedule</h1>
           <p className="mt-3 text-slate-600">Find requests quickly, coordinate patients, and keep every visit status current.</p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="staff-page-actions flex flex-wrap gap-2">
           <button type="button" onClick={() => { setShowCreate((open) => !open); setBookingError(""); }} className="inline-flex items-center gap-2 rounded-xl bg-[#A8864A] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#92713b]">
             <Plus size={18} /> {showCreate ? "Close form" : "New booking"}
           </button>

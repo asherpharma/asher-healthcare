@@ -644,13 +644,13 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
 
   return (
     <div>
-      <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+      <div className="staff-page-heading flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <div className="flex items-center gap-2 text-sm font-bold uppercase tracking-[0.16em] text-[#A8864A]"><Stethoscope size={17} /> Doctor consultation workspace</div>
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-[#233A59] sm:text-4xl">Queue, chart and consultation</h1>
           <p className="mt-3 max-w-3xl text-slate-600">Complete the clinical visit, prescription, lab orders and follow-up from one secure screen.</p>
         </div>
-        <div className="flex flex-col gap-3 sm:flex-row">
+        <div className="staff-page-actions flex flex-col gap-3 sm:flex-row">
           <label className="text-xs font-bold uppercase tracking-wider text-slate-500">Queue date<input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} className="mt-1 block min-h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-[#233A59]" /></label>
           {profile.role === "admin" ? <label className="text-xs font-bold uppercase tracking-wider text-slate-500">Doctor<select value={doctorFilter} onChange={(event) => setDoctorFilter(event.target.value as "all" | DoctorName)} className="mt-1 block min-h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-[#233A59]"><option value="all">All doctors</option>{DOCTORS.map((doctor) => <option key={doctor}>{doctor}</option>)}</select></label> : null}
         </div>

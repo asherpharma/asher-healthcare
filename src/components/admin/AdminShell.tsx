@@ -52,17 +52,18 @@ function StaffChrome({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="min-h-dvh bg-slate-50 text-slate-950">
+    <div className="staff-app-shell min-h-dvh bg-slate-50 text-slate-950">
       <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-3 px-4 py-3 sm:px-5 lg:px-8 lg:py-4">
+        <div className="staff-app-header-inner mx-auto flex max-w-[1440px] items-center justify-between gap-2 px-3 py-2.5 lg:gap-3 lg:px-8 lg:py-4">
           <Link href="/admin" className="flex items-center gap-3">
-            <Image src="/images/logo.png" alt="Asher Healthcare" width={44} height={44} className="h-10 w-10 rounded-xl object-contain sm:h-11 sm:w-11" />
-            <div><p className="font-bold text-[#233A59]"><span className="sm:hidden">Asher Staff</span><span className="hidden sm:inline">Asher Healthcare</span></p><p className="hidden text-xs text-slate-500 sm:block">Secure clinic workspace</p></div>
+            <Image src="/images/logo.png" alt="Asher Healthcare" width={44} height={44} className="h-10 w-10 rounded-xl object-contain lg:h-11 lg:w-11" />
+            <div><p className="font-bold text-[#233A59]"><span className="lg:hidden">Asher Staff</span><span className="hidden lg:inline">Asher Healthcare</span></p><p className="hidden text-xs text-slate-500 lg:block">Secure clinic workspace</p></div>
           </Link>
-          <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-2 lg:gap-3">
             <NetworkStatus />
-            <InstallAppButton compact />
-            <div className="hidden text-right sm:block"><p className="text-sm font-bold text-[#233A59]">{profile.displayName}</p><p className="text-xs capitalize text-slate-500">{profile.role}</p></div>
+            <span className="rounded-full bg-[#233A59] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white lg:hidden">{profile.role}</span>
+            <div className="hidden lg:block"><InstallAppButton compact /></div>
+            <div className="hidden text-right lg:block"><p className="text-sm font-bold text-[#233A59]">{profile.displayName}</p><p className="text-xs capitalize text-slate-500">{profile.role}</p></div>
             <button onClick={logOut} className="hidden items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 lg:inline-flex"><LogOut size={16} />Sign out</button>
           </div>
         </div>
@@ -82,7 +83,7 @@ function StaffChrome({ children }: { children: ReactNode }) {
             })}
           </nav>
         </aside>
-        <main id="main-content" className="min-w-0">{children}</main>
+        <main id="main-content" className="staff-app-content min-w-0">{children}</main>
       </div>
       <MobileStaffNav role={profile.role} onLogout={() => void logOut()} />
     </div>

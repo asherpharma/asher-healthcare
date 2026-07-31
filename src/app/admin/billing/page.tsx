@@ -522,7 +522,7 @@ function BillingWorkspace() {
         onLoad={() => setRazorpayReady(true)}
         onError={() => setError("Secure Razorpay Checkout could not be loaded. Check the internet connection.")}
       />
-      <div className="flex flex-wrap items-end justify-between gap-4">
+      <div className="staff-page-heading flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="text-sm font-bold uppercase tracking-[0.16em] text-[#A8864A]">Billing & receipts</p>
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-[#233A59] sm:text-4xl">Clinic revenue desk</h1>

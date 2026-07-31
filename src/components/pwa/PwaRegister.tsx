@@ -80,7 +80,7 @@ export function NetworkStatus() {
       }
     >
       {online ? <Wifi size={13} /> : <WifiOff size={13} />}
-      <span className="hidden sm:inline">{online ? "Online" : "Offline"}</span>
+      <span className="hidden lg:inline">{online ? "Online" : "Offline"}</span>
     </span>
   );
 }

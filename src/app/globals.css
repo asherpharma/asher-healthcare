@@ -326,6 +326,60 @@ img { object-fit: cover; }
   .legal-content section { padding: 26px 22px; }
 }
 
+@media (max-width: 1023px) {
+  .staff-app-shell {
+    background: #f8fafc;
+  }
+
+  .staff-app-content {
+    width: 100%;
+    max-width: 600px;
+    margin-inline: auto;
+  }
+
+  .staff-app-header-inner {
+    max-width: 600px;
+  }
+
+  .staff-app-content .staff-page-heading {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .staff-app-content .staff-page-heading > button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .staff-app-content .staff-page-actions {
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .staff-app-content .staff-page-actions > * {
+    justify-content: center;
+  }
+
+  .staff-app-content form[class*="grid"] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .staff-app-content form [class*="col-span"] {
+    grid-column: auto !important;
+  }
+
+  .staff-app-content article[class*="sm:grid-cols"] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .staff-app-content h1 {
+    font-size: clamp(1.75rem, 7vw, 2.25rem);
+    line-height: 1.08;
+  }
+}
+
 @media (display-mode: standalone) {
   html, body {
     min-height: 100dvh;

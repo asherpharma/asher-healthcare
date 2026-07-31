@@ -277,7 +277,7 @@ function TasksContent() {
 
   return (
     <div>
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="staff-page-heading flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-sm font-bold uppercase tracking-[0.16em] text-[#A8864A]">Care coordination</p>
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-[#233A59] sm:text-4xl">Tasks & follow-ups</h1>
