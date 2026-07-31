@@ -72,6 +72,13 @@ service cloud.firestore {
       allow read: if isStaff();
     }
 
+    // The management dashboard reads clinical visits across all patient
+    // records. This grants only staff read access; writes remain governed by
+    // the patient-specific visit rules below.
+    match /{path=**}/visits/{visitId} {
+      allow read: if isStaff();
+    }
+
     match /invoices/{invoiceId} {
       allow read: if isStaff();
       allow create: if isStaff()

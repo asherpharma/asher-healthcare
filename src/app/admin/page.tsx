@@ -172,6 +172,10 @@ function appointmentDoctor(doctorId: string) {
   return doctorId || "Unassigned";
 }
 
+function doctorBucket(value?: string) {
+  return doctors.includes(value as (typeof doctors)[number]) ? String(value) : "Unassigned / archived";
+}
+
 function money(value: number) {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
@@ -337,7 +341,25 @@ function AdminDashboard() {
   }
 
   useEffect(() => {
-    void refresh();
+    let active = true;
+
+    void fetchDashboardData()
+      .then((nextData) => {
+        if (!active) return;
+        setData(nextData);
+        setLastUpdated(new Date());
+      })
+      .catch((loadError) => {
+        console.error(loadError);
+        if (active) setError("The management dashboard could not be refreshed. Please check the connection and try again.");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   const analytics = useMemo(() => {
@@ -408,10 +430,10 @@ function AdminDashboard() {
       methodTotals.set(payment.method, (methodTotals.get(payment.method) || 0) + Number(payment.amount || 0));
     });
 
-    const doctorMetrics = doctors.map((doctorName) => {
-      const doctorVisits = periodVisits.filter((visit) => visit.doctorName === doctorName);
-      const doctorInvoices = periodInvoices.filter((invoice) => patientsById.get(invoice.patientId)?.doctorName === doctorName);
-      const doctorPayments = periodPayments.filter((payment) => patientsById.get(payment.patientId)?.doctorName === doctorName);
+    const doctorMetrics = [...doctors, "Unassigned / archived"].map((doctorName) => {
+      const doctorVisits = periodVisits.filter((visit) => doctorBucket(visit.doctorName) === doctorName);
+      const doctorInvoices = periodInvoices.filter((invoice) => doctorBucket(patientsById.get(invoice.patientId)?.doctorName) === doctorName);
+      const doctorPayments = periodPayments.filter((payment) => doctorBucket(patientsById.get(payment.patientId)?.doctorName) === doctorName);
       return {
         doctorName,
         visits: doctorVisits.length,
@@ -419,7 +441,7 @@ function AdminDashboard() {
         billed: doctorInvoices.reduce((sum, invoice) => sum + Number(invoice.total || 0), 0),
         collected: doctorPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0),
       };
-    });
+    }).filter((doctor) => doctor.doctorName !== "Unassigned / archived" || doctor.visits > 0 || doctor.billed > 0 || doctor.collected > 0);
 
     const lastSevenDays = Array.from({ length: 7 }, (_, index) => {
       const date = new Date();
@@ -547,7 +569,7 @@ function AdminDashboard() {
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <p className="text-sm font-bold text-[#233A59]">{doctor.doctorName}</p>
-                    <p className="mt-1 text-xs text-slate-500">{index === 0 ? "Pediatrics" : "Obstetrics & Gynaecology"}</p>
+                    <p className="mt-1 text-xs text-slate-500">{doctor.doctorName === doctors[0] ? "Pediatrics" : doctor.doctorName === doctors[1] ? "Obstetrics & Gynaecology" : "Historical or unassigned records"}</p>
                   </div>
                   <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white text-[#233A59] shadow-sm"><Stethoscope size={19} /></span>
                 </div>
@@ -556,7 +578,7 @@ function AdminDashboard() {
                   <div className="rounded-xl bg-white p-3"><p className="text-2xl font-bold text-[#233A59]">{number(doctor.uniquePatients)}</p><p className="mt-1 text-xs font-semibold text-slate-500">Unique patients</p></div>
                 </div>
                 <div className="mt-4 space-y-3">
-                  <MetricBar label="Share of visits" value={doctor.visits} total={maxDoctorVisits} display={number(doctor.visits)} tone={index === 0 ? "bg-blue-600" : "bg-violet-600"} />
+                  <MetricBar label="Share of visits" value={doctor.visits} total={maxDoctorVisits} display={number(doctor.visits)} tone={index === 0 ? "bg-blue-600" : index === 1 ? "bg-violet-600" : "bg-slate-500"} />
                   <div className="flex items-center justify-between border-t border-slate-200 pt-3 text-sm"><span className="text-slate-500">Fees billed</span><strong className="text-[#233A59]">{money(doctor.billed)}</strong></div>
                   <div className="flex items-center justify-between text-sm"><span className="text-slate-500">Collected</span><strong className="text-emerald-700">{money(doctor.collected)}</strong></div>
                 </div>
