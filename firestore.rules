@@ -124,20 +124,51 @@ service cloud.firestore {
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.createdAt == request.time
         && request.resource.data.updatedAt == request.time;
-      allow update: if isStaff()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'amountPaid', 'balance', 'paymentStatus', 'paymentMethod',
-          'paymentReference', 'updatedAt', 'paidAt'
-        ])
-        && request.resource.data.amountPaid is number
-        && request.resource.data.balance is number
-        && request.resource.data.amountPaid >= resource.data.amountPaid
-        && request.resource.data.amountPaid <= resource.data.total
-        && request.resource.data.balance >= 0
-        && request.resource.data.balance <= resource.data.balance
-        && request.resource.data.paymentStatus in ['partial', 'paid']
-        && request.resource.data.paymentMethod in ['cash', 'upi', 'card', 'bank_transfer']
-        && request.resource.data.updatedAt == request.time;
+      allow update: if (
+          isStaff()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'amountPaid', 'balance', 'paymentStatus', 'paymentMethod',
+            'paymentReference', 'updatedAt', 'paidAt'
+          ])
+          && request.resource.data.amountPaid is number
+          && request.resource.data.balance is number
+          && request.resource.data.amountPaid >= resource.data.amountPaid
+          && request.resource.data.amountPaid <= resource.data.total
+          && request.resource.data.balance >= 0
+          && request.resource.data.balance <= resource.data.balance
+          && request.resource.data.paymentStatus in ['partial', 'paid']
+          && request.resource.data.paymentMethod in ['cash', 'upi', 'card', 'bank_transfer']
+          && request.resource.data.updatedAt == request.time
+        ) || (
+          isAdmin()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'amountPaid', 'balance', 'paymentStatus', 'paymentMethod',
+            'paymentReference', 'updatedAt', 'paidAt'
+          ])
+          && request.resource.data.amountPaid is number
+          && request.resource.data.balance is number
+          && request.resource.data.amountPaid >= 0
+          && request.resource.data.amountPaid < resource.data.amountPaid
+          && request.resource.data.balance == resource.data.total - request.resource.data.amountPaid
+          && request.resource.data.balance > resource.data.balance
+          && (
+            (
+              request.resource.data.amountPaid == 0
+              && request.resource.data.paymentStatus == 'unpaid'
+              && request.resource.data.paymentMethod == 'not_recorded'
+              && request.resource.data.paymentReference == ''
+            )
+            || (
+              request.resource.data.amountPaid > 0
+              && request.resource.data.paymentStatus == 'partial'
+              && request.resource.data.paymentMethod in [
+                'cash', 'upi', 'card', 'bank_transfer', 'online'
+              ]
+            )
+          )
+          && request.resource.data.updatedAt == request.time
+          && request.resource.data.paidAt == null
+        );
       allow delete: if isAdmin();
 
       match /payments/{paymentId} {
@@ -162,9 +193,68 @@ service cloud.firestore {
           && request.resource.data.status == 'received'
           && request.resource.data.createdBy == request.auth.uid
           && request.resource.data.createdAt == request.time;
-        allow update: if false;
+        allow update: if isAdmin()
+          && resource.data.status == 'received'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'reversedAt', 'reversedBy', 'reversalReason', 'auditLogId'
+          ])
+          && request.resource.data.status == 'reversed'
+          && request.resource.data.reversedAt == request.time
+          && request.resource.data.reversedBy == request.auth.uid
+          && request.resource.data.reversalReason is string
+          && request.resource.data.reversalReason.size() >= 5
+          && request.resource.data.reversalReason.size() <= 300
+          && request.resource.data.auditLogId is string
+          && request.resource.data.auditLogId.size() > 0
+          && request.resource.data.auditLogId.size() <= 128;
         allow delete: if isAdmin();
       }
+    }
+
+    // Payment corrections retain the original payment and append an immutable
+    // administrator audit event. This is safer than deleting financial history.
+    match /billingAuditLogs/{auditId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin()
+        && request.resource.data.keys().hasAll([
+          'eventType', 'invoiceId', 'invoiceNumber', 'paymentId',
+          'patientId', 'patientName', 'amount', 'method', 'source', 'reason',
+          'actorUid', 'actorName', 'createdAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'eventType', 'invoiceId', 'invoiceNumber', 'paymentId',
+          'patientId', 'patientName', 'amount', 'method', 'source', 'reason',
+          'actorUid', 'actorName', 'createdAt'
+        ])
+        && request.resource.data.eventType == 'payment.reversed'
+        && request.resource.data.invoiceId is string
+        && request.resource.data.invoiceId.size() > 0
+        && request.resource.data.invoiceId.size() <= 128
+        && request.resource.data.invoiceNumber is string
+        && request.resource.data.invoiceNumber.size() >= 8
+        && request.resource.data.invoiceNumber.size() <= 40
+        && request.resource.data.paymentId is string
+        && request.resource.data.paymentId.size() > 0
+        && request.resource.data.paymentId.size() <= 128
+        && request.resource.data.patientId is string
+        && request.resource.data.patientId.size() > 0
+        && request.resource.data.patientId.size() <= 128
+        && request.resource.data.patientName is string
+        && request.resource.data.patientName.size() >= 2
+        && request.resource.data.patientName.size() <= 100
+        && request.resource.data.amount is number
+        && request.resource.data.amount > 0
+        && request.resource.data.method in ['cash', 'upi', 'card', 'bank_transfer', 'online']
+        && request.resource.data.source in ['manual', 'gateway']
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() >= 5
+        && request.resource.data.reason.size() <= 300
+        && request.resource.data.actorUid == request.auth.uid
+        && request.resource.data.actorName is string
+        && request.resource.data.actorName.size() >= 2
+        && request.resource.data.actorName.size() <= 100
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
     }
 
     match /labOrders/{orderId} {

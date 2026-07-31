@@ -27,6 +27,7 @@ import {
   LoaderCircle,
   Plus,
   ReceiptIndianRupee,
+  RotateCcw,
   Search,
   ShieldCheck,
   Trash2,
@@ -74,8 +75,11 @@ type PaymentEntry = {
   method: PaymentMethod;
   reference: string;
   source: "manual" | "gateway";
-  status: "received";
+  status: "received" | "reversed";
   createdAt?: Timestamp;
+  reversedAt?: Timestamp;
+  reversedBy?: string;
+  reversalReason?: string;
 };
 
 type RazorpaySuccess = {
@@ -152,7 +156,7 @@ function methodLabel(value: string) {
 }
 
 function BillingWorkspace() {
-  const { user } = useStaff();
+  const { user, profile } = useStaff();
   const db = firestore!;
   const [patients, setPatients] = useState<Patient[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -178,6 +182,9 @@ function BillingWorkspace() {
   const [recordingPayment, setRecordingPayment] = useState(false);
   const [razorpayReady, setRazorpayReady] = useState(false);
   const [gatewayPayment, setGatewayPayment] = useState(false);
+  const [reversingPayment, setReversingPayment] = useState<PaymentEntry | null>(null);
+  const [reversalReason, setReversalReason] = useState("");
+  const [reversing, setReversing] = useState(false);
 
   useEffect(() => {
     const unsubscribePatients = onSnapshot(
@@ -223,10 +230,21 @@ function BillingWorkspace() {
 
   const stats = useMemo(() => {
     const today = todayKey();
-    const collectedToday = payments.filter((payment) => payment.createdAt?.toDate().toISOString().slice(0, 10) === today && payment.status === "received").reduce((sum, payment) => sum + payment.amount, 0);
+    const activePayments = payments.filter((payment) => payment.status === "received");
+    const collectedToday = activePayments.filter((payment) => payment.createdAt?.toDate().toISOString().slice(0, 10) === today).reduce((sum, payment) => sum + payment.amount, 0);
     const outstanding = invoices.reduce((sum, invoice) => sum + Number(invoice.balance || 0), 0);
-    return { collectedToday, outstanding, payments: payments.length, invoices: invoices.length };
+    return { collectedToday, outstanding, payments: activePayments.length, invoices: invoices.length };
   }, [invoices, payments]);
+
+  const paymentsByInvoice = useMemo(() => {
+    const grouped = new Map<string, PaymentEntry[]>();
+    for (const payment of payments) {
+      const current = grouped.get(payment.invoiceId) ?? [];
+      current.push(payment);
+      grouped.set(payment.invoiceId, current);
+    }
+    return grouped;
+  }, [payments]);
 
   const filteredInvoices = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -402,6 +420,94 @@ function BillingWorkspace() {
     }
   }
 
+  function beginPaymentReversal(payment: PaymentEntry) {
+    setReversingPayment(payment);
+    setReversalReason("");
+    setError("");
+    setNotice("");
+  }
+
+  async function reversePayment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!reversingPayment || profile.role !== "admin") return;
+
+    const reason = reversalReason.trim();
+    if (reason.length < 5) {
+      setError("Enter a clear correction reason of at least 5 characters.");
+      return;
+    }
+
+    setReversing(true);
+    setError("");
+    setNotice("");
+    try {
+      const invoiceRef = doc(db, "invoices", reversingPayment.invoiceId);
+      const paymentRef = doc(db, "invoices", reversingPayment.invoiceId, "payments", reversingPayment.id);
+      const auditRef = doc(collection(db, "billingAuditLogs"));
+
+      await runTransaction(db, async (transaction) => {
+        const [invoiceSnapshot, paymentSnapshot] = await Promise.all([
+          transaction.get(invoiceRef),
+          transaction.get(paymentRef),
+        ]);
+        if (!invoiceSnapshot.exists() || !paymentSnapshot.exists()) throw new Error("Billing record not found");
+
+        const currentInvoice = invoiceSnapshot.data() as Invoice;
+        const currentPayment = paymentSnapshot.data() as PaymentEntry;
+        if (currentPayment.status !== "received") throw new Error("Payment was already corrected");
+
+        const paymentAmount = Number(currentPayment.amount || 0);
+        const currentAmountPaid = Number(currentInvoice.amountPaid || 0);
+        if (paymentAmount <= 0 || paymentAmount > currentAmountPaid) throw new Error("Invoice totals need administrator review");
+
+        const amountPaid = Math.max(0, currentAmountPaid - paymentAmount);
+        const balance = Math.max(0, Number(currentInvoice.total || 0) - amountPaid);
+        const paymentStatus: PaymentStatus = amountPaid === 0 ? "unpaid" : "partial";
+
+        transaction.update(invoiceRef, {
+          amountPaid,
+          balance,
+          paymentStatus,
+          paymentMethod: amountPaid === 0 ? "not_recorded" : currentInvoice.paymentMethod,
+          paymentReference: amountPaid === 0 ? "" : currentInvoice.paymentReference ?? "",
+          updatedAt: serverTimestamp(),
+          paidAt: null,
+        });
+        transaction.update(paymentRef, {
+          status: "reversed",
+          reversedAt: serverTimestamp(),
+          reversedBy: user.uid,
+          reversalReason: reason,
+          auditLogId: auditRef.id,
+        });
+        transaction.set(auditRef, {
+          eventType: "payment.reversed",
+          invoiceId: reversingPayment.invoiceId,
+          invoiceNumber: currentInvoice.invoiceNumber,
+          paymentId: reversingPayment.id,
+          patientId: currentInvoice.patientId,
+          patientName: currentInvoice.patientName,
+          amount: paymentAmount,
+          method: currentPayment.method,
+          source: currentPayment.source,
+          reason,
+          actorUid: user.uid,
+          actorName: profile.displayName,
+          createdAt: serverTimestamp(),
+        });
+      });
+
+      setNotice(`Payment of ${money(reversingPayment.amount)} was reversed with a permanent audit record.`);
+      setReversingPayment(null);
+      setReversalReason("");
+    } catch (reversalError) {
+      console.error(reversalError);
+      setError(reversalError instanceof Error ? reversalError.message : "The payment correction could not be completed.");
+    } finally {
+      setReversing(false);
+    }
+  }
+
   async function startRazorpayPayment() {
     if (!payingInvoice) return;
     const invoice = payingInvoice;
@@ -544,7 +650,7 @@ function BillingWorkspace() {
 
       {showCreate && (
         <section className="mt-6 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200 sm:p-7">
-          <div className="flex items-start justify-between gap-4"><div><h2 className="text-2xl font-bold text-[#233A59]">Create patient invoice</h2><p className="mt-1 text-sm text-slate-600">Every payment creates an immutable audit entry.</p></div><button type="button" onClick={() => setShowCreate(false)} aria-label="Close invoice form" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={19} /></button></div>
+          <div className="flex items-start justify-between gap-4"><div><h2 className="text-2xl font-bold text-[#233A59]">Create patient invoice</h2><p className="mt-1 text-sm text-slate-600">Every payment creates a permanent, traceable audit entry.</p></div><button type="button" onClick={() => setShowCreate(false)} aria-label="Close invoice form" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={19} /></button></div>
           <form onSubmit={createInvoice} className="mt-6 space-y-6">
             <div className="grid gap-4 md:grid-cols-2">
               <label className={labelClass}>Registered patient<select required value={selectedPatientId} onChange={(event) => setSelectedPatientId(event.target.value)} className={inputClass}><option value="">Select patient</option>{patients.map((patient) => <option key={patient.id} value={patient.id}>{patient.patientNumber ? patient.patientNumber + " · " : ""}{patient.fullName} · {patient.phone}</option>)}</select></label>
@@ -603,6 +709,28 @@ function BillingWorkspace() {
         </section>
       )}
 
+      {reversingPayment && profile.role === "admin" && (
+        <section className="mt-6 rounded-3xl border border-amber-200 bg-amber-50 p-5 sm:p-7">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.14em] text-amber-800">Administrator correction</p>
+              <h2 className="mt-2 text-xl font-bold text-[#233A59]">Reverse {money(reversingPayment.amount)} from {reversingPayment.invoiceNumber}</h2>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-700">
+                This restores the invoice balance and preserves the original entry as reversed. It does not issue a Razorpay or bank refund.
+              </p>
+            </div>
+            <button type="button" onClick={() => setReversingPayment(null)} aria-label="Close payment correction" className="rounded-lg p-2 text-slate-500 hover:bg-white"><X size={19} /></button>
+          </div>
+          <form onSubmit={reversePayment} className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-end">
+            <label className={labelClass + " flex-1"}>Mandatory correction reason<textarea required minLength={5} maxLength={300} rows={2} value={reversalReason} onChange={(event) => setReversalReason(event.target.value)} placeholder="Example: Test payment entered during setup" className={inputClass + " resize-none"} /></label>
+            <button type="submit" disabled={reversing || reversalReason.trim().length < 5} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-amber-700 px-5 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">
+              {reversing ? <LoaderCircle size={18} className="animate-spin" /> : <RotateCcw size={18} />}
+              {reversing ? "Correcting…" : "Confirm reversal"}
+            </button>
+          </form>
+        </section>
+      )}
+
       {notice && <p className="mt-5 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">{notice}</p>}
       {error && <p className="mt-5 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p>}
 
@@ -617,15 +745,40 @@ function BillingWorkspace() {
       {!loading && filteredInvoices.length === 0 && <div className="mt-8 rounded-3xl border border-dashed border-slate-300 bg-white p-10 text-center"><ReceiptIndianRupee className="mx-auto text-[#A8864A]" size={36} /><h2 className="mt-4 text-xl font-bold text-[#233A59]">No matching invoices</h2><p className="mt-2 text-slate-600">Create the first patient invoice or adjust the filters.</p></div>}
 
       <div className="performance-list mt-6 space-y-4">
-        {filteredInvoices.map((invoice) => (
-          <article key={invoice.id} className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
-            <div className="grid gap-5 xl:grid-cols-[1fr_1fr_auto] xl:items-center">
-              <div><div className="flex flex-wrap items-center gap-2"><h2 className="font-bold text-[#233A59]">{invoice.invoiceNumber}</h2><span className={"rounded-full px-2.5 py-1 text-xs font-bold capitalize " + (invoice.paymentStatus === "paid" ? "bg-emerald-50 text-emerald-800" : invoice.paymentStatus === "partial" ? "bg-amber-50 text-amber-800" : "bg-red-50 text-red-800")}>{invoice.paymentStatus === "partial" ? "Partially paid" : invoice.paymentStatus}</span></div><p className="mt-2 font-semibold text-slate-700">{invoice.patientName}</p><p className="mt-1 text-sm text-slate-500">{invoice.patientNumber || "No patient ID"} · {invoice.patientPhone} · {createdDate(invoice.createdAt)}</p></div>
-              <div className="grid grid-cols-2 gap-x-6 gap-y-1 rounded-xl bg-slate-50 p-4 text-sm"><span className="text-slate-500">Total</span><strong className="text-right text-[#233A59]">{money(invoice.total)}</strong><span className="text-slate-500">Received</span><strong className="text-right text-emerald-700">{money(invoice.amountPaid)}</strong><span className="text-slate-500">Balance</span><strong className="text-right text-red-700">{money(invoice.balance)}</strong><span className="text-slate-500">Last method</span><strong className="text-right text-slate-700">{methodLabel(invoice.paymentMethod)}</strong></div>
-              <div className="flex flex-wrap gap-2 xl:max-w-[250px] xl:justify-end"><button type="button" onClick={() => void downloadReceiptPdf(invoice)} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-[#233A59] hover:bg-slate-50"><Download size={15} /> Receipt PDF</button>{invoice.balance > 0 && <button type="button" onClick={() => beginPayment(invoice)} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-emerald-700 px-3 py-2 text-xs font-bold text-white"><IndianRupee size={15} /> Record payment</button>}</div>
-            </div>
-          </article>
-        ))}
+        {filteredInvoices.map((invoice) => {
+          const invoicePayments = paymentsByInvoice.get(invoice.id) ?? [];
+          return (
+            <article key={invoice.id} className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+              <div className="grid gap-5 xl:grid-cols-[1fr_1fr_auto] xl:items-center">
+                <div><div className="flex flex-wrap items-center gap-2"><h2 className="font-bold text-[#233A59]">{invoice.invoiceNumber}</h2><span className={"rounded-full px-2.5 py-1 text-xs font-bold capitalize " + (invoice.paymentStatus === "paid" ? "bg-emerald-50 text-emerald-800" : invoice.paymentStatus === "partial" ? "bg-amber-50 text-amber-800" : "bg-red-50 text-red-800")}>{invoice.paymentStatus === "partial" ? "Partially paid" : invoice.paymentStatus}</span></div><p className="mt-2 font-semibold text-slate-700">{invoice.patientName}</p><p className="mt-1 text-sm text-slate-500">{invoice.patientNumber || "No patient ID"} · {invoice.patientPhone} · {createdDate(invoice.createdAt)}</p></div>
+                <div className="grid grid-cols-2 gap-x-6 gap-y-1 rounded-xl bg-slate-50 p-4 text-sm"><span className="text-slate-500">Total</span><strong className="text-right text-[#233A59]">{money(invoice.total)}</strong><span className="text-slate-500">Received</span><strong className="text-right text-emerald-700">{money(invoice.amountPaid)}</strong><span className="text-slate-500">Balance</span><strong className="text-right text-red-700">{money(invoice.balance)}</strong><span className="text-slate-500">Last method</span><strong className="text-right text-slate-700">{methodLabel(invoice.paymentMethod)}</strong></div>
+                <div className="flex flex-wrap gap-2 xl:max-w-[250px] xl:justify-end"><button type="button" onClick={() => void downloadReceiptPdf(invoice)} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-[#233A59] hover:bg-slate-50"><Download size={15} /> Receipt PDF</button>{invoice.balance > 0 && <button type="button" onClick={() => beginPayment(invoice)} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-emerald-700 px-3 py-2 text-xs font-bold text-white"><IndianRupee size={15} /> Record payment</button>}</div>
+              </div>
+
+              {invoicePayments.length > 0 && (
+                <div className="mt-4 border-t border-slate-100 pt-4">
+                  <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Payment history</p>
+                  <div className="mt-3 space-y-2">
+                    {invoicePayments.map((payment) => (
+                      <div key={payment.id} className="flex flex-col gap-3 rounded-xl bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                          <strong className={payment.status === "received" ? "text-emerald-700" : "text-slate-500 line-through"}>{money(payment.amount)}</strong>
+                          <span className="font-semibold text-slate-700">{methodLabel(payment.method)}</span>
+                          <span className="text-slate-500">{payment.source === "gateway" ? "Razorpay" : "Manual"} · {createdDate(payment.createdAt)}</span>
+                          {payment.reference && <span className="text-slate-500">Ref: {payment.reference}</span>}
+                          {payment.status === "reversed" && <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-bold text-amber-800">Reversed · {payment.reversalReason || "Correction recorded"}</span>}
+                        </div>
+                        {profile.role === "admin" && payment.status === "received" && (
+                          <button type="button" onClick={() => beginPaymentReversal(payment)} className="inline-flex min-h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-800 hover:bg-amber-50"><RotateCcw size={14} /> Correct payment</button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </article>
+          );
+        })}
       </div>
     </div>
   );
