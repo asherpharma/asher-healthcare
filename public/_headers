@@ -5,15 +5,19 @@
   X-Frame-Options: SAMEORIGIN
   Strict-Transport-Security: max-age=31536000; includeSubDomains
 
-/admin/*
-  Cache-Control: no-store, max-age=0
-  X-Robots-Tag: noindex, nofollow
-
 /sw.js
   Cache-Control: no-cache, no-store, must-revalidate
 
 /manifest.webmanifest
-  Cache-Control: public, max-age=3600
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/admin
+  Cache-Control: no-cache, no-store, must-revalidate
+  X-Robots-Tag: noindex, nofollow
+
+/admin/*
+  Cache-Control: no-cache, no-store, must-revalidate
+  X-Robots-Tag: noindex, nofollow
 
 /icons/*
   Cache-Control: public, max-age=604800

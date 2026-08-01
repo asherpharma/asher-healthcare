@@ -1,4 +1,5 @@
-const CACHE_NAME = "asher-public-v3";
+const APP_RELEASE = "2026.08.02.1";
+const CACHE_NAME = `asher-public-${APP_RELEASE}`;
 const PUBLIC_ASSETS = [
   "/",
   "/offline.html",
@@ -14,10 +15,14 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)))),
-  );
-  self.clients.claim();
+  event.waitUntil(Promise.all([
+    caches.keys().then((keys) => Promise.all(
+      keys
+        .filter((key) => key.startsWith("asher-public-") && key !== CACHE_NAME)
+        .map((key) => caches.delete(key)),
+    )),
+    self.clients.claim(),
+  ]));
 });
 
 self.addEventListener("message", (event) => {
@@ -33,7 +38,7 @@ self.addEventListener("fetch", (event) => {
   // Never cache authenticated clinic screens or medical/financial information.
   if (url.pathname.startsWith("/admin")) {
     event.respondWith(
-      fetch(request).catch(async () => {
+      fetch(request, { cache: "no-store" }).catch(async () => {
         if (request.mode === "navigate") {
           return (await caches.match("/offline.html")) || Response.error();
         }

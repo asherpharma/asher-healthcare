@@ -24,8 +24,30 @@ declare global {
 
 export function PwaRegister() {
   useEffect(() => {
+    let refreshingForUpdate = false;
+    const hadController = Boolean(navigator.serviceWorker?.controller);
+
+    const onControllerChange = () => {
+      if (!hadController || refreshingForUpdate) return;
+      refreshingForUpdate = true;
+      window.location.reload();
+    };
+
     if ("serviceWorker" in navigator) {
-      void navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      navigator.serviceWorker.addEventListener("controllerchange", onControllerChange);
+
+      void navigator.serviceWorker
+        .register("/sw.js?v=asher-staff-20260802", {
+          scope: "/",
+          updateViaCache: "none",
+        })
+        .then(async (registration) => {
+          if (registration.waiting) registration.waiting.postMessage("SKIP_WAITING");
+          await registration.update();
+        })
+        .catch(() => {
+          // The app remains usable online even when service-worker registration is unavailable.
+        });
     }
 
     const onPrompt = (event: Event) => {
@@ -41,6 +63,7 @@ export function PwaRegister() {
     window.addEventListener("beforeinstallprompt", onPrompt);
     window.addEventListener("appinstalled", onInstalled);
     return () => {
+      navigator.serviceWorker?.removeEventListener("controllerchange", onControllerChange);
       window.removeEventListener("beforeinstallprompt", onPrompt);
       window.removeEventListener("appinstalled", onInstalled);
     };
