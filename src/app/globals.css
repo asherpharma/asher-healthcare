@@ -354,12 +354,12 @@ img { object-fit: cover; }
 
   .staff-app-content {
     width: 100%;
-    max-width: 600px;
+    max-width: none;
     margin-inline: auto;
   }
 
   .staff-app-header-inner {
-    max-width: 600px;
+    max-width: none;
   }
 
   .staff-app-content .staff-page-heading {

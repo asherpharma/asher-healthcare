@@ -63,7 +63,7 @@ export default function MobileStaffNav({ role, onLogout }: { role: string; onLog
         className="staff-mobile-nav fixed inset-x-0 bottom-0 z-50 border-t border-slate-200 bg-white/95 px-2 shadow-[0_-12px_35px_rgba(15,23,42,0.12)] backdrop-blur-xl xl:hidden"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
-        <div className="mx-auto grid max-w-[600px] grid-cols-4">
+        <div className="grid w-full grid-cols-4">
           {primaryNavigation.map((item) => {
             const Icon = item.icon;
             const active = item.href === "/admin" ? pathname === item.href : pathname.startsWith(item.href);
