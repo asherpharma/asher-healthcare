@@ -38,13 +38,32 @@ function StaffChrome({ children }: { children: ReactNode }) {
   const { profile } = useStaff();
 
   useEffect(() => {
-    const priorityRoutes = profile.role === "doctor"
-      ? ["/admin/consultations", "/admin/appointments", "/admin/patients"]
-      : profile.role === "reception"
-        ? ["/admin/appointments", "/admin/patients", "/admin/billing", "/admin/lab"]
-        : ["/admin/appointments", "/admin/patients", "/admin/billing", "/admin/staff"];
-    const timeout = window.setTimeout(() => priorityRoutes.forEach((route) => router.prefetch(route)), 500);
-    return () => window.clearTimeout(timeout);
+    const connection = (navigator as Navigator & {
+      connection?: { effectiveType?: string; saveData?: boolean };
+    }).connection;
+    if (connection?.saveData || connection?.effectiveType === "slow-2g" || connection?.effectiveType === "2g") return;
+
+    const priorityRoute = profile.role === "doctor"
+      ? "/admin/consultations"
+      : "/admin/appointments";
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+    let timeout: number | undefined;
+    let idleHandle: number | undefined;
+    const prefetch = () => router.prefetch(priorityRoute);
+
+    if (idleWindow.requestIdleCallback) {
+      idleHandle = idleWindow.requestIdleCallback(prefetch, { timeout: 2500 });
+    } else {
+      timeout = window.setTimeout(prefetch, 1600);
+    }
+
+    return () => {
+      if (idleHandle !== undefined) idleWindow.cancelIdleCallback?.(idleHandle);
+      if (timeout !== undefined) window.clearTimeout(timeout);
+    };
   }, [profile.role, router]);
 
   async function logOut() {

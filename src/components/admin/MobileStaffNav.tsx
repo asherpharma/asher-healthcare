@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type MobileNavigationItem = {
   href: string;
@@ -54,7 +54,51 @@ function primaryNavigationFor(role: string): MobileNavigationItem[] {
 export default function MobileStaffNav({ role, onLogout }: { role: string; onLogout: () => void }) {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
   const primaryNavigation = primaryNavigationFor(role);
+
+  useEffect(() => {
+    if (!moreOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+    const returnFocusTarget = moreButtonRef.current;
+    document.body.style.overflow = "hidden";
+    closeButtonRef.current?.focus();
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMoreOpen(false);
+        return;
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+
+      const focusable = Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleKeyDown);
+      returnFocusTarget?.focus();
+    };
+  }, [moreOpen]);
 
   return (
     <>
@@ -85,10 +129,12 @@ export default function MobileStaffNav({ role, onLogout }: { role: string; onLog
             );
           })}
           <button
+            ref={moreButtonRef}
             type="button"
             onClick={() => setMoreOpen(true)}
             aria-label="More staff app options"
             aria-expanded={moreOpen}
+            aria-controls="staff-more-menu"
             className="flex min-h-[68px] flex-col items-center justify-center gap-1 rounded-2xl px-1 text-[11px] font-bold text-slate-500 transition active:scale-95 active:bg-slate-100"
           >
             <Menu size={22} />
@@ -101,6 +147,8 @@ export default function MobileStaffNav({ role, onLogout }: { role: string; onLog
         <div className="staff-mobile-nav fixed inset-0 z-[70] xl:hidden">
           <button type="button" aria-label="Close more menu" onClick={() => setMoreOpen(false)} className="absolute inset-0 bg-slate-950/50 backdrop-blur-sm" />
           <section
+            id="staff-more-menu"
+            ref={dialogRef}
             role="dialog"
             aria-modal="true"
             aria-label="More staff app options"
@@ -113,7 +161,7 @@ export default function MobileStaffNav({ role, onLogout }: { role: string; onLog
                 <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#A8864A]">Asher Staff</p>
                 <h2 className="mt-1 text-xl font-bold text-[#233A59]">App tools</h2>
               </div>
-              <button type="button" onClick={() => setMoreOpen(false)} aria-label="Close more menu" className="grid h-11 w-11 place-items-center rounded-full bg-slate-100 text-slate-600">
+              <button ref={closeButtonRef} type="button" onClick={() => setMoreOpen(false)} aria-label="Close more menu" className="grid h-11 w-11 place-items-center rounded-full bg-slate-100 text-slate-600">
                 <X size={19} />
               </button>
             </div>

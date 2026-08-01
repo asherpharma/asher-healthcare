@@ -2,6 +2,7 @@
 
 import { useStaff } from "@/components/admin/StaffGuard";
 import { firestore } from "@/firebase/config";
+import { formatAppointmentTime } from "@/lib/appointments";
 import {
   collection,
   collectionGroup,
@@ -53,6 +54,7 @@ type AppointmentRecord = {
   phone: string;
   doctorId: string;
   preferredDate: string;
+  preferredTime: string;
   status: "requested" | "confirmed" | "completed" | "cancelled";
 };
 
@@ -211,6 +213,25 @@ function rangeLabel(range: DashboardRange) {
   return "All time";
 }
 
+function timeInMinutes(value: string) {
+  const [hour, minute] = String(value || "").split(":").map(Number);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return hour * 60 + minute;
+}
+
+function clinicTimeInMinutes(value = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(value);
+  const part = (type: string) => Number(parts.find((item) => item.type === type)?.value || 0);
+  return part("hour") * 60 + part("minute");
+}
+
 function mapDocuments<T extends { id: string }>(documents: QueryDocumentSnapshot[]) {
   return documents.map((item) => ({ id: item.id, ...item.data() }) as T);
 }
@@ -360,9 +381,21 @@ type MobileAdminMetrics = {
   outstanding: number;
   collectionRate: number;
   todayAppointments: number;
+  requestedToday: number;
   openTasks: number;
   overdueTasks: number;
+  urgentTasks: number;
   activeLabs: number;
+  urgentLabs: number;
+  outstandingInvoices: number;
+  totalOutstanding: number;
+  nextAppointment: {
+    id: string;
+    patientName: string;
+    doctorName: string;
+    preferredTime: string;
+    status: "requested" | "confirmed";
+  } | null;
   doctorMetrics: Array<{
     doctorName: string;
     visits: number;
@@ -401,6 +434,40 @@ function MobileAdminDashboard({
     { label: "New patients", value: number(metrics.newPatients), hint: `${number(metrics.totalPatients)} total`, icon: UsersRound, tone: "bg-violet-50 text-violet-700" },
     { label: "Balance due", value: money(metrics.outstanding), hint: `${metrics.collectionRate.toFixed(0)}% collected`, icon: WalletCards, tone: "bg-rose-50 text-rose-700" },
   ];
+  const priorities = [
+    {
+      href: "/admin/appointments?date=today&status=requested",
+      label: "Booking requests",
+      value: metrics.requestedToday,
+      hint: metrics.requestedToday === 1 ? "Needs confirmation" : "Need confirmation",
+      icon: CalendarCheck2,
+      tone: "bg-amber-50 text-amber-800 ring-amber-200",
+    },
+    {
+      href: "/admin/tasks?date=overdue&status=open",
+      label: "Overdue tasks",
+      value: metrics.overdueTasks,
+      hint: metrics.urgentTasks > 0 ? `${number(metrics.urgentTasks)} urgent flagged` : "No urgent flags",
+      icon: ListTodo,
+      tone: "bg-rose-50 text-rose-800 ring-rose-200",
+    },
+    {
+      href: "/admin/lab?priority=urgent",
+      label: "Urgent labs",
+      value: metrics.urgentLabs,
+      hint: `${number(metrics.activeLabs)} active orders`,
+      icon: FlaskConical,
+      tone: "bg-violet-50 text-violet-800 ring-violet-200",
+    },
+    {
+      href: "/admin/billing?status=due",
+      label: "Balances due",
+      value: metrics.outstandingInvoices,
+      hint: money(metrics.totalOutstanding),
+      icon: WalletCards,
+      tone: "bg-emerald-50 text-emerald-800 ring-emerald-200",
+    },
+  ];
 
   return (
     <div className="admin-mobile-dashboard space-y-4 xl:hidden">
@@ -414,6 +481,51 @@ function MobileAdminDashboard({
             <Link href="/admin/patients" className="flex min-h-14 items-center justify-center gap-2 rounded-2xl bg-[#d4a75f] px-3 text-sm font-bold text-[#071f33]"><UserRoundCheck size={18} />New patient</Link>
             <Link href="/admin/appointments" className="flex min-h-14 items-center justify-center gap-2 rounded-2xl bg-white/10 px-3 text-sm font-bold text-white ring-1 ring-white/15"><CalendarCheck2 size={18} />Bookings</Link>
           </div>
+        </div>
+      </section>
+
+      <section className="rounded-[30px] bg-white p-5 shadow-sm ring-1 ring-slate-200">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#A8864A]">Today&apos;s action centre</p>
+            <h2 className="mt-1 text-xl font-bold text-[#233A59]">Handle what needs attention</h2>
+          </div>
+          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-[#233A59] text-white"><Clock3 size={20} /></span>
+        </div>
+
+        {metrics.nextAppointment ? (
+          <Link href="/admin/appointments?date=today" prefetch={false} className="mt-4 flex items-center gap-3 rounded-2xl bg-[#071f33] p-4 text-white transition active:scale-[0.99]">
+            <span className="grid h-12 min-w-16 shrink-0 place-items-center rounded-2xl bg-[#d4a75f] px-2 text-xs font-black text-[#071f33]">
+              {formatAppointmentTime(metrics.nextAppointment.preferredTime).replace(" ", "\u00a0")}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[11px] font-bold uppercase tracking-[0.14em] text-[#e9c879]">Next appointment</span>
+              <span className="mt-1 block truncate font-bold">{metrics.nextAppointment.patientName || "Patient"}</span>
+              <span className="mt-0.5 block truncate text-xs text-white/65">{metrics.nextAppointment.doctorName} · {metrics.nextAppointment.status}</span>
+            </span>
+            <ArrowRight className="shrink-0 text-white/70" size={19} />
+          </Link>
+        ) : (
+          <div className="mt-4 flex items-center gap-3 rounded-2xl bg-emerald-50 p-4 text-sm font-semibold text-emerald-800">
+            <CheckCircle2 className="shrink-0" size={20} />No upcoming appointment remains today.
+          </div>
+        )}
+
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          {priorities.map((priority) => {
+            const Icon = priority.icon;
+            return (
+              <Link key={priority.href} href={priority.href} prefetch={false} className={`min-h-32 rounded-2xl p-4 ring-1 transition active:scale-[0.98] ${priority.tone}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <span className="grid h-9 w-9 place-items-center rounded-xl bg-white/80"><Icon size={18} /></span>
+                  <ArrowRight className="mt-1 opacity-50" size={17} />
+                </div>
+                <p className="mt-3 text-2xl font-black tracking-tight">{loading ? "—" : number(priority.value)}</p>
+                <p className="mt-0.5 text-xs font-bold">{priority.label}</p>
+                <p className="mt-1 truncate text-[11px] opacity-65">{priority.hint}</p>
+              </Link>
+            );
+          })}
         </div>
       </section>
 
@@ -601,6 +713,15 @@ function AdminDashboard() {
     const cancelled = periodAppointments.filter((appointment) => appointment.status === "cancelled").length;
     const openTasks = data.tasks.filter((task) => task.status === "open");
     const activeLabs = data.labs.filter((lab) => !["completed", "cancelled"].includes(lab.status));
+    const todayActiveAppointments = data.appointments
+      .filter((appointment) => appointment.preferredDate === today && ["requested", "confirmed"].includes(appointment.status))
+      .sort((left, right) => timeInMinutes(left.preferredTime) - timeInMinutes(right.preferredTime));
+    const nowMinutes = clinicTimeInMinutes();
+    const nextAppointmentRecord = todayActiveAppointments.find((appointment) => {
+      const appointmentMinutes = timeInMinutes(appointment.preferredTime);
+      return Number.isFinite(appointmentMinutes) && appointmentMinutes >= nowMinutes;
+    }) ?? null;
+    const outstandingInvoices = data.invoices.filter((invoice) => Number(invoice.balance || 0) > 0);
 
     return {
       totalPatients: data.patients.length,
@@ -618,11 +739,21 @@ function AdminDashboard() {
       lastSevenDays,
       appointmentStatus: { requested, confirmed, completed, cancelled },
       todayAppointments: data.appointments.filter((appointment) => appointment.preferredDate === today && appointment.status !== "cancelled").length,
+      requestedToday: todayActiveAppointments.filter((appointment) => appointment.status === "requested").length,
       openTasks: openTasks.length,
       overdueTasks: openTasks.filter((task) => task.dueDate && task.dueDate < today).length,
       urgentTasks: openTasks.filter((task) => task.priority === "urgent").length,
       activeLabs: activeLabs.length,
       urgentLabs: activeLabs.filter((lab) => lab.priority === "urgent").length,
+      outstandingInvoices: outstandingInvoices.length,
+      totalOutstanding: outstandingInvoices.reduce((sum, invoice) => sum + Number(invoice.balance || 0), 0),
+      nextAppointment: nextAppointmentRecord ? {
+        id: nextAppointmentRecord.id,
+        patientName: nextAppointmentRecord.patientName,
+        doctorName: appointmentDoctor(nextAppointmentRecord.doctorId),
+        preferredTime: nextAppointmentRecord.preferredTime,
+        status: nextAppointmentRecord.status as "requested" | "confirmed",
+      } : null,
       recentPayments: [...periodPayments]
         .sort((left, right) => (right.createdAt?.toMillis?.() ?? 0) - (left.createdAt?.toMillis?.() ?? 0))
         .slice(0, 5),
@@ -649,9 +780,15 @@ function AdminDashboard() {
           outstanding: analytics.outstanding,
           collectionRate: analytics.collectionRate,
           todayAppointments: analytics.todayAppointments,
+          requestedToday: analytics.requestedToday,
           openTasks: analytics.openTasks,
           overdueTasks: analytics.overdueTasks,
+          urgentTasks: analytics.urgentTasks,
           activeLabs: analytics.activeLabs,
+          urgentLabs: analytics.urgentLabs,
+          outstandingInvoices: analytics.outstandingInvoices,
+          totalOutstanding: analytics.totalOutstanding,
+          nextAppointment: analytics.nextAppointment,
           doctorMetrics: analytics.doctorMetrics,
         }}
         range={range}

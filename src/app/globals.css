@@ -404,6 +404,10 @@ img { object-fit: cover; }
 /* Installed phone apps always use the dedicated mobile dashboard, even when
    Android restores a desktop-sized layout viewport for an older WebAPK. */
 @media (display-mode: standalone) and (hover: none) and (pointer: coarse) {
+  .staff-app-header {
+    padding-top: env(safe-area-inset-top);
+  }
+
   .admin-mobile-dashboard {
     display: block !important;
   }

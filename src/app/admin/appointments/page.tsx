@@ -16,6 +16,7 @@ import {
 import {
   collection,
   doc,
+  getDoc,
   limit,
   onSnapshot,
   orderBy,
@@ -129,12 +130,47 @@ function AppointmentDesk() {
 
   useEffect(() => {
     const openAppointment = () => setShowCreate(true);
+    let active = true;
     window.addEventListener("asher:new-appointment", openAppointment);
-    if (new URLSearchParams(window.location.search).get("new") === "1") {
-      window.setTimeout(() => setShowCreate(true), 0);
+    const params = new URLSearchParams(window.location.search);
+    const requestedStatus = params.get("status");
+    const routeTimer = window.setTimeout(() => {
+      if (params.get("date") === "today") {
+        setDateFilter(today);
+      }
+      if (["requested", "confirmed", "completed", "cancelled"].includes(requestedStatus ?? "")) {
+        setStatusFilter(requestedStatus as AppointmentStatus);
+      }
+      if (params.get("new") === "1") {
+        setShowCreate(true);
+      }
+    }, 0);
+
+    const patientId = params.get("patient")?.trim();
+    if (params.get("new") === "1" && patientId && firestore) {
+      void getDoc(doc(firestore, "patients", patientId))
+        .then((snapshot) => {
+          if (!active || !snapshot.exists()) return;
+          const patient = snapshot.data();
+          const doctorDescriptor = `${String(patient.doctorName || "")} ${String(patient.specialty || "")}`.toLowerCase();
+          const doctorId: DoctorId = /(reshma|obstetric|gyn|obg|women)/.test(doctorDescriptor) ? "obg" : "pediatrics";
+          setBooking((current) => ({
+            ...current,
+            patientName: String(patient.fullName || ""),
+            phone: String(patient.phone || ""),
+            doctorId,
+          }));
+        })
+        .catch(() => {
+          if (active) setBookingError("Patient details could not be prefilled. You can still enter them manually.");
+        });
     }
-    return () => window.removeEventListener("asher:new-appointment", openAppointment);
-  }, []);
+    return () => {
+      active = false;
+      window.clearTimeout(routeTimer);
+      window.removeEventListener("asher:new-appointment", openAppointment);
+    };
+  }, [today]);
 
   const bookingSlots = useMemo(
     () => dateIsEnabled(schedule, booking.preferredDate)

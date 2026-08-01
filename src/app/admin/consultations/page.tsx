@@ -2,12 +2,7 @@
 
 import { type StaffProfile, useStaff } from "@/components/admin/StaffGuard";
 import { firestore } from "@/firebase/config";
-import { preloadClinicPdfAssets } from "@/lib/clinic-pdf";
-import {
-  downloadPrescriptionPdf,
-  printPrescriptionPdf,
-  type PrescriptionPdfRecord,
-} from "@/lib/prescription-pdf";
+import type { PrescriptionPdfRecord } from "@/lib/prescription-pdf";
 import {
   collection,
   doc,
@@ -46,7 +41,7 @@ import {
   UsersRound,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 const DOCTORS = ["Dr. Lt Col Shafi Ahamad", "Dr. Shaik Reshma"] as const;
 type DoctorName = (typeof DOCTORS)[number];
@@ -280,10 +275,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   const [notice, setNotice] = useState("");
   const [savedPrescription, setSavedPrescription] = useState<PrescriptionPdfRecord | null>(null);
   const [documentAction, setDocumentAction] = useState<"print" | "download" | null>(null);
-
-  useEffect(() => {
-    void preloadClinicPdfAssets().catch(() => undefined);
-  }, []);
+  const deepLinkedPatientHandled = useRef(false);
 
   useEffect(() => {
     const stopPatients = onSnapshot(
@@ -315,6 +307,31 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       stopAppointments();
     };
   }, [db]);
+
+  useEffect(() => {
+    if (!patientsLoaded || deepLinkedPatientHandled.current) return;
+
+    const patientId = new URLSearchParams(window.location.search).get("patient")?.trim();
+    const deepLinkedPatientExists = Boolean(patientId && patients.some((patient) => patient.id === patientId));
+    const timer = window.setTimeout(() => {
+      deepLinkedPatientHandled.current = true;
+      if (!patientId || !deepLinkedPatientExists) return;
+
+      setSelectedPatientId(patientId);
+      setSelectedAppointmentId("");
+      setHistoryLoading(true);
+      setVisits([]);
+      setPrescriptions([]);
+      setReports([]);
+      setMedicines([emptyMedicine()]);
+      setLabTests([]);
+      setCustomTest("");
+      setSavedPrescription(null);
+      setNotice("");
+      setError("");
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [patients, patientsLoaded]);
 
   useEffect(() => {
     if (!selectedPatientId) return;
@@ -626,6 +643,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
     setDocumentAction(mode);
     setError("");
     try {
+      const { downloadPrescriptionPdf, printPrescriptionPdf } = await import("@/lib/prescription-pdf");
       await (mode === "print"
         ? printPrescriptionPdf(selectedPatient, savedPrescription)
         : downloadPrescriptionPdf(selectedPatient, savedPrescription));

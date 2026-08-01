@@ -1,15 +1,7 @@
 "use client";
 
 import { useStaff } from "@/components/admin/StaffGuard";
-import {
-  downloadBlankPrescriptionPdf,
-  printBlankPrescriptionPdf,
-} from "@/lib/prescription-pdf";
-import {
-  downloadReceiptPdf,
-  printReceiptPdf,
-  type ReceiptInvoice,
-} from "@/lib/receipt-pdf";
+import type { ReceiptInvoice } from "@/lib/receipt-pdf";
 import {
   CheckCircle2,
   Download,
@@ -195,7 +187,10 @@ export default function ReceptionPayment({
             disabled={Boolean(documentAction)}
             onClick={() => void runDocumentAction(
               "prescription-print",
-              () => printBlankPrescriptionPdf(patient, patient.doctorName),
+              async () => {
+                const { printBlankPrescriptionPdf } = await import("@/lib/prescription-pdf");
+                await printBlankPrescriptionPdf(patient, patient.doctorName);
+              },
             )}
             className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-[#233A59] px-4 py-3 text-sm font-bold text-white disabled:opacity-60"
           >
@@ -207,7 +202,10 @@ export default function ReceptionPayment({
             disabled={Boolean(documentAction)}
             onClick={() => void runDocumentAction(
               "receipt-print",
-              () => printReceiptPdf(paidInvoice),
+              async () => {
+                const { printReceiptPdf } = await import("@/lib/receipt-pdf");
+                await printReceiptPdf(paidInvoice);
+              },
             )}
             className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 text-sm font-bold text-white disabled:opacity-60"
           >
@@ -220,7 +218,10 @@ export default function ReceptionPayment({
               disabled={Boolean(documentAction)}
               onClick={() => void runDocumentAction(
                 "prescription-download",
-                () => downloadBlankPrescriptionPdf(patient, patient.doctorName),
+                async () => {
+                  const { downloadBlankPrescriptionPdf } = await import("@/lib/prescription-pdf");
+                  await downloadBlankPrescriptionPdf(patient, patient.doctorName);
+                },
               )}
               className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-[#233A59] disabled:opacity-60"
             >
@@ -231,7 +232,10 @@ export default function ReceptionPayment({
               disabled={Boolean(documentAction)}
               onClick={() => void runDocumentAction(
                 "receipt-download",
-                () => downloadReceiptPdf(paidInvoice),
+                async () => {
+                  const { downloadReceiptPdf } = await import("@/lib/receipt-pdf");
+                  await downloadReceiptPdf(paidInvoice);
+                },
               )}
               className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-[#233A59] disabled:opacity-60"
             >

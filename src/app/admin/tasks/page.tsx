@@ -120,6 +120,21 @@ function TasksContent() {
   const [assignedTo, setAssignedTo] = useState(profile.uid);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const requestedStatus = params.get("status");
+    const requestedDate = params.get("date");
+    const timer = window.setTimeout(() => {
+      if (requestedStatus === "open" || requestedStatus === "completed") {
+        setStatusFilter(requestedStatus);
+      }
+      if (["all", "today", "overdue", "upcoming"].includes(requestedDate ?? "")) {
+        setDateFilter(requestedDate as "all" | "today" | "overdue" | "upcoming");
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
     if (!firestore) {
       return;
     }

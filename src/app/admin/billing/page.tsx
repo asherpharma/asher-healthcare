@@ -2,7 +2,7 @@
 
 import { useStaff } from "@/components/admin/StaffGuard";
 import { firestore } from "@/firebase/config";
-import { downloadReceiptPdf, type ReceiptInvoice } from "@/lib/receipt-pdf";
+import type { ReceiptInvoice } from "@/lib/receipt-pdf";
 import Script from "next/script";
 import {
   collection,
@@ -35,13 +35,14 @@ import {
   WalletCards,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 type Patient = {
   id: string;
   patientNumber?: string;
   fullName: string;
   phone: string;
+  consultationFee?: number;
 };
 
 type LineItem = {
@@ -53,6 +54,7 @@ type LineItem = {
 };
 
 type PaymentStatus = "unpaid" | "partial" | "paid";
+type InvoiceStatusFilter = "all" | PaymentStatus | "due";
 type PaymentMethod = "cash" | "upi" | "card" | "bank_transfer" | "online";
 
 type Invoice = ReceiptInvoice & {
@@ -213,9 +215,10 @@ function BillingWorkspace() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | PaymentStatus>("all");
+  const [statusFilter, setStatusFilter] = useState<InvoiceStatusFilter>("all");
   const [showCreate, setShowCreate] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [patientsLoaded, setPatientsLoaded] = useState(false);
   const [selectedPatientId, setSelectedPatientId] = useState("");
   const [items, setItems] = useState<LineItem[]>([{ id: crypto.randomUUID(), description: "Consultation fee", quantity: 1, unitPrice: 0, amount: 0 }]);
   const [discount, setDiscount] = useState(0);
@@ -240,12 +243,30 @@ function BillingWorkspace() {
   const [refundRequestId, setRefundRequestId] = useState("");
   const [submittingRefund, setSubmittingRefund] = useState(false);
   const [syncingRefundId, setSyncingRefundId] = useState("");
+  const [receiptActionId, setReceiptActionId] = useState("");
+  const deepLinkedPatientHandled = useRef(false);
+
+  useEffect(() => {
+    const requestedStatus = new URLSearchParams(window.location.search).get("status");
+    if (!["unpaid", "partial", "paid", "due"].includes(requestedStatus ?? "")) return;
+    const timer = window.setTimeout(
+      () => setStatusFilter(requestedStatus as Exclude<InvoiceStatusFilter, "all">),
+      0,
+    );
+    return () => window.clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     const unsubscribePatients = onSnapshot(
       query(collection(db, "patients"), orderBy("createdAt", "desc"), limit(250)),
-      (snapshot) => setPatients(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Patient)),
-      () => setError("Patient records could not be loaded."),
+      (snapshot) => {
+        setPatients(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Patient));
+        setPatientsLoaded(true);
+      },
+      () => {
+        setError("Patient records could not be loaded.");
+        setPatientsLoaded(true);
+      },
     );
     const unsubscribeInvoices = onSnapshot(
       query(collection(db, "invoices"), orderBy("createdAt", "desc"), limit(250)),
@@ -292,6 +313,33 @@ function BillingWorkspace() {
     };
   }, [db, profile.role]);
 
+  useEffect(() => {
+    if (!patientsLoaded || deepLinkedPatientHandled.current) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const patientId = params.get("patient")?.trim();
+    if (params.get("new") !== "1" || !patientId) return;
+
+    const patient = patients.find((entry) => entry.id === patientId);
+    const timer = window.setTimeout(() => {
+      deepLinkedPatientHandled.current = true;
+      if (!patient) return;
+
+      const consultationFee = Math.max(0, Number(patient.consultationFee || 0));
+      setSelectedPatientId(patient.id);
+      setShowCreate(true);
+      setItems([{
+        id: crypto.randomUUID(),
+        description: "Consultation fee",
+        quantity: 1,
+        unitPrice: consultationFee,
+        amount: consultationFee,
+      }]);
+      setError("");
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [patients, patientsLoaded]);
+
   const selectedPatient = useMemo(() => patients.find((patient) => patient.id === selectedPatientId) ?? null, [patients, selectedPatientId]);
   const subtotal = useMemo(() => items.reduce((sum, item) => sum + Math.max(0, item.quantity) * Math.max(0, item.unitPrice), 0), [items]);
   const total = Math.max(0, subtotal - Math.max(0, discount));
@@ -319,7 +367,9 @@ function BillingWorkspace() {
     const term = search.trim().toLowerCase();
     return invoices.filter((invoice) => {
       const matchesSearch = !term || [invoice.invoiceNumber, invoice.patientName, invoice.patientPhone, invoice.patientNumber].some((value) => String(value ?? "").toLowerCase().includes(term));
-      return matchesSearch && (statusFilter === "all" || invoice.paymentStatus === statusFilter);
+      const matchesStatus = statusFilter === "all"
+        || (statusFilter === "due" ? Number(invoice.balance || 0) > 0 : invoice.paymentStatus === statusFilter);
+      return matchesSearch && matchesStatus;
     });
   }, [invoices, search, statusFilter]);
 
@@ -486,6 +536,19 @@ function BillingWorkspace() {
       setError("The payment could not be recorded. Refresh and try again.");
     } finally {
       setRecordingPayment(false);
+    }
+  }
+
+  async function prepareReceipt(invoice: Invoice) {
+    setReceiptActionId(invoice.id);
+    setError("");
+    try {
+      const { downloadReceiptPdf } = await import("@/lib/receipt-pdf");
+      await downloadReceiptPdf(invoice);
+    } catch (receiptError) {
+      setError(receiptError instanceof Error ? receiptError.message : "The receipt could not be prepared.");
+    } finally {
+      setReceiptActionId("");
     }
   }
 
@@ -985,7 +1048,7 @@ function BillingWorkspace() {
       <section className="mt-6 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
         <div className="grid gap-3 md:grid-cols-[1fr_220px]">
           <label className="relative"><span className="sr-only">Search invoices</span><Search size={17} className="pointer-events-none absolute left-3 top-3 text-slate-400" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search invoice, patient, phone or patient ID" className="h-11 w-full rounded-xl border border-slate-200 pl-10 pr-3 text-sm font-semibold outline-none focus:border-[#233A59]" /></label>
-          <label><span className="sr-only">Payment status</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as "all" | PaymentStatus)} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold outline-none"><option value="all">All payment statuses</option><option value="unpaid">Unpaid</option><option value="partial">Partially paid</option><option value="paid">Paid</option></select></label>
+          <label><span className="sr-only">Payment status</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as InvoiceStatusFilter)} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold outline-none"><option value="all">All payment statuses</option><option value="due">Balance due</option><option value="unpaid">Unpaid</option><option value="partial">Partially paid</option><option value="paid">Paid</option></select></label>
         </div>
       </section>
 
@@ -1000,7 +1063,7 @@ function BillingWorkspace() {
               <div className="grid gap-5 xl:grid-cols-[1fr_1fr_auto] xl:items-center">
                 <div><div className="flex flex-wrap items-center gap-2"><h2 className="font-bold text-[#233A59]">{invoice.invoiceNumber}</h2><span className={"rounded-full px-2.5 py-1 text-xs font-bold capitalize " + (invoice.paymentStatus === "paid" ? "bg-emerald-50 text-emerald-800" : invoice.paymentStatus === "partial" ? "bg-amber-50 text-amber-800" : "bg-red-50 text-red-800")}>{invoice.paymentStatus === "partial" ? "Partially paid" : invoice.paymentStatus}</span></div><p className="mt-2 font-semibold text-slate-700">{invoice.patientName}</p><p className="mt-1 text-sm text-slate-500">{invoice.patientNumber || "No patient ID"} · {invoice.patientPhone} · {createdDate(invoice.createdAt)}</p></div>
                 <div className="grid grid-cols-2 gap-x-6 gap-y-1 rounded-xl bg-slate-50 p-4 text-sm"><span className="text-slate-500">Total</span><strong className="text-right text-[#233A59]">{money(invoice.total)}</strong><span className="text-slate-500">Received</span><strong className="text-right text-emerald-700">{money(invoice.amountPaid)}</strong><span className="text-slate-500">Balance</span><strong className="text-right text-red-700">{money(invoice.balance)}</strong><span className="text-slate-500">Last method</span><strong className="text-right text-slate-700">{methodLabel(invoice.paymentMethod)}</strong></div>
-                <div className="flex flex-wrap gap-2 xl:max-w-[250px] xl:justify-end"><button type="button" onClick={() => void downloadReceiptPdf(invoice)} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-[#233A59] hover:bg-slate-50"><Download size={15} /> Receipt PDF</button>{invoice.balance > 0 && <button type="button" onClick={() => beginPayment(invoice)} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-emerald-700 px-3 py-2 text-xs font-bold text-white"><IndianRupee size={15} /> Record payment</button>}</div>
+                <div className="flex flex-wrap gap-2 xl:max-w-[250px] xl:justify-end"><button type="button" disabled={receiptActionId === invoice.id} onClick={() => void prepareReceipt(invoice)} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-[#233A59] hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60">{receiptActionId === invoice.id ? <LoaderCircle className="animate-spin" size={15} /> : <Download size={15} />} {receiptActionId === invoice.id ? "Preparing…" : "Receipt PDF"}</button>{invoice.balance > 0 && <button type="button" onClick={() => beginPayment(invoice)} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-emerald-700 px-3 py-2 text-xs font-bold text-white"><IndianRupee size={15} /> Record payment</button>}</div>
               </div>
 
               {invoicePayments.length > 0 && (

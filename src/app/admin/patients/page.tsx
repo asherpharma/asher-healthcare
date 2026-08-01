@@ -3,15 +3,9 @@
 import ReceptionPayment, {
   type ReceptionInvoice,
 } from "@/components/admin/ReceptionPayment";
+import PatientQuickActions from "@/components/admin/PatientQuickActions";
 import { useStaff } from "@/components/admin/StaffGuard";
 import { firestore, storage } from "@/firebase/config";
-import { preloadClinicPdfAssets } from "@/lib/clinic-pdf";
-import {
-  downloadBlankPrescriptionPdf,
-  downloadPrescriptionPdf,
-  printBlankPrescriptionPdf,
-  printPrescriptionPdf,
-} from "@/lib/prescription-pdf";
 import {
   addDoc,
   collection,
@@ -249,10 +243,6 @@ function PatientRegister() {
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deleting, setDeleting] = useState(false);
   const deepLinkedPatient = useRef("");
-
-  useEffect(() => {
-    void preloadClinicPdfAssets().catch(() => undefined);
-  }, []);
 
   useEffect(() => {
     const openRegistration = () => setShowForm(true);
@@ -760,6 +750,7 @@ function PatientRegister() {
                   </div>
                 </div>
               </div>
+              <PatientQuickActions patient={selectedPatient} />
               <div className="sticky top-[65px] z-20 flex gap-2 overflow-x-auto border-b border-slate-200 bg-white p-2.5 shadow-sm sm:top-[69px]">
                 {tabs.map(({ key, label, icon: Icon, count }) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={"inline-flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-bold " + (activeTab === key ? "bg-[#233A59] text-white" : "text-slate-600 hover:bg-slate-100")}><Icon size={16} />{label}{typeof count === "number" && <span className="rounded-full bg-white/15 px-1.5 text-xs">{count}</span>}</button>)}
               </div>
@@ -810,6 +801,12 @@ function PrescriptionDocumentActions({
     setAction(mode);
     setError("");
     try {
+      const {
+        downloadBlankPrescriptionPdf,
+        downloadPrescriptionPdf,
+        printBlankPrescriptionPdf,
+        printPrescriptionPdf,
+      } = await import("@/lib/prescription-pdf");
       if (prescription) {
         await (mode === "print"
           ? printPrescriptionPdf(patient, prescription)

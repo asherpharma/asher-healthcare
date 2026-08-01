@@ -26,7 +26,7 @@ import {
   TestTube2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 type Patient = {
   id: string;
@@ -115,16 +115,30 @@ function LabDesk() {
   const [resultOrder, setResultOrder] = useState<LabOrder | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | LabStatus>("all");
+  const [priorityFilter, setPriorityFilter] = useState<"all" | LabOrder["priority"]>("all");
+  const [patientsLoaded, setPatientsLoaded] = useState(false);
   const [patientId, setPatientId] = useState("");
   const [selectedTests, setSelectedTests] = useState<string[]>([]);
   const [customTest, setCustomTest] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const deepLinkedPatientHandled = useRef(false);
+
+  useEffect(() => {
+    const requestedPriority = new URLSearchParams(window.location.search).get("priority");
+    if (requestedPriority !== "routine" && requestedPriority !== "urgent") return;
+    const timer = window.setTimeout(() => setPriorityFilter(requestedPriority), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     const patientQuery = query(collection(db, "patients"), orderBy("createdAt", "desc"), limit(300));
     const stopPatients = onSnapshot(patientQuery, (snapshot) => {
       setPatients(snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as Omit<Patient, "id">) })));
+      setPatientsLoaded(true);
+    }, () => {
+      setError("Unable to load patient records.");
+      setPatientsLoaded(true);
     });
     const ordersQuery = query(collection(db, "labOrders"), orderBy("orderedAt", "desc"), limit(300));
     const stopOrders = onSnapshot(ordersQuery, (snapshot) => {
@@ -137,14 +151,32 @@ function LabDesk() {
     return () => { stopPatients(); stopOrders(); };
   }, [db]);
 
+  useEffect(() => {
+    if (!patientsLoaded || deepLinkedPatientHandled.current) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const requestedPatientId = params.get("patient")?.trim();
+    if (params.get("new") !== "1" || !requestedPatientId) return;
+    const deepLinkedPatientExists = patients.some((patient) => patient.id === requestedPatientId);
+    const timer = window.setTimeout(() => {
+      deepLinkedPatientHandled.current = true;
+      if (!deepLinkedPatientExists) return;
+      setPatientId(requestedPatientId);
+      setShowCreate(true);
+      setError("");
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [patients, patientsLoaded]);
+
   const filteredOrders = useMemo(() => {
     const term = search.trim().toLowerCase();
     return orders.filter((order) => {
       const matchesStatus = statusFilter === "all" || order.status === statusFilter;
+      const matchesPriority = priorityFilter === "all" || order.priority === priorityFilter;
       const haystack = [order.orderNumber, order.patientName, order.patientPhone, order.patientNumber, order.tests.join(" ")].join(" ").toLowerCase();
-      return matchesStatus && (!term || haystack.includes(term));
+      return matchesStatus && matchesPriority && (!term || haystack.includes(term));
     });
-  }, [orders, search, statusFilter]);
+  }, [orders, priorityFilter, search, statusFilter]);
 
   const stats = useMemo(() => ({
     active: orders.filter((item) => !["completed", "cancelled"].includes(item.status)).length,
@@ -330,6 +362,11 @@ function LabDesk() {
           <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as "all" | LabStatus)} className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700">
             <option value="all">All statuses</option>
             {statusOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+          </select>
+          <select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value as "all" | LabOrder["priority"])} className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700">
+            <option value="all">All priorities</option>
+            <option value="routine">Routine</option>
+            <option value="urgent">Urgent</option>
           </select>
         </div>
       </div>
