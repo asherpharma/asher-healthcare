@@ -54,25 +54,25 @@ function StaffChrome({ children }: { children: ReactNode }) {
 
   return (
     <div className="staff-app-shell min-h-dvh bg-slate-50 text-slate-950">
-      <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur-xl">
-        <div className="staff-app-header-inner mx-auto flex max-w-[1440px] items-center justify-between gap-2 px-3 py-2.5 lg:gap-3 lg:px-8 lg:py-4">
-          <Link href="/admin" className="flex items-center gap-3">
-            <Image src="/images/logo.png" alt="Asher Healthcare" width={44} height={44} className="h-10 w-10 rounded-xl object-contain lg:h-11 lg:w-11" />
-            <div><p className="font-bold text-[#233A59]"><span className="lg:hidden">Asher Staff</span><span className="hidden lg:inline">Asher Healthcare</span></p><p className="hidden text-xs text-slate-500 lg:block">Secure clinic workspace</p></div>
+      <header className="staff-app-header sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur-xl">
+        <div className="staff-app-header-inner mx-auto flex max-w-[1440px] items-center justify-between gap-2 px-3 py-2.5 xl:gap-3 xl:px-8 xl:py-4">
+          <Link href="/admin" className="flex min-w-0 items-center gap-2.5 xl:gap-3">
+            <Image src="/images/logo.png" alt="Asher Healthcare" width={44} height={44} className="h-10 w-10 shrink-0 rounded-xl object-contain xl:h-11 xl:w-11" />
+            <div className="min-w-0"><p className="truncate font-bold text-[#233A59]"><span className="xl:hidden">Asher Staff</span><span className="hidden xl:inline">Asher Healthcare</span></p><p className="hidden text-xs text-slate-500 xl:block">Secure clinic workspace</p></div>
           </Link>
-          <div className="flex items-center gap-2 lg:gap-3">
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2 xl:gap-3">
             <StaffCommandCenter role={profile.role} />
             <NetworkStatus />
-            <span className="rounded-full bg-[#233A59] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white lg:hidden">{profile.role}</span>
-            <div className="hidden lg:block"><InstallAppButton compact /></div>
-            <div className="hidden text-right lg:block"><p className="text-sm font-bold text-[#233A59]">{profile.displayName}</p><p className="text-xs capitalize text-slate-500">{profile.role}</p></div>
-            <button onClick={logOut} className="hidden items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 lg:inline-flex"><LogOut size={16} />Sign out</button>
+            <span className="staff-role-chip rounded-full bg-[#233A59] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white xl:hidden">{profile.role}</span>
+            <div className="hidden xl:block"><InstallAppButton compact /></div>
+            <div className="hidden text-right xl:block"><p className="text-sm font-bold text-[#233A59]">{profile.displayName}</p><p className="text-xs capitalize text-slate-500">{profile.role}</p></div>
+            <button onClick={logOut} className="hidden items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 xl:inline-flex"><LogOut size={16} />Sign out</button>
           </div>
         </div>
       </header>
       <NavigationFeedback />
-      <div className="mx-auto grid max-w-[1440px] gap-5 px-3 py-4 pb-28 sm:px-5 lg:grid-cols-[230px_1fr] lg:gap-6 lg:px-8 lg:py-8">
-        <aside className="hidden rounded-2xl bg-[#233A59] p-3 text-white lg:block lg:min-h-[calc(100vh-8.5rem)]">
+      <div className="staff-app-layout mx-auto grid w-full max-w-[1440px] gap-5 px-3 py-4 pb-28 sm:px-5 xl:grid-cols-[230px_minmax(0,1fr)] xl:gap-6 xl:px-8 xl:py-8 xl:pb-8">
+        <aside className="staff-desktop-sidebar hidden rounded-2xl bg-[#233A59] p-3 text-white xl:block xl:min-h-[calc(100vh-8.5rem)]">
           <div className="flex items-center gap-2 px-3 py-3 text-xs font-bold uppercase tracking-[0.16em] text-white/60"><Stethoscope size={15} />Staff menu</div>
           <nav className="grid grid-cols-1 gap-2">
             {navigation.filter((item) =>

@@ -326,7 +326,28 @@ img { object-fit: cover; }
   .legal-content section { padding: 26px 22px; }
 }
 
-@media (max-width: 1023px) {
+/* Staff screens stay app-like on phones and tablets; the desktop rail only starts at 1280px. */
+.staff-app-shell {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+.staff-app-layout,
+.staff-app-content,
+.staff-app-content > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.staff-app-content input,
+.staff-app-content select,
+.staff-app-content textarea {
+  min-width: 0;
+  max-width: 100%;
+}
+
+@media (max-width: 1279px) {
   .staff-app-shell {
     background: #f8fafc;
   }
@@ -377,6 +398,51 @@ img { object-fit: cover; }
   .staff-app-content h1 {
     font-size: clamp(1.75rem, 7vw, 2.25rem);
     line-height: 1.08;
+  }
+}
+
+@media (max-width: 639px) {
+  .staff-app-header {
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .staff-app-layout {
+    padding-inline: 10px;
+    padding-top: 12px;
+    padding-bottom: calc(6.5rem + env(safe-area-inset-bottom));
+  }
+
+  .staff-app-content .staff-page-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .staff-app-content .staff-page-actions > *,
+  .staff-app-content .staff-page-heading > button,
+  .staff-app-content form button[type="submit"] {
+    width: 100%;
+  }
+
+  .staff-app-content input,
+  .staff-app-content select,
+  .staff-app-content textarea {
+    font-size: 16px;
+  }
+
+  .staff-app-content section[class*="rounded-3xl"],
+  .staff-app-content article[class*="rounded-3xl"],
+  .staff-app-content div[class*="rounded-3xl"] {
+    border-radius: 1.25rem;
+  }
+
+  .staff-app-content [class*="break-all"],
+  .staff-app-content [class*="break-words"] {
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (max-width: 359px) {
+  .staff-role-chip {
+    display: none;
   }
 }
 

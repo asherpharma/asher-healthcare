@@ -60,7 +60,7 @@ export default function MobileStaffNav({ role, onLogout }: { role: string; onLog
     <>
       <nav
         aria-label="Staff app navigation"
-        className="fixed inset-x-0 bottom-0 z-50 border-t border-slate-200 bg-white/95 px-2 shadow-[0_-12px_35px_rgba(15,23,42,0.12)] backdrop-blur-xl lg:hidden"
+        className="staff-mobile-nav fixed inset-x-0 bottom-0 z-50 border-t border-slate-200 bg-white/95 px-2 shadow-[0_-12px_35px_rgba(15,23,42,0.12)] backdrop-blur-xl xl:hidden"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
         <div className="mx-auto grid max-w-[600px] grid-cols-4">
@@ -98,7 +98,7 @@ export default function MobileStaffNav({ role, onLogout }: { role: string; onLog
       </nav>
 
       {moreOpen ? (
-        <div className="fixed inset-0 z-[70] lg:hidden">
+        <div className="staff-mobile-nav fixed inset-0 z-[70] xl:hidden">
           <button type="button" aria-label="Close more menu" onClick={() => setMoreOpen(false)} className="absolute inset-0 bg-slate-950/50 backdrop-blur-sm" />
           <section
             role="dialog"
