@@ -36,9 +36,17 @@ export function PwaRegister() {
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.addEventListener("controllerchange", onControllerChange);
 
+      const isStaffApp =
+        window.location.pathname === "/admin" ||
+        window.location.pathname.startsWith("/admin/");
+      const workerUrl = isStaffApp
+        ? "/staff-v2-sw.js?v=asher-staff-mobile-v2"
+        : "/sw.js?v=asher-public-20260802";
+      const workerScope = isStaffApp ? "/admin" : "/";
+
       void navigator.serviceWorker
-        .register("/sw.js?v=asher-staff-20260802", {
-          scope: "/",
+        .register(workerUrl, {
+          scope: workerScope,
           updateViaCache: "none",
         })
         .then(async (registration) => {

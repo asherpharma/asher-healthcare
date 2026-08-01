@@ -1,0 +1,41 @@
+{
+  "id": "/admin/mobile-v2",
+  "name": "Asher Healthcare Staff Mobile V2",
+  "short_name": "Asher Staff V2",
+  "description": "A dedicated mobile-first clinic workspace for Asher Healthcare staff.",
+  "start_url": "/admin?app=mobile-v2",
+  "scope": "/admin",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "background_color": "#f8fafc",
+  "theme_color": "#071f33",
+  "orientation": "portrait-primary",
+  "categories": ["medical", "business", "productivity"],
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    { "name": "Appointments", "short_name": "Bookings", "url": "/admin/appointments" },
+    { "name": "Register Patient", "short_name": "New Patient", "url": "/admin/patients" },
+    { "name": "Billing", "short_name": "Billing", "url": "/admin/billing" },
+    { "name": "Consultations", "short_name": "Consult", "url": "/admin/consultations" }
+  ]
+}

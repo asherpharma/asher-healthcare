@@ -348,6 +348,114 @@ function MetricBar({ label, value, total, display, tone = "bg-[#233A59]" }: {
   );
 }
 
+type MobileAdminMetrics = {
+  visits: number;
+  uniqueVisitors: number;
+  collected: number;
+  paymentCount: number;
+  newPatients: number;
+  totalPatients: number;
+  billed: number;
+  invoiceCount: number;
+  outstanding: number;
+  collectionRate: number;
+  todayAppointments: number;
+  openTasks: number;
+  overdueTasks: number;
+  activeLabs: number;
+  doctorMetrics: Array<{
+    doctorName: string;
+    visits: number;
+    uniquePatients: number;
+    billed: number;
+    collected: number;
+  }>;
+};
+
+function MobileAdminDashboard({
+  metrics,
+  range,
+  loading,
+  error,
+  lastUpdated,
+  onRangeChange,
+  onRefresh,
+}: {
+  metrics: MobileAdminMetrics;
+  range: DashboardRange;
+  loading: boolean;
+  error: string;
+  lastUpdated: Date | null;
+  onRangeChange: (range: DashboardRange) => void;
+  onRefresh: () => void;
+}) {
+  const quickActions = [
+    { href: "/admin/patients", label: "Register a patient", detail: "Create visit, fee and documents", icon: UserRoundCheck, tone: "bg-[#fff6d9] text-amber-950" },
+    { href: "/admin/appointments", label: "Manage appointments", detail: "Confirm today’s clinic schedule", icon: CalendarCheck2, tone: "bg-blue-50 text-blue-950" },
+    { href: "/admin/billing", label: "Collect a payment", detail: "Open QR, receipt and balances", icon: IndianRupee, tone: "bg-emerald-50 text-emerald-950" },
+    { href: "/admin/consultations", label: "Doctor workspace", detail: "Open consultation and prescription tools", icon: Stethoscope, tone: "bg-violet-50 text-violet-950" },
+  ];
+  const summary = [
+    { label: "Patients", value: number(metrics.visits), hint: `${number(metrics.uniqueVisitors)} unique`, icon: UserRoundCheck, tone: "bg-blue-50 text-blue-700" },
+    { label: "Collected", value: money(metrics.collected), hint: `${number(metrics.paymentCount)} payments`, icon: IndianRupee, tone: "bg-emerald-50 text-emerald-700" },
+    { label: "New patients", value: number(metrics.newPatients), hint: `${number(metrics.totalPatients)} total`, icon: UsersRound, tone: "bg-violet-50 text-violet-700" },
+    { label: "Balance due", value: money(metrics.outstanding), hint: `${metrics.collectionRate.toFixed(0)}% collected`, icon: WalletCards, tone: "bg-rose-50 text-rose-700" },
+  ];
+
+  return (
+    <div className="admin-mobile-dashboard space-y-4 xl:hidden">
+      <section className="relative overflow-hidden rounded-[32px] bg-[#071f33] p-6 text-white shadow-xl">
+        <div className="absolute -right-16 -top-20 h-48 w-48 rounded-full bg-[#d4a75f]/20 blur-3xl" />
+        <div className="relative">
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#e9c879]">Asher management</p>
+          <h1 className="mt-3 text-3xl font-bold tracking-tight">Clinic at a glance.</h1>
+          <p className="mt-3 max-w-2xl text-sm leading-6 text-white/70">Your essential clinic activity and fastest staff actions, designed for a phone.</p>
+          <div className="mt-6 grid grid-cols-2 gap-3">
+            <Link href="/admin/patients" className="flex min-h-14 items-center justify-center gap-2 rounded-2xl bg-[#d4a75f] px-3 text-sm font-bold text-[#071f33]"><UserRoundCheck size={18} />New patient</Link>
+            <Link href="/admin/appointments" className="flex min-h-14 items-center justify-center gap-2 rounded-2xl bg-white/10 px-3 text-sm font-bold text-white ring-1 ring-white/15"><CalendarCheck2 size={18} />Bookings</Link>
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-[30px] border border-amber-200/70 bg-[#fff9e8] p-5 shadow-sm">
+        <div className="flex items-start justify-between gap-3">
+          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-700">Performance</p><h2 className="mt-1 text-xl font-bold text-[#233A59]">{rangeLabel(range)} summary</h2></div>
+          <button type="button" onClick={onRefresh} disabled={loading} aria-label="Refresh clinic summary" className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-white text-[#233A59] shadow-sm ring-1 ring-amber-200 disabled:opacity-50">{loading ? <LoaderCircle className="animate-spin" size={18} /> : <RefreshCw size={18} />}</button>
+        </div>
+        <div className="mt-4 grid grid-cols-3 rounded-2xl bg-white/80 p-1 ring-1 ring-amber-200/70">
+          {(["today", "month", "all"] as DashboardRange[]).map((option) => <button key={option} type="button" onClick={() => onRangeChange(option)} aria-pressed={range === option} className={`min-h-10 rounded-xl px-2 text-xs font-bold ${range === option ? "bg-[#233A59] text-white" : "text-slate-600"}`}>{rangeLabel(option)}</button>)}
+        </div>
+        <div className="mt-4 grid grid-cols-2 gap-3">
+          {summary.map((item) => { const Icon = item.icon; return <article key={item.label} className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-black/5"><span className={`grid h-10 w-10 place-items-center rounded-xl ${item.tone}`}><Icon size={19} /></span><p className="mt-4 text-xl font-bold tracking-tight text-[#233A59]">{loading ? "—" : item.value}</p><p className="mt-1 text-sm font-bold text-slate-800">{item.label}</p><p className="mt-1 text-xs text-slate-500">{item.hint}</p></article>; })}
+        </div>
+        <p className="mt-4 text-xs text-slate-500">{lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}` : "Loading live clinic records…"}</p>
+      </section>
+
+      {error ? <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700"><AlertCircle size={19} className="mt-0.5 shrink-0" />{error}</div> : null}
+
+      <section className="space-y-3">
+        <div className="px-1"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#A8864A]">One-tap workflow</p><h2 className="mt-1 text-2xl font-bold text-[#233A59]">What would you like to do?</h2></div>
+        {quickActions.map((action) => { const Icon = action.icon; return <Link key={action.href} href={action.href} className={`flex min-h-28 items-center gap-4 rounded-[28px] p-5 shadow-sm ring-1 ring-black/5 transition active:scale-[0.99] ${action.tone}`}><span className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-white/75 shadow-sm"><Icon size={25} /></span><span className="min-w-0 flex-1"><span className="block text-lg font-bold">{action.label}</span><span className="mt-1 block text-sm leading-5 opacity-65">{action.detail}</span></span><ArrowRight className="shrink-0" size={20} /></Link>; })}
+      </section>
+
+      <section className="rounded-[30px] bg-white p-5 shadow-sm ring-1 ring-slate-200">
+        <div className="flex items-center justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#A8864A]">Doctor-wise</p><h2 className="mt-1 text-xl font-bold text-[#233A59]">Visits and collections</h2></div><Stethoscope className="text-[#A8864A]" size={24} /></div>
+        <div className="mt-4 space-y-3">
+          {metrics.doctorMetrics.map((doctor) => <article key={doctor.doctorName} className="rounded-2xl bg-slate-50 p-4"><p className="font-bold text-[#233A59]">{doctor.doctorName}</p><div className="mt-3 grid grid-cols-2 gap-3 text-sm"><div><p className="text-xl font-bold text-[#233A59]">{number(doctor.visits)}</p><p className="text-xs text-slate-500">Visits</p></div><div><p className="text-xl font-bold text-emerald-700">{money(doctor.collected)}</p><p className="text-xs text-slate-500">Collected</p></div></div></article>)}
+        </div>
+      </section>
+
+      <section className="rounded-[30px] bg-[#233A59] p-5 text-white shadow-lg">
+        <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#D4B678]">Today at the clinic</p>
+        <h2 className="mt-1 text-xl font-bold">Operational pulse</h2>
+        <div className="mt-5 grid grid-cols-2 gap-3">
+          {[ ["Appointments", metrics.todayAppointments], ["Open tasks", metrics.openTasks], ["Overdue", metrics.overdueTasks], ["Lab orders", metrics.activeLabs] ].map(([label, value]) => <div key={String(label)} className="rounded-2xl bg-white/10 p-4"><p className="text-2xl font-bold">{number(Number(value))}</p><p className="mt-1 text-xs font-semibold text-white/65">{label}</p></div>)}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function AdminDashboard() {
   const [data, setData] = useState<DashboardData>(emptyData);
   const [range, setRange] = useState<DashboardRange>("month");
@@ -527,7 +635,33 @@ function AdminDashboard() {
   const appointmentTotal = Object.values(analytics.appointmentStatus).reduce((sum, value) => sum + value, 0);
 
   return (
-    <div>
+    <>
+      <MobileAdminDashboard
+        metrics={{
+          visits: analytics.visits,
+          uniqueVisitors: analytics.uniqueVisitors,
+          collected: analytics.collected,
+          paymentCount: analytics.periodPayments.length,
+          newPatients: analytics.newPatients,
+          totalPatients: analytics.totalPatients,
+          billed: analytics.billed,
+          invoiceCount: analytics.periodInvoices.length,
+          outstanding: analytics.outstanding,
+          collectionRate: analytics.collectionRate,
+          todayAppointments: analytics.todayAppointments,
+          openTasks: analytics.openTasks,
+          overdueTasks: analytics.overdueTasks,
+          activeLabs: analytics.activeLabs,
+          doctorMetrics: analytics.doctorMetrics,
+        }}
+        range={range}
+        loading={loading}
+        error={error}
+        lastUpdated={lastUpdated}
+        onRangeChange={setRange}
+        onRefresh={() => void refresh()}
+      />
+      <div className="admin-desktop-dashboard hidden xl:block">
       <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <div className="flex items-center gap-2 text-sm font-bold uppercase tracking-[0.16em] text-[#A8864A]">
@@ -702,7 +836,8 @@ function AdminDashboard() {
       </section>
 
       <p className="mt-5 flex items-center gap-2 text-xs leading-5 text-slate-500"><CheckCircle2 size={15} className="shrink-0 text-emerald-600" />Doctor-wise collections are attributed using each patient’s assigned consulting doctor. Visit totals combine registrations, completed appointments, and clinical visit entries without counting the same patient twice on the same day with the same doctor.</p>
-    </div>
+      </div>
+    </>
   );
 }
 

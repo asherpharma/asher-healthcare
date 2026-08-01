@@ -53,7 +53,7 @@ function StaffChrome({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="staff-app-shell min-h-dvh bg-slate-50 text-slate-950">
+    <div data-app-version="mobile-v2" className="staff-app-shell min-h-dvh bg-slate-50 text-slate-950">
       <header className="staff-app-header sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur-xl">
         <div className="staff-app-header-inner mx-auto flex max-w-[1440px] items-center justify-between gap-2 px-3 py-2.5 xl:gap-3 xl:px-8 xl:py-4">
           <Link href="/admin" className="flex min-w-0 items-center gap-2.5 xl:gap-3">
@@ -63,7 +63,7 @@ function StaffChrome({ children }: { children: ReactNode }) {
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2 xl:gap-3">
             <StaffCommandCenter role={profile.role} />
             <NetworkStatus />
-            <span className="staff-role-chip rounded-full bg-[#233A59] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white xl:hidden">{profile.role}</span>
+            <span className="staff-role-chip rounded-full bg-[#233A59] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white xl:hidden">V2 {profile.role}</span>
             <div className="hidden xl:block"><InstallAppButton compact /></div>
             <div className="hidden text-right xl:block"><p className="text-sm font-bold text-[#233A59]">{profile.displayName}</p><p className="text-xs capitalize text-slate-500">{profile.role}</p></div>
             <button onClick={logOut} className="hidden items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 xl:inline-flex"><LogOut size={16} />Sign out</button>

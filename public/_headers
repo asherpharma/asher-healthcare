@@ -11,6 +11,13 @@
 /manifest.webmanifest
   Cache-Control: no-cache, no-store, must-revalidate
 
+/staff-v2.webmanifest
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/staff-v2-sw.js
+  Cache-Control: no-cache, no-store, must-revalidate
+  Service-Worker-Allowed: /admin
+
 /admin
   Cache-Control: no-cache, no-store, must-revalidate
   X-Robots-Tag: noindex, nofollow

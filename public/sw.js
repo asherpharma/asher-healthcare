@@ -1,4 +1,4 @@
-const APP_RELEASE = "2026.08.02.1";
+const APP_RELEASE = "2026.08.02.2-mobile-v2";
 const CACHE_NAME = `asher-public-${APP_RELEASE}`;
 const PUBLIC_ASSETS = [
   "/",
