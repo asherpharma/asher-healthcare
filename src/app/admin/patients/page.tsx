@@ -175,6 +175,12 @@ type RegistrationResult = {
 const inputClass = "mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 font-normal text-slate-900 outline-none transition focus:border-[#233A59] focus:ring-2 focus:ring-[#233A59]/10";
 const labelClass = "text-sm font-bold text-slate-700";
 const cardClass = "rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200";
+const allowedReportTypes = new Map([
+  ["application/pdf", new Set(["pdf"])],
+  ["image/jpeg", new Set(["jpg", "jpeg"])],
+  ["image/png", new Set(["png"])],
+  ["image/webp", new Set(["webp"])],
+]);
 
 function text(form: FormData, name: string) {
   return String(form.get(name) ?? "").trim();
@@ -243,6 +249,7 @@ function PatientRegister() {
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deleting, setDeleting] = useState(false);
   const deepLinkedPatient = useRef("");
+  const canEditClinical = profile.role === "admin" || profile.role === "doctor";
 
   useEffect(() => {
     const openRegistration = () => setShowForm(true);
@@ -458,17 +465,20 @@ function PatientRegister() {
     setSaving(true);
     const form = new FormData(event.currentTarget);
     try {
-      await updateDoc(doc(db, "patients", selectedPatient.id), {
+      const profileUpdates: Record<string, unknown> = {
         fullName: text(form, "fullName"),
         phone: text(form, "phone"),
         dateOfBirth: text(form, "dateOfBirth"),
         gender: text(form, "gender"),
         doctorName: text(form, "doctorName"),
         address: text(form, "address"),
-        allergies: text(form, "allergies"),
-        medicalHistory: text(form, "medicalHistory"),
         updatedAt: serverTimestamp(),
-      });
+      };
+      if (canEditClinical) {
+        profileUpdates.allergies = text(form, "allergies");
+        profileUpdates.medicalHistory = text(form, "medicalHistory");
+      }
+      await updateDoc(doc(db, "patients", selectedPatient.id), profileUpdates);
       setShowEdit(false);
       setMessage("Patient profile updated.");
     } catch {
@@ -536,6 +546,10 @@ function PatientRegister() {
   async function saveRecord(event: FormEvent<HTMLFormElement>, collectionName: string, payload: Record<string, unknown>) {
     event.preventDefault();
     if (!selectedPatient) return;
+    if (!canEditClinical) {
+      setMessage("Clinical records are read-only for reception staff.");
+      return;
+    }
     const recordForm = event.currentTarget;
     setSaving(true);
     setMessage("");
@@ -567,8 +581,10 @@ function PatientRegister() {
       setMessage("Choose a PDF or image to upload.");
       return;
     }
-    if (file.type !== "application/pdf" && !file.type.startsWith("image/")) {
-      setMessage("Only PDF and image reports are allowed.");
+    const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+    const allowedExtensions = allowedReportTypes.get(file.type);
+    if (!allowedExtensions?.has(extension)) {
+      setMessage("Only PDF, JPEG, PNG or WebP reports are allowed.");
       return;
     }
     if (file.size >= 10 * 1024 * 1024) {
@@ -578,7 +594,9 @@ function PatientRegister() {
 
     setUploading(true);
     setMessage("");
-    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-") || "report";
+    const sourceBaseName = file.name.replace(/\.[^.]+$/, "");
+    const safeBaseName = sourceBaseName.replace(/[^a-zA-Z0-9_-]/g, "-") || "report";
+    const safeName = `${safeBaseName}.${extension}`;
     const storagePath = "reports/" + selectedPatient.id + "/" + Date.now() + "-" + safeName;
     try {
       await uploadBytes(ref(files, storagePath), file, {
@@ -755,13 +773,13 @@ function PatientRegister() {
                 {tabs.map(({ key, label, icon: Icon, count }) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={"inline-flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-bold " + (activeTab === key ? "bg-[#233A59] text-white" : "text-slate-600 hover:bg-slate-100")}><Icon size={16} />{label}{typeof count === "number" && <span className="rounded-full bg-white/15 px-1.5 text-xs">{count}</span>}</button>)}
               </div>
               <div className="p-5 sm:p-7">
-                {activeTab === "overview" && <Overview patient={selectedPatient} showEdit={showEdit} setShowEdit={setShowEdit} editPatient={editPatient} saving={saving} />}
+                {activeTab === "overview" && <Overview canEditClinical={canEditClinical} patient={selectedPatient} showEdit={showEdit} setShowEdit={setShowEdit} editPatient={editPatient} saving={saving} />}
                 {activeTab === "timeline" && <TimelinePanel items={timeline} vaccinations={vaccinations} pregnancyRecords={pregnancyRecords} />}
-                {activeTab === "visits" && <VisitsPanel records={visits} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "visits", { visitDate: text(form, "visitDate"), doctorName: text(form, "doctorName"), chiefComplaint: text(form, "chiefComplaint"), vitals: text(form, "vitals"), diagnosis: text(form, "diagnosis"), treatment: text(form, "treatment"), followUpDate: text(form, "followUpDate"), notes: text(form, "notes") }); }} />}
-                {activeTab === "prescriptions" && <PrescriptionsPanel patient={selectedPatient} records={prescriptions} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "prescriptions", { prescribedDate: text(form, "prescribedDate"), doctorName: text(form, "doctorName"), medicines: [{ name: text(form, "medicineName"), dose: text(form, "dose"), frequency: text(form, "frequency"), duration: text(form, "duration"), instructions: text(form, "instructions") }], advice: text(form, "advice") }); }} />}
-                {activeTab === "growth" && <GrowthPanel records={growthRecords} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); const weightKg = numericValue(form, "weightKg"); const heightCm = numericValue(form, "heightCm"); const headCircumferenceCm = numericValue(form, "headCircumferenceCm"); if (!weightKg && !heightCm && !headCircumferenceCm) { event.preventDefault(); setMessage("Add at least one growth measurement before saving."); return Promise.resolve(); } const bmi = weightKg && heightCm ? Number((weightKg / ((heightCm / 100) ** 2)).toFixed(1)) : null; return saveRecord(event, "growthRecords", { measuredDate: text(form, "measuredDate"), weightKg, heightCm, headCircumferenceCm, bmi, milestone: text(form, "milestone"), nutritionNotes: text(form, "nutritionNotes"), clinician: text(form, "clinician") }); }} />}
-                {activeTab === "vaccinations" && <VaccinationsPanel records={vaccinations} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "vaccinations", { vaccineName: text(form, "vaccineName"), doseNumber: text(form, "doseNumber"), administeredDate: text(form, "administeredDate"), nextDueDate: text(form, "nextDueDate"), batchNumber: text(form, "batchNumber"), manufacturer: text(form, "manufacturer"), expiryDate: text(form, "expiryDate"), route: text(form, "route"), site: text(form, "site"), administeredBy: text(form, "administeredBy"), adverseEvents: text(form, "adverseEvents"), notes: text(form, "notes") }); }} />}
-                {activeTab === "pregnancy" && <PregnancyPanel records={pregnancyRecords} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "pregnancyRecords", { recordedDate: text(form, "recordedDate"), lmpDate: text(form, "lmpDate"), eddDate: text(form, "eddDate"), gestationalWeeks: text(form, "gestationalWeeks"), bloodPressure: text(form, "bloodPressure"), weight: text(form, "weight"), fetalHeartRate: text(form, "fetalHeartRate"), nextVisitDate: text(form, "nextVisitDate"), gravida: text(form, "gravida"), para: text(form, "para"), riskLevel: text(form, "riskLevel"), riskFactors: text(form, "riskFactors"), symptoms: text(form, "symptoms"), fundalHeight: text(form, "fundalHeight"), fetalMovement: text(form, "fetalMovement"), investigations: text(form, "investigations"), carePlan: text(form, "carePlan"), notes: text(form, "notes") }); }} />}
+                {activeTab === "visits" && <VisitsPanel canEdit={canEditClinical} records={visits} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "visits", { visitDate: text(form, "visitDate"), doctorName: text(form, "doctorName"), chiefComplaint: text(form, "chiefComplaint"), vitals: text(form, "vitals"), diagnosis: text(form, "diagnosis"), treatment: text(form, "treatment"), followUpDate: text(form, "followUpDate"), notes: text(form, "notes") }); }} />}
+                {activeTab === "prescriptions" && <PrescriptionsPanel canEdit={canEditClinical} patient={selectedPatient} records={prescriptions} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "prescriptions", { prescribedDate: text(form, "prescribedDate"), doctorName: text(form, "doctorName"), medicines: [{ name: text(form, "medicineName"), dose: text(form, "dose"), frequency: text(form, "frequency"), duration: text(form, "duration"), instructions: text(form, "instructions") }], advice: text(form, "advice") }); }} />}
+                {activeTab === "growth" && <GrowthPanel canEdit={canEditClinical} records={growthRecords} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); const weightKg = numericValue(form, "weightKg"); const heightCm = numericValue(form, "heightCm"); const headCircumferenceCm = numericValue(form, "headCircumferenceCm"); if (!weightKg && !heightCm && !headCircumferenceCm) { event.preventDefault(); setMessage("Add at least one growth measurement before saving."); return Promise.resolve(); } const bmi = weightKg && heightCm ? Number((weightKg / ((heightCm / 100) ** 2)).toFixed(1)) : null; return saveRecord(event, "growthRecords", { measuredDate: text(form, "measuredDate"), weightKg, heightCm, headCircumferenceCm, bmi, milestone: text(form, "milestone"), nutritionNotes: text(form, "nutritionNotes"), clinician: text(form, "clinician") }); }} />}
+                {activeTab === "vaccinations" && <VaccinationsPanel canEdit={canEditClinical} records={vaccinations} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "vaccinations", { vaccineName: text(form, "vaccineName"), doseNumber: text(form, "doseNumber"), administeredDate: text(form, "administeredDate"), nextDueDate: text(form, "nextDueDate"), batchNumber: text(form, "batchNumber"), manufacturer: text(form, "manufacturer"), expiryDate: text(form, "expiryDate"), route: text(form, "route"), site: text(form, "site"), administeredBy: text(form, "administeredBy"), adverseEvents: text(form, "adverseEvents"), notes: text(form, "notes") }); }} />}
+                {activeTab === "pregnancy" && <PregnancyPanel canEdit={canEditClinical} records={pregnancyRecords} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "pregnancyRecords", { recordedDate: text(form, "recordedDate"), lmpDate: text(form, "lmpDate"), eddDate: text(form, "eddDate"), gestationalWeeks: text(form, "gestationalWeeks"), bloodPressure: text(form, "bloodPressure"), weight: text(form, "weight"), fetalHeartRate: text(form, "fetalHeartRate"), nextVisitDate: text(form, "nextVisitDate"), gravida: text(form, "gravida"), para: text(form, "para"), riskLevel: text(form, "riskLevel"), riskFactors: text(form, "riskFactors"), symptoms: text(form, "symptoms"), fundalHeight: text(form, "fundalHeight"), fetalMovement: text(form, "fetalMovement"), investigations: text(form, "investigations"), carePlan: text(form, "carePlan"), notes: text(form, "notes") }); }} />}
                 {activeTab === "reports" && <ReportsPanel records={reports} uploading={uploading} actionId={reportActionId} onUpload={uploadReport} onAccess={accessReport} />}
               </div>
             </div>
@@ -870,7 +888,7 @@ function BlankPrescriptionAction({ patient }: { patient: Patient }) {
   );
 }
 
-function Overview({ patient, showEdit, setShowEdit, editPatient, saving }: { patient: Patient; showEdit: boolean; setShowEdit: (value: boolean) => void; editPatient: (event: FormEvent<HTMLFormElement>) => Promise<void>; saving: boolean }) {
+function Overview({ canEditClinical, patient, showEdit, setShowEdit, editPatient, saving }: { canEditClinical: boolean; patient: Patient; showEdit: boolean; setShowEdit: (value: boolean) => void; editPatient: (event: FormEvent<HTMLFormElement>) => Promise<void>; saving: boolean }) {
   if (showEdit) {
     return (
       <form key={patient.id} onSubmit={editPatient} className="grid gap-4 sm:grid-cols-2">
@@ -882,8 +900,7 @@ function Overview({ patient, showEdit, setShowEdit, editPatient, saving }: { pat
         <label className={labelClass}>Gender<select name="gender" defaultValue={patient.gender} className={inputClass}><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option></select></label>
         <label className={labelClass + " sm:col-span-2"}>Consulting doctor<select name="doctorName" required defaultValue={patient.doctorName ?? ""} className={inputClass}><option value="" disabled>Select doctor</option><option>Dr. Lt Col Shafi Ahamad</option><option>Dr. Shaik Reshma</option></select></label>
         <label className={labelClass + " sm:col-span-2"}>Address<textarea name="address" defaultValue={patient.address} rows={2} className={inputClass} /></label>
-        <label className={labelClass}>Known allergies<textarea name="allergies" defaultValue={patient.allergies} rows={3} className={inputClass} /></label>
-        <label className={labelClass}>Medical history<textarea name="medicalHistory" defaultValue={patient.medicalHistory} rows={3} className={inputClass} /></label>
+        {canEditClinical ? <><label className={labelClass}>Known allergies<textarea name="allergies" defaultValue={patient.allergies} rows={3} className={inputClass} /></label><label className={labelClass}>Medical history<textarea name="medicalHistory" defaultValue={patient.medicalHistory} rows={3} className={inputClass} /></label></> : <div className="sm:col-span-2"><ClinicalReadOnlyNotice /></div>}
         <div className="flex gap-3 sm:col-span-2"><SaveButton saving={saving} label="Update profile" /><button type="button" onClick={() => setShowEdit(false)} className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold">Cancel</button></div>
       </form>
     );
@@ -921,15 +938,20 @@ function Info({ label, value, alert = false }: { label: string; value: string; a
   return <div className={"rounded-2xl p-4 " + (alert ? "bg-amber-50 ring-1 ring-amber-200" : "bg-slate-50")}><p className="text-xs font-bold uppercase tracking-wider text-slate-500">{label}</p><p className="mt-2 whitespace-pre-wrap text-sm font-medium capitalize text-slate-800">{value}</p></div>;
 }
 
-function VisitsPanel({ records, saving, onSave }: { records: VisitRecord[]; saving: boolean; onSave: (event: FormEvent<HTMLFormElement>) => Promise<void> }) {
-  return <div><SectionHeading icon={Stethoscope} title="Visit history" action="Consultation notes and follow-up" /><form onSubmit={onSave} className="grid gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2"><label className={labelClass}>Visit date<input name="visitDate" type="date" required className={inputClass} /></label><label className={labelClass}>Doctor<select name="doctorName" required defaultValue="" className={inputClass}><option value="" disabled>Select doctor</option><option>Dr. Lt Col Shafi Ahamad</option><option>Dr. Shaik Reshma</option></select></label><label className={labelClass + " sm:col-span-2"}>Chief complaint<textarea name="chiefComplaint" required rows={2} className={inputClass} /></label><label className={labelClass}>Vitals<input name="vitals" placeholder="Temp, pulse, BP, weight" className={inputClass} /></label><label className={labelClass}>Follow-up date<input name="followUpDate" type="date" className={inputClass} /></label><label className={labelClass}>Diagnosis<textarea name="diagnosis" required rows={3} className={inputClass} /></label><label className={labelClass}>Treatment plan<textarea name="treatment" rows={3} className={inputClass} /></label><label className={labelClass + " sm:col-span-2"}>Clinical notes<textarea name="notes" rows={2} className={inputClass} /></label><div className="sm:col-span-2"><SaveButton saving={saving} label="Add visit" /></div></form><div className="mt-5 space-y-3">{records.map((record) => <article key={record.id} className="rounded-2xl border border-slate-200 p-4"><div className="flex flex-wrap justify-between gap-2"><p className="font-bold text-[#233A59]">{record.visitDate} · {record.doctorName}</p><span className="text-xs text-slate-500">{formatCreatedAt(record.createdAt)}</span></div><p className="mt-3 text-sm font-medium text-slate-800">{record.chiefComplaint}</p><p className="mt-2 text-sm text-slate-600"><strong>Diagnosis:</strong> {record.diagnosis}</p>{record.treatment && <p className="mt-1 text-sm text-slate-600"><strong>Plan:</strong> {record.treatment}</p>}{record.followUpDate && <p className="mt-3 inline-flex items-center gap-1 rounded-lg bg-blue-50 px-2 py-1 text-xs font-bold text-blue-800"><CalendarClock size={13} /> Follow-up {record.followUpDate}</p>}</article>)}{records.length === 0 && <Empty label="No visits recorded yet" />}</div></div>;
+function ClinicalReadOnlyNotice() {
+  return <div className="mb-5 rounded-2xl bg-blue-50 p-4 text-sm text-blue-900 ring-1 ring-blue-100"><p className="font-bold">Clinical history · read only</p><p className="mt-1 leading-6 text-blue-800">Reception staff can review this record. A doctor or administrator must add or change clinical entries.</p></div>;
 }
 
-function PrescriptionsPanel({ patient, records, saving, onSave }: { patient: Patient; records: PrescriptionRecord[]; saving: boolean; onSave: (event: FormEvent<HTMLFormElement>) => Promise<void> }) {
+function VisitsPanel({ canEdit, records, saving, onSave }: { canEdit: boolean; records: VisitRecord[]; saving: boolean; onSave: (event: FormEvent<HTMLFormElement>) => Promise<void> }) {
+  return <div><SectionHeading icon={Stethoscope} title="Visit history" action="Consultation notes and follow-up" />{!canEdit && <ClinicalReadOnlyNotice />}<form onSubmit={onSave} className={(canEdit ? "grid" : "hidden") + " gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2"}><label className={labelClass}>Visit date<input name="visitDate" type="date" required className={inputClass} /></label><label className={labelClass}>Doctor<select name="doctorName" required defaultValue="" className={inputClass}><option value="" disabled>Select doctor</option><option>Dr. Lt Col Shafi Ahamad</option><option>Dr. Shaik Reshma</option></select></label><label className={labelClass + " sm:col-span-2"}>Chief complaint<textarea name="chiefComplaint" required rows={2} className={inputClass} /></label><label className={labelClass}>Vitals<input name="vitals" placeholder="Temp, pulse, BP, weight" className={inputClass} /></label><label className={labelClass}>Follow-up date<input name="followUpDate" type="date" className={inputClass} /></label><label className={labelClass}>Diagnosis<textarea name="diagnosis" required rows={3} className={inputClass} /></label><label className={labelClass}>Treatment plan<textarea name="treatment" rows={3} className={inputClass} /></label><label className={labelClass + " sm:col-span-2"}>Clinical notes<textarea name="notes" rows={2} className={inputClass} /></label><div className="sm:col-span-2"><SaveButton saving={saving} label="Add visit" /></div></form><div className="mt-5 space-y-3">{records.map((record) => <article key={record.id} className="rounded-2xl border border-slate-200 p-4"><div className="flex flex-wrap justify-between gap-2"><p className="font-bold text-[#233A59]">{record.visitDate} · {record.doctorName}</p><span className="text-xs text-slate-500">{formatCreatedAt(record.createdAt)}</span></div><p className="mt-3 text-sm font-medium text-slate-800">{record.chiefComplaint}</p><p className="mt-2 text-sm text-slate-600"><strong>Diagnosis:</strong> {record.diagnosis}</p>{record.treatment && <p className="mt-1 text-sm text-slate-600"><strong>Plan:</strong> {record.treatment}</p>}{record.followUpDate && <p className="mt-3 inline-flex items-center gap-1 rounded-lg bg-blue-50 px-2 py-1 text-xs font-bold text-blue-800"><CalendarClock size={13} /> Follow-up {record.followUpDate}</p>}</article>)}{records.length === 0 && <Empty label="No visits recorded yet" />}</div></div>;
+}
+
+function PrescriptionsPanel({ canEdit, patient, records, saving, onSave }: { canEdit: boolean; patient: Patient; records: PrescriptionRecord[]; saving: boolean; onSave: (event: FormEvent<HTMLFormElement>) => Promise<void> }) {
   return (
     <div>
       <SectionHeading icon={FileHeart} title="Prescriptions" action="Medication history and clinic-branded PDF prescriptions" />
-      <form onSubmit={onSave} className="grid gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2">
+      {!canEdit && <ClinicalReadOnlyNotice />}
+      <form onSubmit={onSave} className={(canEdit ? "grid" : "hidden") + " gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2"}>
         <label className={labelClass}>Prescription date<input name="prescribedDate" type="date" required className={inputClass} /></label>
         <label className={labelClass}>Doctor<select name="doctorName" required defaultValue="" className={inputClass}><option value="" disabled>Select doctor</option><option>Dr. Lt Col Shafi Ahamad</option><option>Dr. Shaik Reshma</option></select></label>
         <label className={labelClass + " sm:col-span-2"}>Medicine<input name="medicineName" required className={inputClass} /></label>
@@ -1026,12 +1048,13 @@ function MiniTrend({ records, metric, label, unit, icon: Icon }: { records: Grow
   );
 }
 
-function GrowthPanel({ records, saving, onSave }: { records: GrowthRecord[]; saving: boolean; onSave: (event: FormEvent<HTMLFormElement>) => Promise<void> }) {
+function GrowthPanel({ canEdit, records, saving, onSave }: { canEdit: boolean; records: GrowthRecord[]; saving: boolean; onSave: (event: FormEvent<HTMLFormElement>) => Promise<void> }) {
   return (
     <div>
       <SectionHeading icon={ChartNoAxesCombined} title="Child growth & development" action="Longitudinal measurements and clinician-observed milestones" />
       <div className="mb-5 grid gap-3 sm:grid-cols-2"><MiniTrend records={records} metric="weightKg" label="Weight trend" unit="kg" icon={Scale} /><MiniTrend records={records} metric="heightCm" label="Height trend" unit="cm" icon={Ruler} /></div>
-      <form onSubmit={onSave} className="grid gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2">
+      {!canEdit && <ClinicalReadOnlyNotice />}
+      <form onSubmit={onSave} className={(canEdit ? "grid" : "hidden") + " gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2"}>
         <label className={labelClass}>Measurement date<input name="measuredDate" type="date" required className={inputClass} /></label>
         <label className={labelClass}>Clinician<select name="clinician" required defaultValue="" className={inputClass}><option value="" disabled>Select clinician</option><option>Dr. Lt Col Shafi Ahamad</option><option>Dr. Shaik Reshma</option></select></label>
         <label className={labelClass}>Weight (kg)<input name="weightKg" type="number" min="0.1" max="300" step="0.01" className={inputClass} /></label>
@@ -1047,12 +1070,13 @@ function GrowthPanel({ records, saving, onSave }: { records: GrowthRecord[]; sav
   );
 }
 
-function VaccinationsPanel({ records, saving, onSave }: { records: VaccinationRecord[]; saving: boolean; onSave: (event: FormEvent<HTMLFormElement>) => Promise<void> }) {
+function VaccinationsPanel({ canEdit, records, saving, onSave }: { canEdit: boolean; records: VaccinationRecord[]; saving: boolean; onSave: (event: FormEvent<HTMLFormElement>) => Promise<void> }) {
   const [today] = useState(() => new Date().toISOString().slice(0, 10));
   return (
     <div>
       <SectionHeading icon={Syringe} title="Vaccination record" action="Dose traceability, administration details and due-date monitoring" />
-      <form onSubmit={onSave} className="grid gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2">
+      {!canEdit && <ClinicalReadOnlyNotice />}
+      <form onSubmit={onSave} className={(canEdit ? "grid" : "hidden") + " gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2"}>
         <label className={labelClass}>Vaccine name<input name="vaccineName" required maxLength={120} className={inputClass} /></label>
         <label className={labelClass}>Dose number<input name="doseNumber" maxLength={30} placeholder="e.g. 1, booster" className={inputClass} /></label>
         <label className={labelClass}>Administered date<input name="administeredDate" type="date" required className={inputClass} /></label>
@@ -1082,7 +1106,7 @@ function pregnancyDates(lmpDate: string, recordedDate: string, today: string) {
   return { edd, weeks: `${Math.floor(totalDays / 7)}w ${totalDays % 7}d` };
 }
 
-function PregnancyPanel({ records, saving, onSave }: { records: PregnancyRecord[]; saving: boolean; onSave: (event: FormEvent<HTMLFormElement>) => Promise<void> }) {
+function PregnancyPanel({ canEdit, records, saving, onSave }: { canEdit: boolean; records: PregnancyRecord[]; saving: boolean; onSave: (event: FormEvent<HTMLFormElement>) => Promise<void> }) {
   const [today] = useState(() => new Date().toISOString().slice(0, 10));
   const [lmpDate, setLmpDate] = useState("");
   const [recordedDate, setRecordedDate] = useState("");
@@ -1090,7 +1114,8 @@ function PregnancyPanel({ records, saving, onSave }: { records: PregnancyRecord[
   return (
     <div>
       <SectionHeading icon={Baby} title="Pregnancy care timeline" action="Antenatal observations, risk review and care planning" />
-      <form onSubmit={onSave} className="grid gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2">
+      {!canEdit && <ClinicalReadOnlyNotice />}
+      <form onSubmit={onSave} className={(canEdit ? "grid" : "hidden") + " gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2"}>
         <label className={labelClass}>Recorded date<input name="recordedDate" type="date" required value={recordedDate} onChange={(event) => setRecordedDate(event.target.value)} className={inputClass} /></label>
         <label className={labelClass}>LMP date<input name="lmpDate" type="date" required value={lmpDate} onChange={(event) => setLmpDate(event.target.value)} className={inputClass} /></label>
         <label className={labelClass}>Gestational age<input name="gestationalWeeks" readOnly value={derived.weeks} placeholder="Calculated from LMP" className={inputClass + " bg-slate-100"} /></label>
@@ -1124,7 +1149,7 @@ function ReportsPanel({ records, uploading, actionId, onUpload, onAccess }: { re
       <form onSubmit={onUpload} className="grid gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2">
         <label className={labelClass}>Report category<select name="category" required defaultValue="" className={inputClass}><option value="" disabled>Select category</option><option>Lab report</option><option>Ultrasound / Imaging</option><option>Prescription / Referral</option><option>Vaccination document</option><option>Other</option></select></label>
         <label className={labelClass}>Report date<input name="reportDate" type="date" required className={inputClass} /></label>
-        <label className={labelClass + " sm:col-span-2"}>Choose PDF or image<input name="reportFile" type="file" accept="application/pdf,image/*" required className={inputClass + " file:mr-4 file:rounded-lg file:border-0 file:bg-[#233A59] file:px-3 file:py-2 file:text-sm file:font-bold file:text-white"} /><span className="mt-2 block text-xs font-normal text-slate-500">Maximum 10 MB. Access is restricted to approved clinic staff.</span></label>
+        <label className={labelClass + " sm:col-span-2"}>Choose PDF or image<input name="reportFile" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp" required className={inputClass + " file:mr-4 file:rounded-lg file:border-0 file:bg-[#233A59] file:px-3 file:py-2 file:text-sm file:font-bold file:text-white"} /><span className="mt-2 block text-xs font-normal text-slate-500">PDF, JPEG, PNG or WebP only. Maximum 10 MB. Access is restricted to approved clinic staff.</span></label>
         <label className={labelClass + " sm:col-span-2"}>Notes<textarea name="notes" rows={2} className={inputClass} placeholder="Optional context for this report" /></label>
         <div className="sm:col-span-2"><SaveButton saving={uploading} label="Upload report securely" /></div>
       </form>

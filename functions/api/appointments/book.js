@@ -12,7 +12,6 @@ import {
   readJson,
 } from "../../../server/razorpay/http.js";
 import {
-  clinicDate,
   dateDay,
   normalizeSchedule,
   timeSlots,
@@ -20,14 +19,33 @@ import {
 
 const DOCTORS = ["pediatrics", "obg"];
 const STAFF_SOURCES = ["reception", "phone", "walk-in"];
+const PUBLIC_FORM_MINIMUM_MS = 750;
 
 function cleanText(value, maximum) {
   return typeof value === "string" ? value.trim().slice(0, maximum) : "";
 }
 
 function validDate(value) {
-  return /^\d{4}-\d{2}-\d{2}$/u.test(value)
-    && !Number.isNaN(new Date(`${value}T00:00:00Z`).getTime());
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function clinicClock(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const read = (type) => parts.find((part) => part.type === type)?.value || "";
+  return {
+    date: `${read("year")}-${read("month")}-${read("day")}`,
+    time: `${read("hour")}:${read("minute")}`,
+  };
 }
 
 export async function onRequestPost(context) {
@@ -41,20 +59,31 @@ export async function onRequestPost(context) {
     const preferredTime = cleanText(body.preferredTime, 5);
     const reason = cleanText(body.reason, 500);
     const source = cleanText(body.source || "website", 20);
+    const now = new Date();
+    const clinicNow = clinicClock(now);
 
     if (patientName.length < 2) throw new HttpError(400, "Enter the patient’s full name.");
     if (phone.replace(/\D/gu, "").length < 10) throw new HttpError(400, "Enter a valid mobile number.");
     if (!DOCTORS.includes(doctorId)) throw new HttpError(400, "Select a clinic doctor.");
-    if (!validDate(preferredDate) || preferredDate < clinicDate()) {
+    if (!validDate(preferredDate) || preferredDate < clinicNow.date) {
       throw new HttpError(400, "Choose a valid appointment date.");
     }
-    const latest = new Date();
+    const latest = new Date(`${clinicNow.date}T00:00:00Z`);
     latest.setUTCDate(latest.getUTCDate() + 180);
     if (preferredDate > latest.toISOString().slice(0, 10)) {
       throw new HttpError(400, "Appointments can be booked up to six months ahead.");
     }
-    if (source === "website" && body.privacyAccepted !== true) {
-      throw new HttpError(400, "Please accept the appointment privacy notice.");
+    if (source === "website") {
+      if (body.privacyAccepted !== true) {
+        throw new HttpError(400, "Please accept the appointment privacy notice.");
+      }
+      if (cleanText(body.website, 200)) {
+        throw new HttpError(400, "The appointment request could not be verified. Please refresh and try again.");
+      }
+      const formElapsedMs = Number(body.formElapsedMs);
+      if (!Number.isFinite(formElapsedMs) || formElapsedMs < PUBLIC_FORM_MINIMUM_MS) {
+        throw new HttpError(400, "Please take a moment to review the appointment details and try again.");
+      }
     }
 
     let actorUid = "public-website";
@@ -78,10 +107,25 @@ export async function onRequestPost(context) {
     if (!timeSlots(doctorSchedule).includes(preferredTime)) {
       throw new HttpError(400, "Choose one of the available appointment times.");
     }
+    if (preferredDate === clinicNow.date && preferredTime <= clinicNow.time) {
+      throw new HttpError(400, "That appointment time has already passed. Please choose a later slot.");
+    }
 
     const appointmentId = crypto.randomUUID().replaceAll("-", "");
     const slotId = `${doctorId}_${preferredDate}_${preferredTime.replace(":", "")}`;
-    const now = new Date();
+    const consent = source === "website"
+      ? {
+          status: "accepted",
+          method: "website-checkbox",
+          capturedAt: now,
+          capturedBy: "patient-self-service",
+        }
+      : {
+          status: "not-captured",
+          method: "none",
+          capturedAt: null,
+          capturedBy: null,
+        };
     await commitWrites(context.env, [
       createDocumentWrite(context.env, `appointmentSlots/${slotId}`, {
         appointmentId,
@@ -101,7 +145,8 @@ export async function onRequestPost(context) {
         reason,
         status,
         source,
-        privacyAccepted: true,
+        privacyAccepted: source === "website",
+        consent,
         slotId,
         createdBy: actorUid,
         createdAt: now,

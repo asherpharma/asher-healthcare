@@ -17,7 +17,8 @@ service firebase.storage {
       allow read: if isStaff();
       allow create, update: if isStaff()
         && request.resource.size < 10 * 1024 * 1024
-        && request.resource.contentType.matches('application/pdf|image/.*');
+        && fileName.matches('.*[.](pdf|jpg|jpeg|png|webp)$')
+        && request.resource.contentType.matches('^(application/pdf|image/jpeg|image/png|image/webp)$');
       allow delete: if isAdmin();
     }
 

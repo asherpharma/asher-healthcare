@@ -3,13 +3,14 @@
 import StaffGuard, { type StaffRole, useStaff } from "@/components/admin/StaffGuard";
 import MobileStaffNav from "@/components/admin/MobileStaffNav";
 import StaffCommandCenter from "@/components/admin/StaffCommandCenter";
+import StaffSessionProtection, { type StaffLockReason } from "@/components/admin/StaffSessionProtection";
 import { InstallAppButton, NetworkStatus } from "@/components/pwa/PwaRegister";
 import { firebaseAuth } from "@/firebase/config";
-import { CalendarDays, FlaskConical, LayoutDashboard, ListTodo, LogOut, ReceiptIndianRupee, Settings2, Smartphone, Stethoscope, UserRoundCog, UsersRound, type LucideIcon } from "lucide-react";
+import { CalendarDays, FlaskConical, LayoutDashboard, ListTodo, LockKeyhole, ReceiptIndianRupee, Settings2, Smartphone, Stethoscope, UserRoundCog, UsersRound, type LucideIcon } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 type NavigationItem = {
   href: string;
@@ -66,10 +67,16 @@ function StaffChrome({ children }: { children: ReactNode }) {
     };
   }, [profile.role, router]);
 
-  async function logOut() {
-    if (firebaseAuth) await firebaseAuth.signOut();
-    router.replace("/admin/login");
-  }
+  const lockApp = useCallback(async (reason: StaffLockReason = "manual") => {
+    try {
+      if (firebaseAuth) await firebaseAuth.signOut();
+    } catch {
+      // The login redirect still protects the UI if Firebase is temporarily unavailable.
+    } finally {
+      const loginReason = reason === "inactivity" ? "inactivity" : "locked";
+      router.replace(`/admin/login?reason=${loginReason}`);
+    }
+  }, [router]);
 
   return (
     <div data-app-version="mobile-v2" className="staff-app-shell min-h-dvh bg-slate-50 text-slate-950">
@@ -85,7 +92,7 @@ function StaffChrome({ children }: { children: ReactNode }) {
             <span className="staff-role-chip rounded-full bg-[#233A59] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white xl:hidden">V2 {profile.role}</span>
             <div className="hidden xl:block"><InstallAppButton compact /></div>
             <div className="hidden text-right xl:block"><p className="text-sm font-bold text-[#233A59]">{profile.displayName}</p><p className="text-xs capitalize text-slate-500">{profile.role}</p></div>
-            <button onClick={logOut} className="hidden items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 xl:inline-flex"><LogOut size={16} />Sign out</button>
+            <button onClick={() => void lockApp("manual")} className="hidden items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#233A59] xl:inline-flex"><LockKeyhole aria-hidden="true" size={16} />Lock app</button>
           </div>
         </div>
       </header>
@@ -106,7 +113,8 @@ function StaffChrome({ children }: { children: ReactNode }) {
         </aside>
         <main id="main-content" className="staff-app-content min-w-0">{children}</main>
       </div>
-      <MobileStaffNav role={profile.role} onLogout={() => void logOut()} />
+      <StaffSessionProtection onLock={lockApp} />
+      <MobileStaffNav role={profile.role} onLock={() => void lockApp("manual")} />
     </div>
   );
 }

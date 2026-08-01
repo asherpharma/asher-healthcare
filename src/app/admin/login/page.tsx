@@ -10,6 +10,12 @@ import { FormEvent, Suspense, useState } from "react";
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const lockReason = searchParams.get("reason");
+  const sessionNotice = lockReason === "inactivity"
+    ? "The app locked after 30 minutes without activity to protect clinic records. Sign in to continue."
+    : lockReason === "locked"
+      ? "The staff app is locked. Sign in again to continue securely."
+      : "";
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(searchParams.get("error") === "unauthorized" ? "This account is not approved for clinic access." : "");
 
@@ -43,6 +49,7 @@ function LoginForm() {
             <form className="mt-7 space-y-5" onSubmit={signIn}>
               <label className="block text-sm font-bold text-slate-700">Email address<input name="email" type="email" autoComplete="email" required className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 outline-none transition focus:border-[#233A59] focus:ring-2 focus:ring-[#233A59]/15" /></label>
               <label className="block text-sm font-bold text-slate-700">Password<input name="password" type="password" autoComplete="current-password" required minLength={8} className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 outline-none transition focus:border-[#233A59] focus:ring-2 focus:ring-[#233A59]/15" /></label>
+              {sessionNotice && !message ? <p role="status" className="rounded-xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">{sessionNotice}</p> : null}
               {message && <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{message}</p>}
               <button disabled={loading} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#233A59] px-5 py-3.5 text-sm font-bold text-white transition hover:bg-[#1b2e48] disabled:opacity-60">{loading && <LoaderCircle className="animate-spin" size={18} />}{loading ? "Signing in…" : "Sign in securely"}</button>
             </form>

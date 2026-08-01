@@ -20,14 +20,32 @@ service cloud.firestore {
       return isStaff() && staffProfile().data.role == 'admin';
     }
 
+    function isClinicalStaff() {
+      return isStaff() && staffProfile().data.role in ['admin', 'doctor'];
+    }
+
     function validClinicalCreate() {
-      return isStaff()
+      return isClinicalStaff()
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.createdAt == request.time
         && request.resource.data.updatedAt == request.time;
     }
 
     function validClinicalUpdate() {
+      return isClinicalStaff()
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    function validStaffRecordCreate() {
+      return isStaff()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    function validStaffRecordUpdate() {
       return isStaff()
         && request.resource.data.createdBy == resource.data.createdBy
         && request.resource.data.createdAt == resource.data.createdAt
@@ -480,10 +498,19 @@ service cloud.firestore {
         && request.resource.data.createdAt == request.time
         && request.resource.data.updatedAt == request.time;
       allow update: if isStaff()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        && (
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'fullName', 'phone', 'dateOfBirth', 'gender', 'doctorName', 'address',
+            'updatedAt'
+          ])
+          || (
+            isClinicalStaff()
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'fullName', 'phone', 'dateOfBirth', 'gender', 'doctorName', 'address', 'allergies',
           'medicalHistory', 'updatedAt'
-        ])
+            ])
+          )
+        )
         && request.resource.data.doctorName in [
           'Dr. Lt Col Shafi Ahamad',
           'Dr. Shaik Reshma'
@@ -642,8 +669,8 @@ service cloud.firestore {
 
       match /reports/{reportId} {
         allow read: if isStaff();
-        allow create: if validClinicalCreate();
-        allow update: if validClinicalUpdate();
+        allow create: if validStaffRecordCreate();
+        allow update: if validStaffRecordUpdate();
         allow delete: if isAdmin();
       }
     }

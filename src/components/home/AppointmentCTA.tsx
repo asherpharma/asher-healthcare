@@ -28,9 +28,28 @@ import {
   Phone,
   ShieldCheck,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type Result = { tone: "success" | "error"; message: string } | null;
+
+function currentClinicClock() {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+  const read = (type: Intl.DateTimeFormatPartTypes) => (
+    parts.find((part) => part.type === type)?.value ?? ""
+  );
+  return {
+    date: `${read("year")}-${read("month")}-${read("day")}`,
+    time: `${read("hour")}:${read("minute")}`,
+  };
+}
 
 export default function AppointmentCTA() {
   const { schedule, loading: scheduleLoading, error: scheduleError } = useAppointmentSchedule();
@@ -43,10 +62,16 @@ export default function AppointmentCTA() {
   });
   const [result, setResult] = useState<Result>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [clinicClock, setClinicClock] = useState(currentClinicClock);
+  const formStartedAt = useRef(0);
 
   const allSlots = useMemo(
-    () => dateIsEnabled(schedule, date) ? generateTimeSlots(schedule.doctors[doctorId]) : [],
-    [date, doctorId, schedule],
+    () => dateIsEnabled(schedule, date)
+      ? generateTimeSlots(schedule.doctors[doctorId]).filter(
+          (slot) => date !== clinicClock.date || slot > clinicClock.time,
+        )
+      : [],
+    [clinicClock, date, doctorId, schedule],
   );
   const availabilityKey = `${doctorId}_${date}`;
   const occupiedSlots = useMemo(
@@ -59,6 +84,12 @@ export default function AppointmentCTA() {
     [allSlots, occupiedSlots],
   );
   const selectedTime = availableSlots.includes(time) ? time : availableSlots[0] ?? "";
+
+  useEffect(() => {
+    formStartedAt.current = Date.now();
+    const timer = window.setInterval(() => setClinicClock(currentClinicClock()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!firestore || !doctorId || !date) return;
@@ -100,6 +131,8 @@ export default function AppointmentCTA() {
       reason: String(form.get("reason") || "").trim(),
       source: "website",
       privacyAccepted: form.get("consent") === "on",
+      website: String(form.get("website") || ""),
+      formElapsedMs: formStartedAt.current > 0 ? Date.now() - formStartedAt.current : 0,
     };
 
     setSubmitting(true);
@@ -137,6 +170,7 @@ export default function AppointmentCTA() {
         message: `Your ${formatAppointmentTime(selectedTime)} slot is reserved. The clinic will confirm it shortly.`,
       });
       formElement.reset();
+      formStartedAt.current = Date.now();
       if (!whatsapp) window.location.href = whatsappUrl;
     } catch (bookingError) {
       setResult({
@@ -175,6 +209,15 @@ export default function AppointmentCTA() {
         </div>
 
         <form className="booking-card" onSubmit={submitBooking}>
+          <div
+            aria-hidden="true"
+            style={{ position: "absolute", left: "-10000px", width: 1, height: 1, overflow: "hidden" }}
+          >
+            <label>
+              Leave this field empty
+              <input name="website" type="text" tabIndex={-1} autoComplete="off" />
+            </label>
+          </div>
           <div className="booking-card-head">
             <span><CalendarCheck /></span>
             <div><small>Live appointment booking</small><h3>Reserve your preferred time</h3></div>

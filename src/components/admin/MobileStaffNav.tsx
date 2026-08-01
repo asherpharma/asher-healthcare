@@ -6,7 +6,7 @@ import {
   FlaskConical,
   LayoutDashboard,
   ListTodo,
-  LogOut,
+  LockKeyhole,
   Menu,
   ReceiptIndianRupee,
   Settings2,
@@ -51,7 +51,7 @@ function primaryNavigationFor(role: string): MobileNavigationItem[] {
   ];
 }
 
-export default function MobileStaffNav({ role, onLogout }: { role: string; onLogout: () => void }) {
+export default function MobileStaffNav({ role, onLock }: { role: string; onLock: () => void }) {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
   const moreButtonRef = useRef<HTMLButtonElement>(null);
@@ -206,9 +206,9 @@ export default function MobileStaffNav({ role, onLogout }: { role: string; onLog
             </div>
 
             <div className="mt-4"><InstallAppButton wide /></div>
-            <button type="button" onClick={onLogout} className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 text-sm font-bold text-red-700">
-              <LogOut size={18} />
-              Sign out securely
+            <button type="button" onClick={onLock} className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 text-sm font-bold text-red-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-700">
+              <LockKeyhole aria-hidden="true" size={18} />
+              Lock app securely
             </button>
           </section>
         </div>
