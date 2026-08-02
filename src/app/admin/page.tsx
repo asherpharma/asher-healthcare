@@ -335,6 +335,7 @@ function chunks<T>(values: T[], size: number) {
 
 async function loadReferencedPatients(patientIds: string[], knownPatientIds: Set<string>) {
   if (!firestore) return { records: [] as PatientRecord[], available: false, limited: false };
+  const database = firestore;
 
   const unresolvedIds = [...new Set(patientIds.filter(Boolean))].filter((id) => !knownPatientIds.has(id));
   const limited = unresolvedIds.length > PATIENT_LOOKUP_LIMIT;
@@ -344,7 +345,7 @@ async function loadReferencedPatients(patientIds: string[], knownPatientIds: Set
   const snapshots = await Promise.all(
     chunks(selectedIds, 30).map(async (ids) => {
       try {
-        return await getDocs(query(collection(firestore, "patients"), where(documentId(), "in", ids)));
+        return await getDocs(query(collection(database, "patients"), where(documentId(), "in", ids)));
       } catch (error) {
         available = false;
         console.error("Dashboard patient attribution records could not be loaded", error);
@@ -450,8 +451,8 @@ async function fetchDashboardData(range: DashboardRange, today: string): Promise
     ["clinical visits", visitsResult],
     ["outstanding invoices", outstandingResult],
   ] as const;
-  const limitedSources = sources.filter(([, result]) => result.limited).map(([label]) => label);
-  const unavailableSources = sources.filter(([, result]) => !result.available).map(([label]) => label);
+  const limitedSources: string[] = sources.filter(([, result]) => result.limited).map(([label]) => label);
+  const unavailableSources: string[] = sources.filter(([, result]) => !result.available).map(([label]) => label);
   if (referencedPatients.limited) limitedSources.push("patient attribution");
   if (!referencedPatients.available) unavailableSources.push("patient attribution");
   if (!patientCountResult.available) unavailableSources.push("patient total");
@@ -778,13 +779,20 @@ function AdminDashboard() {
   const today = clinicDateKey();
 
   function refresh() {
+    setLoading(true);
+    setError("");
     setRefreshToken((value) => value + 1);
+  }
+
+  function changeRange(nextRange: DashboardRange) {
+    if (nextRange === range) return;
+    setLoading(true);
+    setError("");
+    setRange(nextRange);
   }
 
   useEffect(() => {
     let active = true;
-    setLoading(true);
-    setError("");
 
     void fetchDashboardData(range, today)
       .then((nextData) => {
@@ -997,7 +1005,7 @@ function AdminDashboard() {
         error={error}
         coverageMessage={coverageMessage}
         lastUpdated={lastUpdated}
-        onRangeChange={setRange}
+        onRangeChange={changeRange}
         onRefresh={refresh}
       />
       <div className="admin-desktop-dashboard hidden xl:block">
@@ -1015,7 +1023,7 @@ function AdminDashboard() {
               <button
                 key={option}
                 type="button"
-                onClick={() => setRange(option)}
+                onClick={() => changeRange(option)}
                 aria-pressed={range === option}
                 className={`min-h-10 rounded-lg px-3 text-sm font-bold transition ${range === option ? "bg-[#233A59] text-white shadow-sm" : "text-slate-600 hover:bg-slate-50"}`}
               >

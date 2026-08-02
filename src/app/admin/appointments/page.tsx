@@ -271,6 +271,7 @@ function AppointmentDesk() {
 
   async function changeStatus(id: string, status: AppointmentStatus) {
     if (!firestore) return false;
+    const database = firestore;
     setUpdatingId(id);
     setError("");
     setNotice("");
@@ -287,10 +288,10 @@ function AppointmentDesk() {
           (appointment) => appointment.doctorId === item.doctorId && appointment.preferredDate === item.preferredDate,
         );
         const queueIds = Array.from(new Set([...queueAppointments.map((appointment) => appointment.id), item.id]));
-        const assignedToken = await runTransaction(firestore, async (transaction) => {
+        const assignedToken = await runTransaction(database, async (transaction) => {
           const liveAppointments: Appointment[] = [];
           for (const appointmentId of queueIds) {
-            const snapshot = await transaction.get(doc(firestore, "appointments", appointmentId));
+            const snapshot = await transaction.get(doc(database, "appointments", appointmentId));
             if (snapshot.exists()) {
               liveAppointments.push({ id: snapshot.id, ...snapshot.data() } as Appointment);
             }
@@ -299,7 +300,7 @@ function AppointmentDesk() {
           if (!latestItem) throw new Error("Appointment not found");
           const token = latestItem.queueToken || nextQueueToken(liveAppointments, latestItem);
           const changedAt = serverTimestamp();
-          transaction.update(doc(firestore, "appointments", item.id), {
+          transaction.update(doc(database, "appointments", item.id), {
             status,
             queueToken: token,
             checkedInAt: changedAt,
