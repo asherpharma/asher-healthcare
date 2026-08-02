@@ -99,4 +99,4 @@ Public appointment throttling stores short-lived, hashed guard records in the `b
 gcloud firestore fields ttls update expiresAt --collection-group=bookingGuards --enable-ttl --project=asher-healthcare-clinic
 ```
 
-The TTL policy may delete expired guard documents asynchronously. The booking endpoint always checks `expiresAt`, so an expired record cannot block a valid booking while deletion is pending. Do not add raw phone numbers, IP addresses, or browser identifiers to these guard documents.
+The TTL policy may delete expired guard documents asynchronously. Each guard ID includes its active time bucket, so an older document cannot block a valid booking after that window ends even if cleanup is delayed. Do not add raw phone numbers, IP addresses, or browser identifiers to these guard documents.
