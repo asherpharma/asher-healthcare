@@ -4,6 +4,12 @@ import { useStaff } from "@/components/admin/StaffGuard";
 import { firestore } from "@/firebase/config";
 import { formatAppointmentTime } from "@/lib/appointments";
 import {
+  APPOINTMENT_STATUSES,
+  APPOINTMENT_STATUS_OPTIONS,
+  appointmentStatusLabel,
+  type AppointmentStatus,
+} from "@/lib/visit-workflow";
+import {
   collection,
   collectionGroup,
   documentId,
@@ -63,7 +69,33 @@ type AppointmentRecord = {
   doctorId: string;
   preferredDate: string;
   preferredTime: string;
-  status: "requested" | "confirmed" | "completed" | "cancelled";
+  status: AppointmentStatus;
+  queueToken?: number;
+};
+
+const ACTIVE_APPOINTMENT_STATUSES = new Set<AppointmentStatus>([
+  "requested",
+  "confirmed",
+  "checked_in",
+  "waiting",
+  "in_consultation",
+]);
+
+const IN_CLINIC_APPOINTMENT_STATUSES = new Set<AppointmentStatus>([
+  "checked_in",
+  "waiting",
+  "in_consultation",
+]);
+
+const APPOINTMENT_STATUS_TONES: Record<AppointmentStatus, string> = {
+  requested: "bg-amber-500",
+  confirmed: "bg-blue-600",
+  checked_in: "bg-cyan-600",
+  waiting: "bg-violet-600",
+  in_consultation: "bg-fuchsia-600",
+  completed: "bg-emerald-600",
+  no_show: "bg-orange-500",
+  cancelled: "bg-slate-400",
 };
 
 type InvoiceRecord = {
@@ -580,6 +612,8 @@ type MobileAdminMetrics = {
   collectionRate: number;
   todayAppointments: number;
   requestedToday: number;
+  inClinicToday: number;
+  completedToday: number;
   openTasks: number;
   overdueTasks: number;
   urgentTasks: number;
@@ -592,7 +626,7 @@ type MobileAdminMetrics = {
     patientName: string;
     doctorName: string;
     preferredTime: string;
-    status: "requested" | "confirmed";
+    status: AppointmentStatus;
   } | null;
   doctorMetrics: Array<{
     doctorName: string;
@@ -701,7 +735,7 @@ function MobileAdminDashboard({
             <span className="min-w-0 flex-1">
               <span className="block text-[11px] font-bold uppercase tracking-[0.14em] text-[#e9c879]">Next appointment</span>
               <span className="mt-1 block truncate font-bold">{metrics.nextAppointment.patientName || "Patient"}</span>
-              <span className="mt-0.5 block truncate text-xs text-white/65">{metrics.nextAppointment.doctorName} · {metrics.nextAppointment.status}</span>
+              <span className="mt-0.5 block truncate text-xs text-white/65">{metrics.nextAppointment.doctorName} · {appointmentStatusLabel(metrics.nextAppointment.status)}</span>
             </span>
             <ArrowRight className="shrink-0 text-white/70" size={19} />
           </Link>
@@ -762,7 +796,7 @@ function MobileAdminDashboard({
         <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#D4B678]">Today at the clinic</p>
         <h2 className="mt-1 text-xl font-bold">Operational pulse</h2>
         <div className="mt-5 grid grid-cols-2 gap-3">
-          {[ ["Appointments", metrics.todayAppointments], ["Open tasks", metrics.openTasks], ["Overdue", metrics.overdueTasks], ["Lab orders", metrics.activeLabs] ].map(([label, value]) => <div key={String(label)} className="rounded-2xl bg-white/10 p-4"><p className="text-2xl font-bold">{number(Number(value))}</p><p className="mt-1 text-xs font-semibold text-white/65">{label}</p></div>)}
+          {[ ["Appointments", metrics.todayAppointments], ["In clinic", metrics.inClinicToday], ["Completed", metrics.completedToday], ["Lab orders", metrics.activeLabs] ].map(([label, value]) => <div key={String(label)} className="rounded-2xl bg-white/10 p-4"><p className="text-2xl font-bold">{number(Number(value))}</p><p className="mt-1 text-xs font-semibold text-white/65">{label}</p></div>)}
         </div>
       </section>
     </div>
@@ -908,20 +942,31 @@ function AdminDashboard() {
       };
     });
 
-    const requested = periodAppointments.filter((appointment) => appointment.status === "requested").length;
-    const confirmed = periodAppointments.filter((appointment) => appointment.status === "confirmed").length;
-    const completed = periodAppointments.filter((appointment) => appointment.status === "completed").length;
-    const cancelled = periodAppointments.filter((appointment) => appointment.status === "cancelled").length;
+    const appointmentStatus = Object.fromEntries(
+      APPOINTMENT_STATUSES.map((status) => [
+        status,
+        periodAppointments.filter((appointment) => appointment.status === status).length,
+      ]),
+    ) as Record<AppointmentStatus, number>;
     const openTasks = data.tasks.filter((task) => task.status === "open");
     const activeLabs = data.labs.filter((lab) => !["completed", "cancelled"].includes(lab.status));
     const todayActiveAppointments = data.appointments
-      .filter((appointment) => appointment.preferredDate === today && ["requested", "confirmed"].includes(appointment.status))
-      .sort((left, right) => timeInMinutes(left.preferredTime) - timeInMinutes(right.preferredTime));
+      .filter((appointment) => appointment.preferredDate === today && ACTIVE_APPOINTMENT_STATUSES.has(appointment.status))
+      .sort((left, right) => {
+        const leftInClinic = IN_CLINIC_APPOINTMENT_STATUSES.has(left.status) ? 0 : 1;
+        const rightInClinic = IN_CLINIC_APPOINTMENT_STATUSES.has(right.status) ? 0 : 1;
+        if (leftInClinic !== rightInClinic) return leftInClinic - rightInClinic;
+        return timeInMinutes(left.preferredTime) - timeInMinutes(right.preferredTime);
+      });
     const nowMinutes = clinicTimeInMinutes();
-    const nextAppointmentRecord = todayActiveAppointments.find((appointment) => {
-      const appointmentMinutes = timeInMinutes(appointment.preferredTime);
-      return Number.isFinite(appointmentMinutes) && appointmentMinutes >= nowMinutes;
-    }) ?? null;
+    const nextAppointmentRecord = todayActiveAppointments.find((appointment) => IN_CLINIC_APPOINTMENT_STATUSES.has(appointment.status))
+      ?? todayActiveAppointments.find((appointment) => {
+        const appointmentMinutes = timeInMinutes(appointment.preferredTime);
+        return Number.isFinite(appointmentMinutes) && appointmentMinutes >= nowMinutes;
+      })
+      ?? todayActiveAppointments[0]
+      ?? null;
+    const todayAppointments = data.appointments.filter((appointment) => appointment.preferredDate === today);
     const outstandingInvoices = data.outstandingInvoices;
 
     return {
@@ -938,9 +983,11 @@ function AdminDashboard() {
       methodTotals: [...methodTotals.entries()].sort((left, right) => right[1] - left[1]),
       doctorMetrics,
       lastSevenDays,
-      appointmentStatus: { requested, confirmed, completed, cancelled },
-      todayAppointments: data.appointments.filter((appointment) => appointment.preferredDate === today && appointment.status !== "cancelled").length,
-      requestedToday: todayActiveAppointments.filter((appointment) => appointment.status === "requested").length,
+      appointmentStatus,
+      todayAppointments: todayAppointments.filter((appointment) => !["cancelled", "no_show"].includes(appointment.status)).length,
+      requestedToday: todayAppointments.filter((appointment) => appointment.status === "requested").length,
+      inClinicToday: todayAppointments.filter((appointment) => IN_CLINIC_APPOINTMENT_STATUSES.has(appointment.status)).length,
+      completedToday: todayAppointments.filter((appointment) => appointment.status === "completed").length,
       openTasks: openTasks.length,
       overdueTasks: openTasks.filter((task) => task.dueDate && task.dueDate < today).length,
       urgentTasks: openTasks.filter((task) => task.priority === "urgent").length,
@@ -953,7 +1000,7 @@ function AdminDashboard() {
         patientName: nextAppointmentRecord.patientName,
         doctorName: appointmentDoctor(nextAppointmentRecord.doctorId),
         preferredTime: nextAppointmentRecord.preferredTime,
-        status: nextAppointmentRecord.status as "requested" | "confirmed",
+        status: nextAppointmentRecord.status,
       } : null,
       recentPayments: [...periodPayments]
         .sort((left, right) => (right.createdAt?.toMillis?.() ?? 0) - (left.createdAt?.toMillis?.() ?? 0))
@@ -990,6 +1037,8 @@ function AdminDashboard() {
           collectionRate: analytics.collectionRate,
           todayAppointments: analytics.todayAppointments,
           requestedToday: analytics.requestedToday,
+          inClinicToday: analytics.inClinicToday,
+          completedToday: analytics.completedToday,
           openTasks: analytics.openTasks,
           overdueTasks: analytics.overdueTasks,
           urgentTasks: analytics.urgentTasks,
@@ -1110,8 +1159,8 @@ function AdminDashboard() {
           </div>
           <div className="mt-6 grid grid-cols-2 gap-3">
             <div className="rounded-2xl bg-white/10 p-4"><p className="text-3xl font-bold">{number(analytics.todayAppointments)}</p><p className="mt-1 text-xs font-semibold text-white/70">Appointments today</p></div>
-            <div className="rounded-2xl bg-white/10 p-4"><p className="text-3xl font-bold">{number(analytics.openTasks)}</p><p className="mt-1 text-xs font-semibold text-white/70">Open tasks</p></div>
-            <div className="rounded-2xl bg-white/10 p-4"><p className="text-3xl font-bold">{number(analytics.overdueTasks)}</p><p className="mt-1 text-xs font-semibold text-white/70">Overdue tasks</p></div>
+            <div className="rounded-2xl bg-white/10 p-4"><p className="text-3xl font-bold">{number(analytics.inClinicToday)}</p><p className="mt-1 text-xs font-semibold text-white/70">Patients in clinic</p></div>
+            <div className="rounded-2xl bg-white/10 p-4"><p className="text-3xl font-bold">{number(analytics.completedToday)}</p><p className="mt-1 text-xs font-semibold text-white/70">Completed today</p></div>
             <div className="rounded-2xl bg-white/10 p-4"><p className="text-3xl font-bold">{number(analytics.activeLabs)}</p><p className="mt-1 text-xs font-semibold text-white/70">Active lab orders</p></div>
           </div>
           <div className="mt-5 space-y-2 text-sm">
@@ -1152,10 +1201,15 @@ function AdminDashboard() {
         <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200 sm:p-7">
           <div className="flex items-center justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#A8864A]">Bookings</p><h2 className="mt-1 text-xl font-bold text-[#233A59]">Appointment status</h2></div><CalendarCheck2 size={25} className="text-blue-600" /></div>
           <div className="mt-6 space-y-5">
-            <MetricBar label="Requested" value={analytics.appointmentStatus.requested} total={appointmentTotal} tone="bg-amber-500" />
-            <MetricBar label="Confirmed" value={analytics.appointmentStatus.confirmed} total={appointmentTotal} tone="bg-blue-600" />
-            <MetricBar label="Completed" value={analytics.appointmentStatus.completed} total={appointmentTotal} tone="bg-emerald-600" />
-            <MetricBar label="Cancelled" value={analytics.appointmentStatus.cancelled} total={appointmentTotal} tone="bg-slate-400" />
+            {APPOINTMENT_STATUS_OPTIONS.map((status) => (
+              <MetricBar
+                key={status.value}
+                label={status.label}
+                value={analytics.appointmentStatus[status.value]}
+                total={appointmentTotal}
+                tone={APPOINTMENT_STATUS_TONES[status.value]}
+              />
+            ))}
           </div>
         </div>
       </section>

@@ -84,3 +84,19 @@ Razorpay QR Codes is an on-demand merchant feature. Ask Razorpay Support or the 
 For reception POS testing, register one general case (₹250) and one Pediatric/OBG specialist case (₹500), generate each single-use QR, complete payment, and confirm that printing remains unavailable until the server reports the payment as captured.
 
 After any variable, secret, rule, or function change, redeploy the Cloudflare Pages project before testing production.
+
+## Firestore indexes and booking-guard expiry
+
+The dashboard uses collection-group date queries for payment audit entries and clinical visits. Deploy the versioned indexes together with the Firestore rules:
+
+```bash
+firebase deploy --only firestore:rules,firestore:indexes
+```
+
+Public appointment throttling stores short-lived, hashed guard records in the `bookingGuards` collection group. Firestore TTL is a project setting rather than a Firebase configuration-file resource, so enable it once from Google Cloud Shell:
+
+```bash
+gcloud firestore fields ttls update expiresAt --collection-group=bookingGuards --enable-ttl --project=asher-healthcare-clinic
+```
+
+The TTL policy may delete expired guard documents asynchronously. The booking endpoint always checks `expiresAt`, so an expired record cannot block a valid booking while deletion is pending. Do not add raw phone numbers, IP addresses, or browser identifiers to these guard documents.
