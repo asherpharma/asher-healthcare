@@ -6,9 +6,17 @@ import { formatAppointmentTime } from "@/lib/appointments";
 import {
   collection,
   collectionGroup,
+  documentId,
+  getCountFromServer,
   getDocs,
+  limit,
+  orderBy,
+  query,
+  type DocumentData,
+  type Query,
   type QueryDocumentSnapshot,
-  type Timestamp,
+  Timestamp,
+  where,
 } from "firebase/firestore";
 import {
   AlertCircle,
@@ -114,12 +122,16 @@ type DashboardData = {
   patients: PatientRecord[];
   appointments: AppointmentRecord[];
   invoices: InvoiceRecord[];
+  outstandingInvoices: InvoiceRecord[];
   payments: PaymentRecord[];
   visits: VisitRecord[];
   labs: LabRecord[];
   tasks: TaskRecord[];
+  totalPatientCount: number;
   paymentAuditAvailable: boolean;
   visitRecordsAvailable: boolean;
+  limitedSources: string[];
+  unavailableSources: string[];
 };
 
 type VisitEvent = {
@@ -135,12 +147,26 @@ const emptyData: DashboardData = {
   patients: [],
   appointments: [],
   invoices: [],
+  outstandingInvoices: [],
   payments: [],
   visits: [],
   labs: [],
   tasks: [],
+  totalPatientCount: 0,
   paymentAuditAvailable: true,
   visitRecordsAvailable: true,
+  limitedSources: [],
+  unavailableSources: [],
+};
+
+const PERIOD_RECORD_LIMIT = 1_500;
+const OPERATIONAL_RECORD_LIMIT = 500;
+const PATIENT_LOOKUP_LIMIT = 1_500;
+
+type BoundedDocuments = {
+  documents: QueryDocumentSnapshot<DocumentData>[];
+  available: boolean;
+  limited: boolean;
 };
 
 function clinicDateKey(value = new Date()) {
@@ -232,47 +258,218 @@ function clinicTimeInMinutes(value = new Date()) {
   return part("hour") * 60 + part("minute");
 }
 
-function mapDocuments<T extends { id: string }>(documents: QueryDocumentSnapshot[]) {
+function shiftDateKey(dateKey: string, days: number) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const value = new Date(Date.UTC(year, month - 1, day + days));
+  return value.toISOString().slice(0, 10);
+}
+
+function nextMonthStart(dateKey: string) {
+  const [year, month] = dateKey.split("-").map(Number);
+  return new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10);
+}
+
+function dashboardWindow(range: DashboardRange, today: string, includeSevenDayTrend: boolean) {
+  if (range === "all") return null;
+
+  const reportingStart = range === "today" ? today : `${today.slice(0, 7)}-01`;
+  const reportingEnd = range === "today" ? shiftDateKey(today, 1) : nextMonthStart(today);
+  const trendStart = shiftDateKey(today, -6);
+
+  return {
+    start: includeSevenDayTrend && trendStart < reportingStart ? trendStart : reportingStart,
+    end: reportingEnd,
+  };
+}
+
+function clinicTimestamp(dateKey: string) {
+  return Timestamp.fromDate(new Date(`${dateKey}T00:00:00+05:30`));
+}
+
+function boundedRangeQuery(
+  source: Query<DocumentData>,
+  field: string,
+  valueType: "date-key" | "timestamp",
+  range: DashboardRange,
+  today: string,
+  includeSevenDayTrend: boolean,
+  cap = PERIOD_RECORD_LIMIT,
+) {
+  const window = dashboardWindow(range, today, includeSevenDayTrend);
+  if (!window) return query(source, limit(cap + 1));
+
+  const start = valueType === "timestamp" ? clinicTimestamp(window.start) : window.start;
+  const end = valueType === "timestamp" ? clinicTimestamp(window.end) : window.end;
+  return query(
+    source,
+    where(field, ">=", start),
+    where(field, "<", end),
+    orderBy(field, "desc"),
+    limit(cap + 1),
+  );
+}
+
+async function loadBoundedDocuments(
+  label: string,
+  source: Query<DocumentData>,
+  cap: number,
+): Promise<BoundedDocuments> {
+  try {
+    const snapshot = await getDocs(source);
+    return {
+      documents: snapshot.docs.slice(0, cap),
+      available: true,
+      limited: snapshot.size > cap,
+    };
+  } catch (error) {
+    console.error(`Dashboard ${label} could not be loaded`, error);
+    return { documents: [], available: false, limited: false };
+  }
+}
+
+function chunks<T>(values: T[], size: number) {
+  return Array.from({ length: Math.ceil(values.length / size) }, (_, index) =>
+    values.slice(index * size, (index + 1) * size),
+  );
+}
+
+async function loadReferencedPatients(patientIds: string[], knownPatientIds: Set<string>) {
+  if (!firestore) return { records: [] as PatientRecord[], available: false, limited: false };
+
+  const unresolvedIds = [...new Set(patientIds.filter(Boolean))].filter((id) => !knownPatientIds.has(id));
+  const limited = unresolvedIds.length > PATIENT_LOOKUP_LIMIT;
+  const selectedIds = unresolvedIds.slice(0, PATIENT_LOOKUP_LIMIT);
+  let available = true;
+
+  const snapshots = await Promise.all(
+    chunks(selectedIds, 30).map(async (ids) => {
+      try {
+        return await getDocs(query(collection(firestore, "patients"), where(documentId(), "in", ids)));
+      } catch (error) {
+        available = false;
+        console.error("Dashboard patient attribution records could not be loaded", error);
+        return null;
+      }
+    }),
+  );
+
+  return {
+    records: snapshots.flatMap((snapshot) => snapshot ? mapDocuments<PatientRecord>(snapshot.docs) : []),
+    available,
+    limited,
+  };
+}
+
+function mapDocuments<T extends { id: string }>(documents: QueryDocumentSnapshot<DocumentData>[]) {
   return documents.map((item) => ({ id: item.id, ...item.data() }) as T);
 }
 
-async function fetchDashboardData(): Promise<DashboardData> {
+async function fetchDashboardData(range: DashboardRange, today: string): Promise<DashboardData> {
   if (!firestore) throw new Error("Firebase is not configured for this environment.");
 
-  const [patients, appointments, invoices, labs, tasks, paymentsResult, visitsResult] = await Promise.all([
-    getDocs(collection(firestore, "patients")),
-    getDocs(collection(firestore, "appointments")),
-    getDocs(collection(firestore, "invoices")),
-    getDocs(collection(firestore, "labOrders")),
-    getDocs(collection(firestore, "staffTasks")),
-    getDocs(collectionGroup(firestore, "payments")).catch((error) => {
-      console.error("Dashboard payment audit could not be loaded", error);
-      return null;
-    }),
-    getDocs(collectionGroup(firestore, "visits")).catch((error) => {
-      console.error("Dashboard clinical visits could not be loaded", error);
-      return null;
-    }),
+  const [patientsResult, appointmentsResult, invoicesResult, labsResult, tasksResult, paymentsResult, visitsResult, outstandingResult, patientCountResult] = await Promise.all([
+    loadBoundedDocuments(
+      "patient registrations",
+      boundedRangeQuery(collection(firestore, "patients"), "createdAt", "timestamp", range, today, true),
+      PERIOD_RECORD_LIMIT,
+    ),
+    loadBoundedDocuments(
+      "appointments",
+      boundedRangeQuery(collection(firestore, "appointments"), "preferredDate", "date-key", range, today, false),
+      PERIOD_RECORD_LIMIT,
+    ),
+    loadBoundedDocuments(
+      "invoices",
+      boundedRangeQuery(collection(firestore, "invoices"), "createdAt", "timestamp", range, today, true),
+      PERIOD_RECORD_LIMIT,
+    ),
+    loadBoundedDocuments(
+      "lab orders",
+      query(collection(firestore, "labOrders"), limit(OPERATIONAL_RECORD_LIMIT + 1)),
+      OPERATIONAL_RECORD_LIMIT,
+    ),
+    loadBoundedDocuments(
+      "open staff tasks",
+      query(collection(firestore, "staffTasks"), where("status", "==", "open"), limit(OPERATIONAL_RECORD_LIMIT + 1)),
+      OPERATIONAL_RECORD_LIMIT,
+    ),
+    loadBoundedDocuments(
+      "payment audit",
+      boundedRangeQuery(collectionGroup(firestore, "payments"), "createdAt", "timestamp", range, today, true),
+      PERIOD_RECORD_LIMIT,
+    ),
+    loadBoundedDocuments(
+      "clinical visits",
+      boundedRangeQuery(collectionGroup(firestore, "visits"), "visitDate", "date-key", range, today, true),
+      PERIOD_RECORD_LIMIT,
+    ),
+    loadBoundedDocuments(
+      "outstanding invoices",
+      query(collection(firestore, "invoices"), where("balance", ">", 0), limit(PERIOD_RECORD_LIMIT + 1)),
+      PERIOD_RECORD_LIMIT,
+    ),
+    getCountFromServer(collection(firestore, "patients"))
+      .then((snapshot) => ({ count: snapshot.data().count, available: true }))
+      .catch((error) => {
+        console.error("Dashboard patient total could not be loaded", error);
+        return { count: 0, available: false };
+      }),
   ]);
 
-  const visitRecords = visitsResult
-    ? visitsResult.docs.map((item) => ({
-        id: item.id,
-        patientId: item.ref.parent.parent?.id ?? "",
-        ...item.data(),
-      }) as VisitRecord)
-    : [];
+  const patients = mapDocuments<PatientRecord>(patientsResult.documents);
+  const appointments = mapDocuments<AppointmentRecord>(appointmentsResult.documents);
+  const invoices = mapDocuments<InvoiceRecord>(invoicesResult.documents);
+  const payments = mapDocuments<PaymentRecord>(paymentsResult.documents);
+  const outstandingInvoices = mapDocuments<InvoiceRecord>(outstandingResult.documents);
+  const visitRecords = visitsResult.documents.map((item) => ({
+    id: item.id,
+    patientId: item.ref.parent.parent?.id ?? "",
+    ...item.data(),
+  }) as VisitRecord);
+
+  const referencedPatientIds = [
+    ...invoices.map((invoice) => invoice.patientId),
+    ...outstandingInvoices.map((invoice) => invoice.patientId),
+    ...payments.map((payment) => payment.patientId),
+    ...visitRecords.map((visit) => visit.patientId),
+  ];
+  const referencedPatients = await loadReferencedPatients(
+    referencedPatientIds,
+    new Set(patients.map((patient) => patient.id)),
+  );
+  const patientMap = new Map(patients.map((patient) => [patient.id, patient]));
+  referencedPatients.records.forEach((patient) => patientMap.set(patient.id, patient));
+
+  const sources = [
+    ["patient registrations", patientsResult],
+    ["appointments", appointmentsResult],
+    ["invoices", invoicesResult],
+    ["lab orders", labsResult],
+    ["open staff tasks", tasksResult],
+    ["payment audit", paymentsResult],
+    ["clinical visits", visitsResult],
+    ["outstanding invoices", outstandingResult],
+  ] as const;
+  const limitedSources = sources.filter(([, result]) => result.limited).map(([label]) => label);
+  const unavailableSources = sources.filter(([, result]) => !result.available).map(([label]) => label);
+  if (referencedPatients.limited) limitedSources.push("patient attribution");
+  if (!referencedPatients.available) unavailableSources.push("patient attribution");
+  if (!patientCountResult.available) unavailableSources.push("patient total");
 
   return {
-    patients: mapDocuments<PatientRecord>(patients.docs),
-    appointments: mapDocuments<AppointmentRecord>(appointments.docs),
-    invoices: mapDocuments<InvoiceRecord>(invoices.docs),
-    payments: paymentsResult ? mapDocuments<PaymentRecord>(paymentsResult.docs) : [],
+    patients: [...patientMap.values()],
+    appointments,
+    invoices,
+    outstandingInvoices,
+    payments,
     visits: visitRecords,
-    labs: mapDocuments<LabRecord>(labs.docs),
-    tasks: mapDocuments<TaskRecord>(tasks.docs),
-    paymentAuditAvailable: paymentsResult !== null,
-    visitRecordsAvailable: visitsResult !== null,
+    labs: mapDocuments<LabRecord>(labsResult.documents),
+    tasks: mapDocuments<TaskRecord>(tasksResult.documents),
+    totalPatientCount: patientCountResult.available ? patientCountResult.count : patientMap.size,
+    paymentAuditAvailable: paymentsResult.available,
+    visitRecordsAvailable: visitsResult.available,
+    limitedSources,
+    unavailableSources,
   };
 }
 
@@ -410,6 +607,7 @@ function MobileAdminDashboard({
   range,
   loading,
   error,
+  coverageMessage,
   lastUpdated,
   onRangeChange,
   onRefresh,
@@ -418,6 +616,7 @@ function MobileAdminDashboard({
   range: DashboardRange;
   loading: boolean;
   error: string;
+  coverageMessage: string;
   lastUpdated: Date | null;
   onRangeChange: (range: DashboardRange) => void;
   onRefresh: () => void;
@@ -544,6 +743,7 @@ function MobileAdminDashboard({
       </section>
 
       {error ? <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700"><AlertCircle size={19} className="mt-0.5 shrink-0" />{error}</div> : null}
+      {coverageMessage ? <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900"><ShieldAlert size={19} className="mt-0.5 shrink-0" /><p>{coverageMessage}</p></div> : null}
 
       <section className="space-y-3">
         <div className="px-1"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#A8864A]">One-tap workflow</p><h2 className="mt-1 text-2xl font-bold text-[#233A59]">What would you like to do?</h2></div>
@@ -571,29 +771,22 @@ function MobileAdminDashboard({
 function AdminDashboard() {
   const [data, setData] = useState<DashboardData>(emptyData);
   const [range, setRange] = useState<DashboardRange>("month");
+  const [refreshToken, setRefreshToken] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const today = clinicDateKey();
 
-  async function refresh() {
-    setLoading(true);
-    setError("");
-    try {
-      setData(await fetchDashboardData());
-      setLastUpdated(new Date());
-    } catch (loadError) {
-      console.error(loadError);
-      setError("The management dashboard could not be refreshed. Please check the connection and try again.");
-    } finally {
-      setLoading(false);
-    }
+  function refresh() {
+    setRefreshToken((value) => value + 1);
   }
 
   useEffect(() => {
     let active = true;
+    setLoading(true);
+    setError("");
 
-    void fetchDashboardData()
+    void fetchDashboardData(range, today)
       .then((nextData) => {
         if (!active) return;
         setData(nextData);
@@ -610,7 +803,7 @@ function AdminDashboard() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [range, refreshToken, today]);
 
   const analytics = useMemo(() => {
     const patientsById = new Map(data.patients.map((patient) => [patient.id, patient]));
@@ -721,11 +914,11 @@ function AdminDashboard() {
       const appointmentMinutes = timeInMinutes(appointment.preferredTime);
       return Number.isFinite(appointmentMinutes) && appointmentMinutes >= nowMinutes;
     }) ?? null;
-    const outstandingInvoices = data.invoices.filter((invoice) => Number(invoice.balance || 0) > 0);
+    const outstandingInvoices = data.outstandingInvoices;
 
     return {
-      totalPatients: data.patients.length,
-      newPatients: periodPatients.length,
+      totalPatients: data.totalPatientCount,
+      newPatients: range === "all" ? data.totalPatientCount : periodPatients.length,
       visits: periodVisits.length,
       uniqueVisitors: new Set(periodVisits.map((visit) => visit.patientId)).size,
       billed,
@@ -764,6 +957,14 @@ function AdminDashboard() {
   const maxMethodTotal = Math.max(1, ...analytics.methodTotals.map((entry) => entry[1]));
   const maxDailyVisits = Math.max(1, ...analytics.lastSevenDays.map((day) => day.visits));
   const appointmentTotal = Object.values(analytics.appointmentStatus).reduce((sum, value) => sum + value, 0);
+  const coverageMessage = [
+    data.limitedSources.length > 0
+      ? `Safety limits were reached for ${data.limitedSources.join(", ")}. Those figures are partial; choose Today or This month for a complete focused view.`
+      : "",
+    data.unavailableSources.length > 0
+      ? `Temporarily unavailable: ${data.unavailableSources.join(", ")}. Other dashboard sections remain live.`
+      : "",
+  ].filter(Boolean).join(" ");
 
   return (
     <>
@@ -794,9 +995,10 @@ function AdminDashboard() {
         range={range}
         loading={loading}
         error={error}
+        coverageMessage={coverageMessage}
         lastUpdated={lastUpdated}
         onRangeChange={setRange}
-        onRefresh={() => void refresh()}
+        onRefresh={refresh}
       />
       <div className="admin-desktop-dashboard hidden xl:block">
       <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
@@ -843,6 +1045,11 @@ function AdminDashboard() {
       {error ? (
         <div className="mt-6 flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-semibold text-red-700">
           <AlertCircle size={19} className="mt-0.5 shrink-0" />{error}
+        </div>
+      ) : null}
+      {coverageMessage ? (
+        <div className="mt-4 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm leading-6 text-amber-900">
+          <ShieldAlert size={19} className="mt-0.5 shrink-0" /><p>{coverageMessage}</p>
         </div>
       ) : null}
 
