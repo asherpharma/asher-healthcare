@@ -16,6 +16,7 @@ import {
 import {
   collection,
   doc,
+  getDoc,
   limit,
   onSnapshot,
   orderBy,
@@ -343,6 +344,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   const [savedPrescription, setSavedPrescription] = useState<PrescriptionPdfRecord | null>(null);
   const [documentAction, setDocumentAction] = useState<"print" | "download" | null>(null);
   const deepLinkedPatientHandled = useRef(false);
+  const requestedPatientRecords = useRef(new Set<string>());
 
   useEffect(() => {
     const stopPatients = onSnapshot(
@@ -379,6 +381,38 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
     );
     return stopAppointments;
   }, [db, selectedDate]);
+
+  useEffect(() => {
+    const loadedIds = new Set(patients.map((patient) => patient.id));
+    const missingIds = Array.from(new Set(
+      appointments.map((appointment) => appointment.patientId).filter((value): value is string => Boolean(value)),
+    )).filter((patientId) => !loadedIds.has(patientId) && !requestedPatientRecords.current.has(patientId));
+    if (missingIds.length === 0) return;
+
+    missingIds.forEach((patientId) => requestedPatientRecords.current.add(patientId));
+    let active = true;
+    void Promise.all(missingIds.map(async (patientId) => {
+      const snapshot = await getDoc(doc(db, "patients", patientId));
+      return snapshot.exists() ? ({ id: snapshot.id, ...snapshot.data() } as Patient) : null;
+    }))
+      .then((records) => {
+        if (!active) return;
+        setPatients((current) => {
+          const merged = new Map(current.map((patient) => [patient.id, patient]));
+          records.forEach((patient) => {
+            if (patient) merged.set(patient.id, patient);
+          });
+          return Array.from(merged.values());
+        });
+      })
+      .catch((loadError) => {
+        console.error("Linked patient records could not be loaded", loadError);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [appointments, db, patients]);
 
   useEffect(() => {
     if (!patientsLoaded || !appointmentsLoaded || deepLinkedPatientHandled.current) return;

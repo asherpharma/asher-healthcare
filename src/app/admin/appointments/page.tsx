@@ -84,6 +84,7 @@ type Appointment = {
 type StatusFilter = "all" | AppointmentStatus;
 type BookingSource = "reception" | "phone" | "walk-in";
 type BookingForm = {
+  patientId: string;
   patientName: string;
   phone: string;
   doctorId: DoctorId;
@@ -111,6 +112,7 @@ function assignedDoctorId(doctorNameValue?: string): DoctorId | null {
 }
 
 const emptyBooking = (date: string, time = "17:00"): BookingForm => ({
+  patientId: "",
   patientName: "",
   phone: "",
   doctorId: "pediatrics",
@@ -202,6 +204,7 @@ function AppointmentDesk() {
           const doctorId: DoctorId = /(reshma|obstetric|gyn|obg|women)/.test(doctorDescriptor) ? "obg" : "pediatrics";
           setBooking((current) => ({
             ...current,
+            patientId: snapshot.id,
             patientName: String(patient.fullName || ""),
             phone: String(patient.phone || ""),
             doctorId,
@@ -359,7 +362,9 @@ function AppointmentDesk() {
         const counterRef = doc(
           database,
           "queueCounters",
-          `${item.doctorId}_${item.preferredDate}`,
+          item.doctorId,
+          "days",
+          item.preferredDate,
         );
         const existingCounter = await getDoc(counterRef);
         let migrationSeed = 0;
@@ -396,6 +401,7 @@ function AppointmentDesk() {
               doctorId: latestItem.doctorId,
               date: latestItem.preferredDate,
               lastToken: token,
+              appointmentId: latestItem.id,
               updatedAt: changedAt,
             });
           }
@@ -483,6 +489,7 @@ function AppointmentDesk() {
         body: JSON.stringify({
           patientName: name,
           phone,
+          patientId: booking.patientId || undefined,
           doctorId: booking.doctorId,
           preferredDate: booking.preferredDate,
           preferredTime: selectedBookingTime,
@@ -505,7 +512,11 @@ function AppointmentDesk() {
   }
 
   function updateBooking<Key extends keyof BookingForm>(key: Key, value: BookingForm[Key]) {
-    setBooking((current) => ({ ...current, [key]: value }));
+    setBooking((current) => ({
+      ...current,
+      [key]: value,
+      ...((key === "patientName" || key === "phone") ? { patientId: "" } : {}),
+    }));
   }
 
   function clearFilters() {

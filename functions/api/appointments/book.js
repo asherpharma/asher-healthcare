@@ -112,6 +112,7 @@ export async function onRequestPost(context) {
     const patientName = cleanText(body.patientName, 80);
     const phone = cleanText(body.phone, 20);
     const phoneDigits = normalizedPhone(phone);
+    const requestedPatientId = cleanText(body.patientId, 128);
     const doctorId = cleanText(body.doctorId, 30);
     const preferredDate = cleanText(body.preferredDate, 10);
     const preferredTime = cleanText(body.preferredTime, 5);
@@ -148,11 +149,23 @@ export async function onRequestPost(context) {
 
     let actorUid = "public-website";
     let status = "requested";
+    let patientId = "";
     if (source !== "website") {
       if (!STAFF_SOURCES.includes(source)) throw new HttpError(400, "Choose a valid booking source.");
       const staff = await requireActiveStaff(context.request, context.env);
       actorUid = staff.uid;
       status = "confirmed";
+      if (requestedPatientId) {
+        const patientDocument = await getDocument(context.env, `patients/${requestedPatientId}`);
+        if (!patientDocument) throw new HttpError(400, "The selected patient record no longer exists.");
+        if (
+          normalizedPhone(patientDocument.data.phone) !== phoneDigits
+          || normalizedName(patientDocument.data.fullName) !== normalizedName(patientName)
+        ) {
+          throw new HttpError(400, "The selected patient record does not match the booking details.");
+        }
+        patientId = requestedPatientId;
+      }
     }
 
     const scheduleDocument = await getDocument(
@@ -210,6 +223,7 @@ export async function onRequestPost(context) {
         updatedAt: now,
       }),
       createDocumentWrite(context.env, `appointments/${appointmentId}`, {
+        ...(patientId ? { patientId } : {}),
         patientName,
         phone,
         doctorId,
