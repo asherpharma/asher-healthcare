@@ -9,6 +9,7 @@ import {
   WifiOff,
   X,
 } from "lucide-react";
+import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
 type InstallPromptEvent = Event & {
@@ -16,16 +17,60 @@ type InstallPromptEvent = Event & {
   userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
 };
 
+type AppContext = "public" | "staff";
+
+type AppInstalledEvent = CustomEvent<{ context: AppContext }>;
+
 declare global {
   interface Window {
     __asherInstallPrompt?: InstallPromptEvent | null;
+    __asherInstallPromptContext?: AppContext | null;
+  }
+}
+
+const STAFF_APP_SESSION_KEY = "asher-staff-mobile-v2-session";
+
+function isStaffPath(pathname: string) {
+  return pathname === "/admin" || pathname.startsWith("/admin/");
+}
+
+function isStandaloneDisplay() {
+  return (
+    window.matchMedia("(display-mode: standalone)").matches ||
+    Boolean((navigator as Navigator & { standalone?: boolean }).standalone)
+  );
+}
+
+function staffAppIsInstalled() {
+  if (!isStandaloneDisplay()) return false;
+
+  const launchedAsStaff = new URLSearchParams(window.location.search).get("app") === "mobile-v2";
+
+  try {
+    if (launchedAsStaff) sessionStorage.setItem(STAFF_APP_SESSION_KEY, "1");
+    return launchedAsStaff || sessionStorage.getItem(STAFF_APP_SESSION_KEY) === "1";
+  } catch {
+    return launchedAsStaff;
   }
 }
 
 export function PwaRegister() {
+  const pathname = usePathname();
+  const appContext: AppContext = isStaffPath(pathname) ? "staff" : "public";
+
   useEffect(() => {
     let refreshingForUpdate = false;
     const hadController = Boolean(navigator.serviceWorker?.controller);
+
+    // Preserve the staff launch identity before authentication redirects can
+    // remove the manifest's `?app=mobile-v2` start marker.
+    if (appContext === "staff") staffAppIsInstalled();
+
+    // A prompt belongs to the manifest that was active when the browser created it.
+    // Never carry a public-site prompt into the secure staff workspace (or vice versa).
+    window.__asherInstallPrompt = null;
+    window.__asherInstallPromptContext = null;
+    window.dispatchEvent(new Event("asher-install-context-change"));
 
     const onControllerChange = () => {
       if (!hadController || refreshingForUpdate) return;
@@ -36,13 +81,10 @@ export function PwaRegister() {
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.addEventListener("controllerchange", onControllerChange);
 
-      const isStaffApp =
-        window.location.pathname === "/admin" ||
-        window.location.pathname.startsWith("/admin/");
-      const workerUrl = isStaffApp
-        ? "/staff-v2-sw.js?v=asher-staff-mobile-v2"
-        : "/sw.js?v=asher-public-20260802";
-      const workerScope = isStaffApp ? "/admin" : "/";
+      const workerUrl = appContext === "staff"
+        ? "/staff-v2-sw.js?v=asher-staff-20260802-3"
+        : "/sw.js?v=asher-public-20260802-3";
+      const workerScope = appContext === "staff" ? "/admin" : "/";
 
       void navigator.serviceWorker
         .register(workerUrl, {
@@ -61,11 +103,15 @@ export function PwaRegister() {
     const onPrompt = (event: Event) => {
       event.preventDefault();
       window.__asherInstallPrompt = event as InstallPromptEvent;
+      window.__asherInstallPromptContext = appContext;
       window.dispatchEvent(new Event("asher-install-available"));
     };
     const onInstalled = () => {
       window.__asherInstallPrompt = null;
-      window.dispatchEvent(new Event("asher-app-installed"));
+      window.__asherInstallPromptContext = null;
+      window.dispatchEvent(
+        new CustomEvent("asher-app-installed", { detail: { context: appContext } }),
+      );
     };
 
     window.addEventListener("beforeinstallprompt", onPrompt);
@@ -75,15 +121,8 @@ export function PwaRegister() {
       window.removeEventListener("beforeinstallprompt", onPrompt);
       window.removeEventListener("appinstalled", onInstalled);
     };
-  }, []);
+  }, [appContext]);
   return null;
-}
-
-function appIsInstalled() {
-  const standalone =
-    window.matchMedia("(display-mode: standalone)").matches ||
-    Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
-  return standalone;
 }
 
 export function NetworkStatus() {
@@ -126,22 +165,34 @@ export function InstallAppButton({
   const [prompt, setPrompt] = useState<InstallPromptEvent | null>(null);
   const [installed, setInstalled] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [insidePublicApp, setInsidePublicApp] = useState(false);
 
   useEffect(() => {
-    const syncPrompt = () => setPrompt(window.__asherInstallPrompt ?? null);
-    const onInstalled = () => {
+    const syncPrompt = () => {
+      setPrompt(
+        window.__asherInstallPromptContext === "staff"
+          ? (window.__asherInstallPrompt ?? null)
+          : null,
+      );
+    };
+    const onInstalled = (event: Event) => {
+      if ((event as AppInstalledEvent).detail?.context !== "staff") return;
       setPrompt(null);
       setInstalled(true);
     };
     const syncTimer = window.setTimeout(() => {
-      setInstalled(appIsInstalled());
+      const staffInstalled = staffAppIsInstalled();
+      setInstalled(staffInstalled);
+      setInsidePublicApp(isStandaloneDisplay() && !staffInstalled);
       syncPrompt();
     }, 0);
     window.addEventListener("asher-install-available", syncPrompt);
+    window.addEventListener("asher-install-context-change", syncPrompt);
     window.addEventListener("asher-app-installed", onInstalled);
     return () => {
       window.clearTimeout(syncTimer);
       window.removeEventListener("asher-install-available", syncPrompt);
+      window.removeEventListener("asher-install-context-change", syncPrompt);
       window.removeEventListener("asher-app-installed", onInstalled);
     };
   }, []);
@@ -215,6 +266,15 @@ export function InstallAppButton({
             </div>
 
             <div className="mt-6 space-y-3">
+              {insidePublicApp ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                  <p className="font-bold text-amber-900">Open the staff page in your browser first</p>
+                  <p className="mt-1 text-sm leading-6 text-amber-800">
+                    You are currently inside the Asher patient app. Use its browser menu to open
+                    this page in Chrome or Safari, then follow the installation steps below.
+                  </p>
+                </div>
+              ) : null}
               <div className="rounded-2xl bg-slate-50 p-4">
                 <p className="font-bold text-[#233A59]">Android · Chrome</p>
                 <p className="mt-1 text-sm leading-6 text-slate-600">

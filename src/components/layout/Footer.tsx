@@ -24,6 +24,7 @@ export default function Footer() {
           <Link href="/#doctors">Doctors</Link>
           <Link href="/#clinic">Clinic</Link>
           <Link href="/#appointment">Appointments</Link>
+          <Link href="/#faq">Patient FAQs</Link>
         </div>
         <div>
           <h3>Patient information</h3>

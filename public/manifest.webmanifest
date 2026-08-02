@@ -1,16 +1,16 @@
 {
-  "id": "/admin",
-  "name": "Asher Healthcare Clinic Staff",
-  "short_name": "Asher Staff",
-  "description": "Secure mobile clinic workspace for Asher Women & Child Healthcare staff.",
-  "start_url": "/admin?source=installed-app",
+  "id": "/",
+  "name": "Asher Women & Child Healthcare",
+  "short_name": "Asher Health",
+  "description": "Specialist pediatric, obstetric and gynaecology care in North Bengaluru.",
+  "start_url": "/?source=installed-app",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
-  "background_color": "#f8fafc",
-  "theme_color": "#233A59",
+  "background_color": "#fffefb",
+  "theme_color": "#0d2b45",
   "orientation": "portrait-primary",
-  "scope": "/admin",
-  "categories": ["medical", "business", "productivity"],
+  "scope": "/",
+  "categories": ["medical", "health", "lifestyle"],
   "prefer_related_applications": false,
   "icons": [
     {
@@ -34,34 +34,24 @@
   ],
   "shortcuts": [
     {
-      "name": "Appointments",
-      "short_name": "Appointments",
-      "url": "/admin/appointments"
+      "name": "Book an appointment",
+      "short_name": "Book",
+      "url": "/#appointment"
     },
     {
-      "name": "Patients",
-      "short_name": "Patients",
-      "url": "/admin/patients"
+      "name": "Meet our doctors",
+      "short_name": "Doctors",
+      "url": "/#doctors"
     },
     {
-      "name": "Tasks & Follow-ups",
-      "short_name": "Tasks",
-      "url": "/admin/tasks"
+      "name": "Clinic location",
+      "short_name": "Location",
+      "url": "/#contact"
     },
     {
-      "name": "Billing",
-      "short_name": "Billing",
-      "url": "/admin/billing"
-    },
-    {
-      "name": "Lab Desk",
-      "short_name": "Lab",
-      "url": "/admin/lab"
-    },
-    {
-      "name": "Mobile App Setup",
-      "short_name": "App Setup",
-      "url": "/admin/app"
+      "name": "Patient information",
+      "short_name": "Information",
+      "url": "/patient-rights"
     }
   ]
 }

@@ -1,4 +1,4 @@
-const STAFF_APP_RELEASE = "2026.08.02.2-mobile-v2";
+const STAFF_APP_RELEASE = "2026.08.02.3-recovery";
 
 self.addEventListener("install", () => {
   self.skipWaiting();

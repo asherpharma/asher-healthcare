@@ -16,11 +16,11 @@ const playfair = Playfair_Display({
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://asherhealthcare.in"),
-  applicationName: "Asher Healthcare Staff",
+  applicationName: "Asher Women & Child Healthcare",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
-    title: "Asher Staff",
+    title: "Asher Healthcare",
     statusBarStyle: "default",
   },
   formatDetection: {

@@ -1,8 +1,9 @@
-const APP_RELEASE = "2026.08.02.2-mobile-v2";
+const APP_RELEASE = "2026.08.02.3-public-trust";
 const CACHE_NAME = `asher-public-${APP_RELEASE}`;
 const PUBLIC_ASSETS = [
   "/",
   "/offline.html",
+  "/public-offline.html",
   "/manifest.webmanifest",
   "/images/logo.png",
   "/icons/icon-192.png",
@@ -46,6 +47,18 @@ self.addEventListener("fetch", (event) => {
           status: 503,
           headers: { "Content-Type": "text/plain; charset=utf-8" },
         });
+      }),
+    );
+    return;
+  }
+
+  // Public pages use the network first so patients see current appointment
+  // information. If the connection is unavailable, show a branded page that
+  // contains no patient, appointment, or billing data.
+  if (request.mode === "navigate") {
+    event.respondWith(
+      fetch(request).catch(async () => {
+        return (await caches.match("/public-offline.html")) || Response.error();
       }),
     );
     return;
