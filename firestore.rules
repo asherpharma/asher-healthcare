@@ -34,7 +34,7 @@ service cloud.firestore {
         || (resource.data.status == 'confirmed'
           && request.resource.data.status in ['checked_in', 'cancelled', 'no_show'])
         || (resource.data.status == 'checked_in'
-          && request.resource.data.status in ['waiting', 'no_show'])
+          && request.resource.data.status in ['waiting', 'in_consultation', 'no_show'])
         || (resource.data.status == 'waiting'
           && request.resource.data.status in ['in_consultation', 'no_show'])
         || (resource.data.status == 'in_consultation'

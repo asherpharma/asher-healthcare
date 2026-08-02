@@ -1,5 +1,6 @@
 "use client";
 
+import { useStaff } from "@/components/admin/StaffGuard";
 import { firebaseAuth, firestore } from "@/firebase/config";
 import { useAppointmentSchedule } from "@/hooks/useAppointmentSchedule";
 import {
@@ -14,6 +15,16 @@ import {
   type DoctorId,
 } from "@/lib/appointments";
 import {
+  APPOINTMENT_STATUS_OPTIONS,
+  appointmentStatusLabel,
+  appointmentStatusTimestampField,
+  appointmentStatusTone,
+  appointmentTransitionOptions,
+  nextQueueToken,
+  queueTokenLabel,
+  type AppointmentStatus,
+} from "@/lib/visit-workflow";
+import {
   collection,
   doc,
   getDoc,
@@ -21,6 +32,7 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   serverTimestamp,
   where,
   writeBatch,
@@ -32,19 +44,23 @@ import {
   CheckCircle2,
   Clock3,
   Filter,
+  Hash,
   LoaderCircle,
+  LogIn,
   MessageCircle,
   Phone,
+  Play,
   Plus,
   Save,
   Search,
   Stethoscope,
   UserRound,
+  UserX,
   XCircle,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 
-type AppointmentStatus = "requested" | "confirmed" | "completed" | "cancelled";
 type Appointment = {
   id: string;
   patientName: string;
@@ -54,9 +70,15 @@ type Appointment = {
   preferredTime: string;
   reason: string;
   status: AppointmentStatus;
+  queueToken?: number;
   source?: string;
   slotId?: string;
   createdAt?: Timestamp;
+  checkedInAt?: Timestamp;
+  waitingAt?: Timestamp;
+  consultationStartedAt?: Timestamp;
+  completedAt?: Timestamp;
+  noShowAt?: Timestamp;
 };
 
 type StatusFilter = "all" | AppointmentStatus;
@@ -74,13 +96,6 @@ type BookingForm = {
 const doctorNames: Record<string, string> = {
   pediatrics: "Dr. Lt Col Shafi Ahamad",
   obg: "Dr. Shaik Reshma",
-};
-
-const statusStyles: Record<AppointmentStatus, string> = {
-  requested: "bg-amber-50 text-amber-800 ring-amber-200",
-  confirmed: "bg-blue-50 text-blue-800 ring-blue-200",
-  completed: "bg-emerald-50 text-emerald-800 ring-emerald-200",
-  cancelled: "bg-red-50 text-red-800 ring-red-200",
 };
 
 const emptyBooking = (date: string, time = "17:00"): BookingForm => ({
@@ -108,6 +123,8 @@ function whatsAppNumber(phone: string) {
 }
 
 function AppointmentDesk() {
+  const router = useRouter();
+  const { profile } = useStaff();
   const today = clinicDate();
   const { schedule } = useAppointmentSchedule();
   const [items, setItems] = useState<Appointment[]>([]);
@@ -138,7 +155,7 @@ function AppointmentDesk() {
       if (params.get("date") === "today") {
         setDateFilter(today);
       }
-      if (["requested", "confirmed", "completed", "cancelled"].includes(requestedStatus ?? "")) {
+      if (APPOINTMENT_STATUS_OPTIONS.some((option) => option.value === requestedStatus)) {
         setStatusFilter(requestedStatus as AppointmentStatus);
       }
       if (params.get("new") === "1") {
@@ -235,8 +252,9 @@ function AppointmentDesk() {
   const stats = useMemo(() => ({
     requested: items.filter((item) => item.status === "requested").length,
     today: items.filter((item) => item.preferredDate === today && item.status !== "cancelled").length,
-    confirmed: items.filter((item) => item.status === "confirmed").length,
-    completed: items.filter((item) => item.status === "completed").length,
+    waiting: items.filter((item) => item.preferredDate === today && ["checked_in", "waiting"].includes(item.status)).length,
+    consulting: items.filter((item) => item.preferredDate === today && item.status === "in_consultation").length,
+    completed: items.filter((item) => item.preferredDate === today && item.status === "completed").length,
   }), [items, today]);
 
   const filteredItems = useMemo(() => {
@@ -252,27 +270,76 @@ function AppointmentDesk() {
   }, [dateFilter, doctorFilter, items, search, statusFilter]);
 
   async function changeStatus(id: string, status: AppointmentStatus) {
-    if (!firestore) return;
+    if (!firestore) return false;
     setUpdatingId(id);
     setError("");
     setNotice("");
     try {
       const item = items.find((appointment) => appointment.id === id);
+      if (!item) throw new Error("Appointment not found");
+      if (item.status === status) return true;
+      if (!appointmentTransitionOptions(item.status).includes(status)) {
+        throw new Error("Choose the next available step in the visit workflow.");
+      }
+
+      if (status === "checked_in") {
+        const queueAppointments = items.filter(
+          (appointment) => appointment.doctorId === item.doctorId && appointment.preferredDate === item.preferredDate,
+        );
+        const queueIds = Array.from(new Set([...queueAppointments.map((appointment) => appointment.id), item.id]));
+        const assignedToken = await runTransaction(firestore, async (transaction) => {
+          const liveAppointments: Appointment[] = [];
+          for (const appointmentId of queueIds) {
+            const snapshot = await transaction.get(doc(firestore, "appointments", appointmentId));
+            if (snapshot.exists()) {
+              liveAppointments.push({ id: snapshot.id, ...snapshot.data() } as Appointment);
+            }
+          }
+          const latestItem = liveAppointments.find((appointment) => appointment.id === item.id);
+          if (!latestItem) throw new Error("Appointment not found");
+          const token = latestItem.queueToken || nextQueueToken(liveAppointments, latestItem);
+          const changedAt = serverTimestamp();
+          transaction.update(doc(firestore, "appointments", item.id), {
+            status,
+            queueToken: token,
+            checkedInAt: changedAt,
+            updatedAt: changedAt,
+          });
+          return token;
+        });
+        setNotice(`Patient checked in. Queue token ${queueTokenLabel(assignedToken, item.doctorId)} is ready.`);
+        return true;
+      }
+
+      const changedAt = serverTimestamp();
+      const timestampField = appointmentStatusTimestampField(status);
       const batch = writeBatch(firestore);
       batch.update(doc(firestore, "appointments", id), {
         status,
-        updatedAt: serverTimestamp(),
+        ...(timestampField ? { [timestampField]: changedAt } : {}),
+        updatedAt: changedAt,
       });
       if (status === "cancelled" && item?.slotId) {
         batch.delete(doc(firestore, "appointmentSlots", item.slotId));
       }
       await batch.commit();
-      setNotice("Appointment status updated.");
-    } catch {
-      setError("The appointment could not be updated. Please try again.");
+      setNotice(`Visit moved to ${appointmentStatusLabel(status).toLowerCase()}.`);
+      return true;
+    } catch (updateError) {
+      console.error(updateError);
+      setError(updateError instanceof Error ? updateError.message : "The appointment could not be updated. Please try again.");
+      return false;
     } finally {
       setUpdatingId(null);
     }
+  }
+
+  async function beginConsultation(item: Appointment) {
+    if (profile.role === "reception") return;
+    const updated = item.status === "in_consultation"
+      ? true
+      : await changeStatus(item.id, "in_consultation");
+    if (updated) router.push(`/admin/consultations?appointment=${encodeURIComponent(item.id)}`);
   }
 
   async function createAppointment(event: FormEvent<HTMLFormElement>) {
@@ -427,16 +494,17 @@ function AppointmentDesk() {
         </section>
       )}
 
-      <div className="mt-7 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-7 grid grid-cols-2 gap-3 xl:grid-cols-5">
         {[
           { label: "New requests", value: stats.requested, icon: Clock3, tone: "bg-amber-50 text-amber-700" },
           { label: "Visits today", value: stats.today, icon: CalendarCheck2, tone: "bg-blue-50 text-blue-700" },
-          { label: "Confirmed", value: stats.confirmed, icon: CheckCircle2, tone: "bg-indigo-50 text-indigo-700" },
+          { label: "Waiting now", value: stats.waiting, icon: LogIn, tone: "bg-violet-50 text-violet-700" },
+          { label: "With doctor", value: stats.consulting, icon: Stethoscope, tone: "bg-fuchsia-50 text-fuchsia-700" },
           { label: "Completed", value: stats.completed, icon: Stethoscope, tone: "bg-emerald-50 text-emerald-700" },
         ].map(({ label, value, icon: Icon, tone }) => (
-          <article key={label} className="flex items-center gap-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
-            <span className={"rounded-xl p-3 " + tone}><Icon size={21} /></span>
-            <div><p className="text-2xl font-bold text-[#233A59]">{value}</p><p className="text-sm text-slate-600">{label}</p></div>
+          <article key={label} className="flex min-w-0 items-center gap-3 rounded-2xl bg-white p-3 shadow-sm ring-1 ring-slate-200 sm:p-4">
+            <span className={"hidden rounded-xl p-3 sm:inline-flex " + tone}><Icon size={21} /></span>
+            <div className="min-w-0"><p className="text-2xl font-bold text-[#233A59]">{value}</p><p className="truncate text-xs text-slate-600 sm:text-sm">{label}</p></div>
           </article>
         ))}
       </div>
@@ -449,7 +517,7 @@ function AppointmentDesk() {
             <Search size={17} className="pointer-events-none absolute left-3 top-3 text-slate-400" />
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search patient, phone or reason" className={inputClass + " w-full pl-10"} />
           </label>
-          <label><span className="sr-only">Status</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as StatusFilter)} className={inputClass + " w-full"}><option value="all">All statuses</option><option value="requested">Requested</option><option value="confirmed">Confirmed</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select></label>
+          <label><span className="sr-only">Status</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as StatusFilter)} className={inputClass + " w-full"}><option value="all">All statuses</option>{APPOINTMENT_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
           <label><span className="sr-only">Doctor</span><select value={doctorFilter} onChange={(event) => setDoctorFilter(event.target.value)} className={inputClass + " w-full"}><option value="all">All doctors</option><option value="pediatrics">Dr. Shafi Ahamad</option><option value="obg">Dr. Shaik Reshma</option></select></label>
           <label><span className="sr-only">Preferred date</span><input value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} type="date" className={inputClass + " w-full"} /></label>
           <button type="button" disabled={!activeFilters} onClick={clearFilters} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"><XCircle size={17} /> Clear</button>
@@ -471,6 +539,11 @@ function AppointmentDesk() {
       <div className="performance-list mt-6 space-y-4">
         {filteredItems.map((item) => {
           const isUpdating = updatingId === item.id;
+          const token = queueTokenLabel(item.queueToken, item.doctorId);
+          const nextStatuses = appointmentTransitionOptions(item.status).filter(
+            (status) => profile.role !== "reception" || (status !== "in_consultation" && status !== "completed"),
+          );
+          const canCheckInToday = item.preferredDate === today;
           const message = "Hello " + item.patientName + ", your appointment request at Asher Women & Child Healthcare for " + prettyDate(item.preferredDate) + " at " + formatAppointmentTime(item.preferredTime) + " with " + doctorName(item.doctorId) + " has been received. Please reply here if you need help.";
           return (
             <article key={item.id} className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
@@ -478,7 +551,8 @@ function AppointmentDesk() {
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
                     <h2 className="inline-flex items-center gap-2 font-bold text-[#233A59]"><UserRound size={18} className="text-[#A8864A]" /> {item.patientName}</h2>
-                    <span className={"rounded-full px-2.5 py-1 text-xs font-bold capitalize ring-1 " + statusStyles[item.status]}>{item.status}</span>
+                    <span className={"rounded-full px-2.5 py-1 text-xs font-bold ring-1 " + appointmentStatusTone(item.status)}>{appointmentStatusLabel(item.status)}</span>
+                    {token ? <span className="inline-flex items-center gap-1 rounded-full bg-[#233A59] px-2.5 py-1 text-xs font-bold text-white"><Hash size={12} />{token}</span> : null}
                   </div>
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-500"><span>{doctorNames[item.doctorId] || item.doctorId}</span><span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-slate-500">{item.source === "walk-in" ? "Walk-in" : item.source === "phone" ? "Phone" : item.source === "reception" ? "Reception" : "Website"}</span></div>
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -491,16 +565,23 @@ function AppointmentDesk() {
                 <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600">
                   <p className="font-bold text-[#233A59]">{prettyDate(item.preferredDate)} · {formatAppointmentTime(item.preferredTime)}</p>
                   <p className="mt-2 leading-6">{item.reason || "No reason provided"}</p>
-                  {item.preferredDate === today && <span className="mt-3 inline-flex rounded-full bg-blue-100 px-2.5 py-1 text-xs font-bold text-blue-800">Today</span>}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {item.preferredDate === today && <span className="inline-flex rounded-full bg-blue-100 px-2.5 py-1 text-xs font-bold text-blue-800">Today</span>}
+                    {token ? <span className="inline-flex rounded-full bg-white px-2.5 py-1 text-xs font-bold text-slate-700 ring-1 ring-slate-200">Queue {token}</span> : null}
+                  </div>
                 </div>
 
-                <div className="min-w-[210px]">
-                  <div className="flex flex-wrap gap-2">
+                <div className="min-w-0 xl:min-w-[230px]">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-1">
                     {item.status === "requested" && <button type="button" disabled={isUpdating} onClick={() => void changeStatus(item.id, "confirmed")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-blue-700 px-3 py-2.5 text-xs font-bold text-white disabled:opacity-50"><CheckCircle2 size={15} /> Confirm</button>}
-                    {item.status === "confirmed" && <button type="button" disabled={isUpdating} onClick={() => void changeStatus(item.id, "completed")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-700 px-3 py-2.5 text-xs font-bold text-white disabled:opacity-50"><Stethoscope size={15} /> Complete</button>}
+                    {(item.status === "confirmed" || item.status === "no_show") && <button type="button" disabled={isUpdating || !canCheckInToday} title={canCheckInToday ? "Assign the next queue token" : "Check-in is available on the appointment date"} onClick={() => void changeStatus(item.id, "checked_in")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-cyan-700 px-3 py-2.5 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-45"><LogIn size={15} /> Check in &amp; issue token</button>}
+                    {item.status === "checked_in" && <button type="button" disabled={isUpdating} onClick={() => void changeStatus(item.id, "waiting")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-700 px-3 py-2.5 text-xs font-bold text-white disabled:opacity-50"><Clock3 size={15} /> Add to waiting</button>}
+                    {profile.role !== "reception" && item.status === "waiting" && <button type="button" disabled={isUpdating} onClick={() => void beginConsultation(item)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#233A59] px-3 py-2.5 text-xs font-bold text-white disabled:opacity-50"><Play size={15} /> Start consultation</button>}
+                    {profile.role !== "reception" && item.status === "in_consultation" && <button type="button" disabled={isUpdating} onClick={() => void beginConsultation(item)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-fuchsia-700 px-3 py-2.5 text-xs font-bold text-white disabled:opacity-50"><Stethoscope size={15} /> Open consultation</button>}
+                    {["confirmed", "checked_in", "waiting"].includes(item.status) && <button type="button" disabled={isUpdating || !canCheckInToday} title={canCheckInToday ? "Record that the patient did not attend" : "No-show can be recorded on the appointment date"} onClick={() => void changeStatus(item.id, "no_show")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-orange-200 bg-orange-50 px-3 py-2.5 text-xs font-bold text-orange-800 disabled:cursor-not-allowed disabled:opacity-45"><UserX size={15} /> Mark no-show</button>}
                   </div>
-                  <label className="mt-3 block text-xs font-bold uppercase tracking-wide text-slate-500">Status
-                    <select disabled={isUpdating} value={item.status} onChange={(event) => void changeStatus(item.id, event.target.value as AppointmentStatus)} className="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold normal-case text-slate-700 disabled:opacity-50"><option value="requested">Requested</option><option value="confirmed">Confirmed</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select>
+                  <label className="mt-3 block text-xs font-bold uppercase tracking-wide text-slate-500">Move visit
+                    <select disabled={isUpdating || nextStatuses.length === 0} value={item.status} onChange={(event) => void changeStatus(item.id, event.target.value as AppointmentStatus)} className="mt-2 block min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold normal-case text-slate-700 disabled:opacity-50"><option value={item.status}>{appointmentStatusLabel(item.status)}</option>{nextStatuses.map((status) => <option key={status} value={status}>{appointmentStatusLabel(status)}</option>)}</select>
                   </label>
                   {isUpdating && <p className="mt-2 flex items-center gap-2 text-xs font-semibold text-slate-500"><LoaderCircle size={14} className="animate-spin" /> Saving…</p>}
                 </div>

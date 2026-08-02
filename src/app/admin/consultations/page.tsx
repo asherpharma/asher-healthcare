@@ -4,6 +4,16 @@ import { type StaffProfile, useStaff } from "@/components/admin/StaffGuard";
 import { firestore } from "@/firebase/config";
 import type { PrescriptionPdfRecord } from "@/lib/prescription-pdf";
 import {
+  appointmentStatusLabel,
+  appointmentStatusTone,
+  isLiveQueueStatus,
+  isWaitingStatus,
+  queueStage,
+  queueTokenLabel,
+  type AppointmentStatus,
+  type QueueStatus,
+} from "@/lib/visit-workflow";
+import {
   collection,
   doc,
   limit,
@@ -27,9 +37,11 @@ import {
   FileText,
   FlaskConical,
   HeartPulse,
+  Hash,
   History,
   LoaderCircle,
   Pill,
+  Play,
   Plus,
   Printer,
   Search,
@@ -68,9 +80,15 @@ type Appointment = {
   preferredDate: string;
   preferredTime: string;
   reason: string;
-  status: "requested" | "confirmed" | "completed" | "cancelled";
+  status: AppointmentStatus;
+  queueToken?: number;
   source?: string;
   createdAt?: Timestamp;
+  checkedInAt?: Timestamp;
+  waitingAt?: Timestamp;
+  consultationStartedAt?: Timestamp;
+  completedAt?: Timestamp;
+  noShowAt?: Timestamp;
 };
 
 type Visit = {
@@ -116,8 +134,10 @@ type QueueEntry = {
   doctorName: string;
   time: string;
   reason: string;
-  status: Appointment["status"] | "registered";
+  status: QueueStatus;
   source: string;
+  queueToken?: number;
+  doctorId?: string;
 };
 
 const COMMON_TESTS = [
@@ -198,24 +218,6 @@ function labOrderNumber() {
   return `LAB-${stamp}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
 }
 
-function queueStatus(status: QueueEntry["status"]) {
-  const labels: Record<QueueEntry["status"], string> = {
-    requested: "Needs confirmation",
-    confirmed: "Waiting",
-    completed: "Completed",
-    cancelled: "Cancelled",
-    registered: "Walk-in registered",
-  };
-  return labels[status];
-}
-
-function queueTone(status: QueueEntry["status"]) {
-  if (status === "completed") return "bg-emerald-50 text-emerald-700";
-  if (status === "requested") return "bg-amber-50 text-amber-800";
-  if (status === "confirmed") return "bg-blue-50 text-blue-700";
-  return "bg-violet-50 text-violet-700";
-}
-
 function age(dateOfBirth: string) {
   const birth = new Date(`${dateOfBirth}T12:00:00`);
   if (Number.isNaN(birth.getTime())) return "Age not recorded";
@@ -271,6 +273,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   const [labTests, setLabTests] = useState<string[]>([]);
   const [customTest, setCustomTest] = useState("");
   const [saving, setSaving] = useState(false);
+  const [updatingQueueId, setUpdatingQueueId] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [savedPrescription, setSavedPrescription] = useState<PrescriptionPdfRecord | null>(null);
@@ -309,16 +312,28 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   }, [db]);
 
   useEffect(() => {
-    if (!patientsLoaded || deepLinkedPatientHandled.current) return;
+    if (!patientsLoaded || !appointmentsLoaded || deepLinkedPatientHandled.current) return;
 
-    const patientId = new URLSearchParams(window.location.search).get("patient")?.trim();
-    const deepLinkedPatientExists = Boolean(patientId && patients.some((patient) => patient.id === patientId));
+    const params = new URLSearchParams(window.location.search);
+    const requestedPatientId = params.get("patient")?.trim();
+    const requestedAppointmentId = params.get("appointment")?.trim();
+    const deepLinkedAppointment = requestedAppointmentId
+      ? appointments.find((appointment) => appointment.id === requestedAppointmentId)
+      : undefined;
+    const matchedPatient = requestedPatientId
+      ? patients.find((patient) => patient.id === requestedPatientId)
+      : deepLinkedAppointment
+        ? patients.find((patient) => normalisePhone(patient.phone) === normalisePhone(deepLinkedAppointment.phone))
+        : undefined;
     const timer = window.setTimeout(() => {
       deepLinkedPatientHandled.current = true;
-      if (!patientId || !deepLinkedPatientExists) return;
+      if (!matchedPatient) {
+        if (deepLinkedAppointment) setError("Register this patient before starting the consultation.");
+        return;
+      }
 
-      setSelectedPatientId(patientId);
-      setSelectedAppointmentId("");
+      setSelectedPatientId(matchedPatient.id);
+      setSelectedAppointmentId(deepLinkedAppointment?.id || "");
       setHistoryLoading(true);
       setVisits([]);
       setPrescriptions([]);
@@ -331,7 +346,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       setError("");
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [patients, patientsLoaded]);
+  }, [appointments, appointmentsLoaded, patients, patientsLoaded]);
 
   useEffect(() => {
     if (!selectedPatientId) return;
@@ -383,7 +398,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   const queue = useMemo(() => {
     const patientsByPhone = new Map(patients.map((patient) => [normalisePhone(patient.phone), patient]));
     const entries: QueueEntry[] = appointments
-      .filter((appointment) => appointment.preferredDate === selectedDate && appointment.status !== "cancelled")
+      .filter((appointment) => appointment.preferredDate === selectedDate && isLiveQueueStatus(appointment.status))
       .filter((appointment) => !profileDoctor || doctorFromAppointment(appointment.doctorId) === profileDoctor)
       .filter((appointment) => doctorFilter === "all" || doctorFromAppointment(appointment.doctorId) === doctorFilter)
       .map((appointment) => {
@@ -399,6 +414,8 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
           reason: appointment.reason || "Consultation",
           status: appointment.status,
           source: appointment.source || "website",
+          queueToken: appointment.queueToken,
+          doctorId: appointment.doctorId,
         };
       });
 
@@ -421,17 +438,55 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       }));
 
     return entries.sort((left, right) => {
-      if (left.status === "completed" && right.status !== "completed") return 1;
-      if (right.status === "completed" && left.status !== "completed") return -1;
+      const stageDifference = queueStage(left.status) - queueStage(right.status);
+      if (stageDifference !== 0) return stageDifference;
+      if (left.queueToken && right.queueToken) return left.queueToken - right.queueToken;
+      if (left.queueToken) return -1;
+      if (right.queueToken) return 1;
       return String(left.time || "Walk-in").localeCompare(String(right.time || "Walk-in"));
     });
   }, [appointments, doctorFilter, patients, profileDoctor, selectedDate]);
 
   const queueCounts = useMemo(() => ({
     total: queue.length,
-    waiting: queue.filter((entry) => entry.status !== "completed").length,
+    waiting: queue.filter((entry) => isWaitingStatus(entry.status)).length,
+    consulting: queue.filter((entry) => entry.status === "in_consultation").length,
     completed: queue.filter((entry) => entry.status === "completed").length,
   }), [queue]);
+
+  async function beginAppointmentConsultation(entry: QueueEntry) {
+    if (!entry.patientId) return;
+    if (!entry.appointmentId || entry.status === "registered") {
+      choosePatient(entry.patientId);
+      return;
+    }
+    if (entry.status === "in_consultation") {
+      choosePatient(entry.patientId, entry.appointmentId);
+      return;
+    }
+    if (entry.status !== "checked_in" && entry.status !== "waiting") return;
+
+    setUpdatingQueueId(entry.id);
+    setError("");
+    setNotice("");
+    try {
+      const changedAt = serverTimestamp();
+      const batch = writeBatch(db);
+      batch.update(doc(db, "appointments", entry.appointmentId), {
+        status: "in_consultation",
+        consultationStartedAt: changedAt,
+        updatedAt: changedAt,
+      });
+      await batch.commit();
+      choosePatient(entry.patientId, entry.appointmentId);
+      setNotice(`${entry.patientName} is now in consultation.`);
+    } catch (queueError) {
+      console.error(queueError);
+      setError("The consultation could not be started. Please refresh and try again.");
+    } finally {
+      setUpdatingQueueId("");
+    }
+  }
 
   function choosePatient(patientId: string, appointmentId = "") {
     setSelectedPatientId(patientId);
@@ -598,6 +653,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       if (selectedAppointment && selectedAppointment.status !== "completed") {
         batch.update(doc(db, "appointments", selectedAppointment.id), {
           status: "completed",
+          completedAt: recordedAt,
           updatedAt: recordedAt,
         });
       }
@@ -677,9 +733,10 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       {error ? <div className="mt-5 flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-semibold text-red-700"><AlertCircle size={18} className="mt-0.5 shrink-0" />{error}</div> : null}
       {notice ? <div className="mt-5 flex items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm font-semibold text-emerald-800"><CheckCircle2 size={18} className="mt-0.5 shrink-0" />{notice}</div> : null}
 
-      <section className="mt-6 grid gap-4 sm:grid-cols-3">
+      <section className="mt-6 grid grid-cols-2 gap-3 xl:grid-cols-4">
         <div className={cardClass}><UsersRound size={22} className="text-blue-600" /><p className="mt-4 text-3xl font-bold text-[#233A59]">{loading ? "—" : queueCounts.total}</p><p className="mt-1 text-sm font-semibold text-slate-600">Queue for {selectedDate === today ? "today" : displayDate(selectedDate)}</p></div>
         <div className={cardClass}><HeartPulse size={22} className="text-amber-600" /><p className="mt-4 text-3xl font-bold text-[#233A59]">{loading ? "—" : queueCounts.waiting}</p><p className="mt-1 text-sm font-semibold text-slate-600">Waiting consultations</p></div>
+        <div className={cardClass}><Stethoscope size={22} className="text-fuchsia-600" /><p className="mt-4 text-3xl font-bold text-[#233A59]">{loading ? "—" : queueCounts.consulting}</p><p className="mt-1 text-sm font-semibold text-slate-600">With doctor now</p></div>
         <div className={cardClass}><CheckCircle2 size={22} className="text-emerald-600" /><p className="mt-4 text-3xl font-bold text-[#233A59]">{loading ? "—" : queueCounts.completed}</p><p className="mt-1 text-sm font-semibold text-slate-600">Completed consultations</p></div>
       </section>
 
@@ -690,10 +747,13 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
             <div className="mt-5 space-y-3">
               {queue.map((entry) => (
                 <article key={entry.id} className={`rounded-2xl border p-4 transition ${selectedAppointmentId === entry.appointmentId && selectedPatientId === entry.patientId ? "border-[#A8864A] bg-[#F8F4EA]" : "border-slate-200 bg-white"}`}>
-                  <div className="flex items-start justify-between gap-3"><div><p className="font-bold text-[#233A59]">{entry.patientName}</p><p className="mt-1 text-xs text-slate-500">{entry.time} · {entry.phone}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ${queueTone(entry.status)}`}>{queueStatus(entry.status)}</span></div>
+                  <div className="flex items-start justify-between gap-3"><div><div className="flex flex-wrap items-center gap-2"><p className="font-bold text-[#233A59]">{entry.patientName}</p>{entry.queueToken ? <span className="inline-flex items-center gap-1 rounded-lg bg-[#233A59] px-2 py-1 text-[11px] font-bold text-white"><Hash size={11} />{queueTokenLabel(entry.queueToken, entry.doctorId)}</span> : null}</div><p className="mt-1 text-xs text-slate-500">{entry.time} · {entry.phone}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ring-1 ${appointmentStatusTone(entry.status)}`}>{appointmentStatusLabel(entry.status)}</span></div>
                   <p className="mt-3 text-sm text-slate-600">{entry.reason || "Consultation"}</p>
                   <p className="mt-1 text-xs font-semibold text-slate-500">{entry.doctorName} · {entry.source}</p>
-                  {entry.patientId ? <button type="button" onClick={() => choosePatient(entry.patientId!, entry.appointmentId)} className="mt-3 inline-flex items-center gap-2 rounded-xl bg-[#233A59] px-3 py-2 text-xs font-bold text-white">Open chart <ArrowRight size={14} /></button> : <Link href="/admin/patients" className="mt-3 inline-flex items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">Register patient first <ArrowRight size={14} /></Link>}
+                  {!entry.patientId ? <Link href="/admin/patients" className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">Register patient first <ArrowRight size={14} /></Link> : null}
+                  {entry.patientId && entry.status === "registered" ? <button type="button" onClick={() => choosePatient(entry.patientId!)} className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-xl bg-[#233A59] px-3 py-2 text-xs font-bold text-white">Open walk-in chart <ArrowRight size={14} /></button> : null}
+                  {entry.patientId && (entry.status === "checked_in" || entry.status === "waiting" || entry.status === "in_consultation") ? <button type="button" disabled={updatingQueueId === entry.id} onClick={() => void beginAppointmentConsultation(entry)} className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#233A59] px-3 py-2 text-xs font-bold text-white disabled:opacity-60">{updatingQueueId === entry.id ? <LoaderCircle size={14} className="animate-spin" /> : entry.status === "in_consultation" ? <Stethoscope size={14} /> : <Play size={14} />}{entry.status === "in_consultation" ? "Continue consultation" : "Start consultation"}</button> : null}
+                  {entry.patientId && (entry.status === "confirmed" || entry.status === "requested") ? <p className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500">Awaiting reception check-in</p> : null}
                 </article>
               ))}
               {!loading && queue.length === 0 ? <div className="rounded-2xl bg-slate-50 px-4 py-9 text-center"><CalendarCheck2 className="mx-auto text-slate-300" /><p className="mt-3 text-sm font-semibold text-slate-500">No patients in this queue.</p></div> : null}
