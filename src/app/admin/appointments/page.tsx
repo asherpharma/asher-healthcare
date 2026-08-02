@@ -356,7 +356,11 @@ function AppointmentDesk() {
       }
 
       if (status === "checked_in") {
-        const counterRef = doc(database, "queueCounters", `${item.doctorId}_${item.preferredDate}`);
+        const counterRef = doc(
+          database,
+          "queueCounters",
+          `${item.doctorId}_${item.preferredDate}`,
+        );
         const existingCounter = await getDoc(counterRef);
         let migrationSeed = 0;
         if (!existingCounter.exists()) {
@@ -415,6 +419,9 @@ function AppointmentDesk() {
         ...(timestampField ? { [timestampField]: changedAt } : {}),
         updatedAt: changedAt,
       });
+      if (status === "cancelled" && item.slotId) {
+        batch.delete(doc(firestore, "appointmentSlots", item.slotId));
+      }
       await batch.commit();
       setNotice(`Visit moved to ${appointmentStatusLabel(status).toLowerCase()}.`);
       return true;

@@ -95,7 +95,12 @@ service cloud.firestore {
         && (!changed.hasAny(['waitingAt']) || (request.resource.data.status == 'waiting' && request.resource.data.waitingAt == request.time))
         && (!changed.hasAny(['consultationStartedAt']) || (request.resource.data.status == 'in_consultation' && request.resource.data.consultationStartedAt == request.time))
         && (!changed.hasAny(['completedAt']) || (request.resource.data.status == 'completed' && request.resource.data.completedAt == request.time))
-        && (!changed.hasAny(['noShowAt']) || (request.resource.data.status == 'no_show' && request.resource.data.noShowAt == request.time));
+        && (!changed.hasAny(['noShowAt']) || (request.resource.data.status == 'no_show' && request.resource.data.noShowAt == request.time))
+        && (
+          !changed.hasAny(['queueToken'])
+          || getAfter(/databases/$(database)/documents/queueCounters/$(resource.data.doctorId)/days/$(resource.data.preferredDate)).data.lastToken
+            == request.resource.data.queueToken
+        );
     }
 
     function validReceptionAppointmentTransition() {
@@ -177,39 +182,61 @@ service cloud.firestore {
       // Slot documents contain no patient details and power public live availability.
       allow read: if true;
       allow create, update: if false;
-      // A slot is a uniqueness lock. Cancellation retains it as a tombstone
-      // until a trusted server-side release workflow is introduced.
-      allow delete: if false;
+      // A slot is a uniqueness lock. It may be released only when its linked
+      // appointment is cancelled in the same atomic batch (or is already
+      // cancelled), preventing an orphaned appointment and double booking.
+      allow delete: if isStaff()
+        && resource.data.appointmentId is string
+        && getAfter(/databases/$(database)/documents/appointments/$(resource.data.appointmentId)).data.status == 'cancelled'
+        && (
+          isAdmin()
+          || isReception()
+          || (isDoctor() && staffDoctorId() == resource.data.doctorId)
+        );
     }
 
-    match /queueCounters/{counterId} {
+    match /queueCounters/{doctorId}/days/{date} {
       // Per-doctor/day monotonic counters make check-in tokens collision-free.
       // Public clients cannot read or mutate operational queue state.
       allow read: if isStaff();
       allow create: if isStaff()
         && (isAdmin() || isReception() || staffDoctorId() == request.resource.data.doctorId)
         && request.resource.data.keys().hasOnly([
-          'doctorId', 'date', 'lastToken', 'updatedAt'
+          'doctorId', 'date', 'lastToken', 'appointmentId', 'updatedAt'
         ])
         && request.resource.data.doctorId in ['pediatrics', 'obg']
-        && counterId == request.resource.data.doctorId + '_' + request.resource.data.date
+        && doctorId == request.resource.data.doctorId
+        && date == request.resource.data.date
         && request.resource.data.date is string
         && request.resource.data.date.size() == 10
         && request.resource.data.lastToken is int
         && request.resource.data.lastToken > 0
         && request.resource.data.lastToken <= 999
+        && request.resource.data.appointmentId is string
+        && request.resource.data.appointmentId.size() > 0
+        && request.resource.data.appointmentId.size() <= 128
+        && getAfter(/databases/$(database)/documents/appointments/$(request.resource.data.appointmentId)).data.doctorId == doctorId
+        && getAfter(/databases/$(database)/documents/appointments/$(request.resource.data.appointmentId)).data.preferredDate == date
+        && getAfter(/databases/$(database)/documents/appointments/$(request.resource.data.appointmentId)).data.queueToken == request.resource.data.lastToken
         && request.resource.data.updatedAt == request.time;
       allow update: if isStaff()
         && (isAdmin() || isReception() || staffDoctorId() == resource.data.doctorId)
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'lastToken', 'updatedAt'
+          'lastToken', 'appointmentId', 'updatedAt'
         ])
         && request.resource.data.doctorId == resource.data.doctorId
         && request.resource.data.date == resource.data.date
-        && counterId == resource.data.doctorId + '_' + resource.data.date
+        && doctorId == resource.data.doctorId
+        && date == resource.data.date
         && request.resource.data.lastToken is int
         && request.resource.data.lastToken == resource.data.lastToken + 1
         && request.resource.data.lastToken <= 999
+        && request.resource.data.appointmentId is string
+        && request.resource.data.appointmentId.size() > 0
+        && request.resource.data.appointmentId.size() <= 128
+        && getAfter(/databases/$(database)/documents/appointments/$(request.resource.data.appointmentId)).data.doctorId == doctorId
+        && getAfter(/databases/$(database)/documents/appointments/$(request.resource.data.appointmentId)).data.preferredDate == date
+        && getAfter(/databases/$(database)/documents/appointments/$(request.resource.data.appointmentId)).data.queueToken == request.resource.data.lastToken
         && request.resource.data.updatedAt == request.time;
       allow delete: if false;
     }
