@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - "feature/**"
 
 permissions:
   contents: read
@@ -30,6 +31,15 @@ jobs:
 
       - name: Install exact dependencies
         run: npm ci
+
+      - name: Set up Java for Firebase emulators
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Verify Firestore security rules
+        run: npm run test:rules
 
       - name: Run lint checks
         run: npm run lint
