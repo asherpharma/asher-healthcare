@@ -31,6 +31,15 @@ function normalizedPhone(value) {
   return cleanText(value, 20).replace(/\D/gu, "");
 }
 
+function normalizedName(value) {
+  return cleanText(value, 80)
+    .normalize("NFKC")
+    .toLocaleLowerCase("en")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .replace(/\s+/gu, " ");
+}
+
 function clientAddress(request) {
   return cleanText(
     request.headers.get("CF-Connecting-IP")
@@ -47,10 +56,10 @@ async function fingerprint(value) {
     .slice(0, 32);
 }
 
-async function publicBookingGuards(request, phoneDigits, now) {
+async function publicBookingGuards(request, bookingIdentity, now) {
   const userAgent = cleanText(request.headers.get("User-Agent"), 200);
   const clientHash = await fingerprint(`asher-booking-client-v1\n${clientAddress(request)}\n${userAgent}`);
-  const phoneHash = await fingerprint(`asher-booking-phone-v1\n${phoneDigits}`);
+  const bookingHash = await fingerprint(`asher-booking-identity-v2\n${bookingIdentity}`);
   const clientBucket = Math.floor(now.getTime() / PUBLIC_CLIENT_WINDOW_MS);
   const phoneBucket = Math.floor(now.getTime() / PUBLIC_PHONE_WINDOW_MS);
   return [
@@ -63,9 +72,9 @@ async function publicBookingGuards(request, phoneDigits, now) {
       },
     },
     {
-      path: `bookingGuards/phone_${phoneHash}_${phoneBucket}`,
+      path: `bookingGuards/booking_${bookingHash}_${phoneBucket}`,
       data: {
-        kind: "phone-five-minutes",
+        kind: "exact-booking-five-minutes",
         createdAt: now,
         expiresAt: new Date(now.getTime() + PUBLIC_PHONE_WINDOW_MS * 2),
       },
@@ -177,8 +186,15 @@ export async function onRequestPost(context) {
           capturedAt: null,
           capturedBy: null,
         };
+    const bookingIdentity = [
+      phoneDigits,
+      normalizedName(patientName),
+      doctorId,
+      preferredDate,
+      preferredTime,
+    ].join("\n");
     const guardWrites = source === "website"
-      ? (await publicBookingGuards(context.request, phoneDigits, now)).map((guard) => (
+      ? (await publicBookingGuards(context.request, bookingIdentity, now)).map((guard) => (
           createDocumentWrite(context.env, guard.path, guard.data)
         ))
       : [];
