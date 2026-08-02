@@ -258,9 +258,6 @@ function doctorForProfile(profile: StaffProfile): DoctorName | "" {
   if (DOCTORS.includes(profile.doctorName as DoctorName)) {
     return profile.doctorName as DoctorName;
   }
-  const identity = `${profile.displayName} ${profile.email}`.toLowerCase();
-  if (identity.includes("shafi")) return DOCTORS[0];
-  if (identity.includes("reshma")) return DOCTORS[1];
   return "";
 }
 
