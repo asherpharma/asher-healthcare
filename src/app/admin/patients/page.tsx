@@ -296,13 +296,7 @@ function PatientRegister() {
         query(collection(db, "patients", selectedId, name), orderBy("createdAt", "desc"), limit(50)),
         (snapshot) => setter(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as T)),
       );
-    const unsubscribers = [
-      subscribe<VisitRecord>("visits", setVisits),
-      subscribe<PrescriptionRecord>("prescriptions", setPrescriptions),
-      subscribe<VaccinationRecord>("vaccinations", setVaccinations),
-      subscribe<PregnancyRecord>("pregnancyRecords", setPregnancyRecords),
-      subscribe<GrowthRecord>("growthRecords", setGrowthRecords),
-      subscribe<ReportRecord>("reports", setReports),
+    const unsubscribers: Array<() => void> = [
       onSnapshot(
         query(collection(db, "invoices"), where("patientId", "==", selectedId), limit(50)),
         (snapshot) => setInvoices(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as InvoiceRecord)),
@@ -312,8 +306,18 @@ function PatientRegister() {
         (snapshot) => setLabOrders(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as LabRecord)),
       ),
     ];
+    if (canEditClinical) {
+      unsubscribers.push(
+        subscribe<VisitRecord>("visits", setVisits),
+        subscribe<PrescriptionRecord>("prescriptions", setPrescriptions),
+        subscribe<VaccinationRecord>("vaccinations", setVaccinations),
+        subscribe<PregnancyRecord>("pregnancyRecords", setPregnancyRecords),
+        subscribe<GrowthRecord>("growthRecords", setGrowthRecords),
+        subscribe<ReportRecord>("reports", setReports),
+      );
+    }
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
-  }, [db, selectedId]);
+  }, [canEditClinical, db, selectedId]);
 
   const timeline = useMemo<TimelineItem[]>(() => {
     const items: TimelineItem[] = [
@@ -652,12 +656,14 @@ function PatientRegister() {
   const tabs: Array<{ key: TabKey; label: string; icon: typeof Activity; count?: number }> = [
     { key: "overview", label: "Overview", icon: UserRound },
     { key: "timeline", label: "Timeline", icon: History, count: timeline.length },
-    { key: "visits", label: "Visits", icon: Stethoscope, count: visits.length },
-    { key: "prescriptions", label: "Prescriptions", icon: FileHeart, count: prescriptions.length },
-    { key: "growth", label: "Growth", icon: ChartNoAxesCombined, count: growthRecords.length },
-    { key: "vaccinations", label: "Vaccinations", icon: Syringe, count: vaccinations.length },
-    { key: "pregnancy", label: "Pregnancy", icon: Baby, count: pregnancyRecords.length },
-    { key: "reports", label: "Reports", icon: FileText, count: reports.length },
+    ...(canEditClinical ? [
+      { key: "visits" as const, label: "Visits", icon: Stethoscope, count: visits.length },
+      { key: "prescriptions" as const, label: "Prescriptions", icon: FileHeart, count: prescriptions.length },
+      { key: "growth" as const, label: "Growth", icon: ChartNoAxesCombined, count: growthRecords.length },
+      { key: "vaccinations" as const, label: "Vaccinations", icon: Syringe, count: vaccinations.length },
+      { key: "pregnancy" as const, label: "Pregnancy", icon: Baby, count: pregnancyRecords.length },
+      { key: "reports" as const, label: "Reports", icon: FileText, count: reports.length },
+    ] : []),
   ];
 
   return (
@@ -666,7 +672,7 @@ function PatientRegister() {
         <div>
           <p className="text-sm font-bold uppercase tracking-[0.16em] text-[#A8864A]">Patient register</p>
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-[#233A59]">Patient records</h1>
-          <p className="mt-3 text-slate-600">Private clinical records for registered patients.</p>
+          <p className="mt-3 text-slate-600">{canEditClinical ? "Private clinical records for registered patients." : "Patient registration, contact, billing and lab coordination."}</p>
         </div>
         <button onClick={() => { setShowForm((value) => !value); setLastRegistered(null); }} className="inline-flex items-center gap-2 rounded-xl bg-[#233A59] px-5 py-3 text-sm font-bold text-white">
           <Plus size={18} /> Register patient
