@@ -28,6 +28,24 @@ service cloud.firestore {
       return isStaff() && staffProfile().data.role == 'reception';
     }
 
+    function isDoctor() {
+      return isStaff() && staffProfile().data.role == 'doctor';
+    }
+
+    // Doctor access is tied to the exact assignment stored by the admin staff
+    // manager. Avoid display-name/email heuristics in security decisions.
+    function staffDoctorId() {
+      return staffProfile().data.doctorName == 'Dr. Lt Col Shafi Ahamad'
+        ? 'pediatrics'
+        : (staffProfile().data.doctorName == 'Dr. Shaik Reshma' ? 'obg' : '');
+    }
+
+    function isAssignedAppointmentDoctor() {
+      return isDoctor()
+        && staffDoctorId() != ''
+        && resource.data.doctorId == staffDoctorId();
+    }
+
     function validAppointmentTransition() {
       return (resource.data.status == 'requested'
           && request.resource.data.status in ['confirmed', 'cancelled'])
@@ -77,10 +95,33 @@ service cloud.firestore {
         && (!changed.hasAny(['waitingAt']) || (request.resource.data.status == 'waiting' && request.resource.data.waitingAt == request.time))
         && (!changed.hasAny(['consultationStartedAt']) || (request.resource.data.status == 'in_consultation' && request.resource.data.consultationStartedAt == request.time))
         && (!changed.hasAny(['completedAt']) || (request.resource.data.status == 'completed' && request.resource.data.completedAt == request.time))
-        && (!changed.hasAny(['noShowAt']) || (request.resource.data.status == 'no_show' && request.resource.data.noShowAt == request.time))
-        && (!isReception() || request.resource.data.status in [
-          'requested', 'confirmed', 'checked_in', 'waiting', 'no_show', 'cancelled'
-        ]);
+        && (!changed.hasAny(['noShowAt']) || (request.resource.data.status == 'no_show' && request.resource.data.noShowAt == request.time));
+    }
+
+    function validReceptionAppointmentTransition() {
+      return (resource.data.status == 'requested'
+          && request.resource.data.status in ['confirmed', 'cancelled'])
+        || (resource.data.status == 'confirmed'
+          && request.resource.data.status in ['checked_in', 'cancelled', 'no_show'])
+        || (resource.data.status == 'checked_in'
+          && request.resource.data.status in ['waiting', 'no_show'])
+        || (resource.data.status == 'waiting'
+          && request.resource.data.status == 'no_show')
+        || (resource.data.status == 'no_show'
+          && request.resource.data.status in ['checked_in', 'cancelled']);
+    }
+
+    // Temporary rollout bridge for the previous production appointment desk.
+    // Remove after all staff clients use the queue workflow: the old UI wrote
+    // confirmed -> completed using only status + updatedAt. Doctor assignment
+    // remains mandatory, and reception never receives this clinical bridge.
+    function validLegacyAppointmentUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'updatedAt'
+        ])
+        && resource.data.status == 'confirmed'
+        && request.resource.data.status == 'completed'
+        && request.resource.data.updatedAt == request.time;
     }
 
     function validClinicalCreate() {
@@ -118,7 +159,17 @@ service cloud.firestore {
       allow read: if isStaff();
       // Patient, doctor, slot, source, and consent data are immutable. Reception
       // can operate the front-desk queue but cannot start or complete care.
-      allow update: if isStaff() && validAppointmentQueueUpdate();
+      allow update: if (
+          isAdmin()
+          && (validAppointmentQueueUpdate() || validLegacyAppointmentUpdate())
+        ) || (
+          isReception()
+          && validAppointmentQueueUpdate()
+          && validReceptionAppointmentTransition()
+        ) || (
+          isAssignedAppointmentDoctor()
+          && (validAppointmentQueueUpdate() || validLegacyAppointmentUpdate())
+        );
       allow delete: if isAdmin();
     }
 
@@ -126,7 +177,41 @@ service cloud.firestore {
       // Slot documents contain no patient details and power public live availability.
       allow read: if true;
       allow create, update: if false;
-      allow delete: if isStaff();
+      // A slot is a uniqueness lock. Cancellation retains it as a tombstone
+      // until a trusted server-side release workflow is introduced.
+      allow delete: if false;
+    }
+
+    match /queueCounters/{counterId} {
+      // Per-doctor/day monotonic counters make check-in tokens collision-free.
+      // Public clients cannot read or mutate operational queue state.
+      allow read: if isStaff();
+      allow create: if isStaff()
+        && (isAdmin() || isReception() || staffDoctorId() == request.resource.data.doctorId)
+        && request.resource.data.keys().hasOnly([
+          'doctorId', 'date', 'lastToken', 'updatedAt'
+        ])
+        && request.resource.data.doctorId in ['pediatrics', 'obg']
+        && counterId == request.resource.data.doctorId + '_' + request.resource.data.date
+        && request.resource.data.date is string
+        && request.resource.data.date.size() == 10
+        && request.resource.data.lastToken is int
+        && request.resource.data.lastToken > 0
+        && request.resource.data.lastToken <= 999
+        && request.resource.data.updatedAt == request.time;
+      allow update: if isStaff()
+        && (isAdmin() || isReception() || staffDoctorId() == resource.data.doctorId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'lastToken', 'updatedAt'
+        ])
+        && request.resource.data.doctorId == resource.data.doctorId
+        && request.resource.data.date == resource.data.date
+        && counterId == resource.data.doctorId + '_' + resource.data.date
+        && request.resource.data.lastToken is int
+        && request.resource.data.lastToken == resource.data.lastToken + 1
+        && request.resource.data.lastToken <= 999
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
     }
 
     // Short-lived, pseudonymous rate-limit markers are written only by the
@@ -733,9 +818,9 @@ service cloud.firestore {
       }
 
       match /reports/{reportId} {
-        allow read: if isStaff();
-        allow create: if validStaffRecordCreate();
-        allow update: if validStaffRecordUpdate();
+        allow read: if isClinicalStaff();
+        allow create: if validClinicalCreate();
+        allow update: if validClinicalUpdate();
         allow delete: if isAdmin();
       }
     }

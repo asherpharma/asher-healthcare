@@ -20,7 +20,6 @@ import {
   appointmentStatusTimestampField,
   appointmentStatusTone,
   appointmentTransitionOptions,
-  nextQueueToken,
   queueTokenLabel,
   type AppointmentStatus,
 } from "@/lib/visit-workflow";
@@ -28,6 +27,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocs,
   limit,
   onSnapshot,
   orderBy,
@@ -98,6 +98,18 @@ const doctorNames: Record<string, string> = {
   obg: "Dr. Shaik Reshma",
 };
 
+const FRONT_DESK_STATUSES = new Set<AppointmentStatus>([
+  "confirmed",
+  "checked_in",
+  "waiting",
+  "no_show",
+  "cancelled",
+]);
+
+function assignedDoctorId(doctorNameValue?: string): DoctorId | null {
+  return DOCTORS.find((doctor) => doctor.name === doctorNameValue)?.id ?? null;
+}
+
 const emptyBooking = (date: string, time = "17:00"): BookingForm => ({
   patientName: "",
   phone: "",
@@ -127,14 +139,19 @@ function AppointmentDesk() {
   const { profile } = useStaff();
   const today = clinicDate();
   const { schedule } = useAppointmentSchedule();
-  const [items, setItems] = useState<Appointment[]>([]);
-  const [loading, setLoading] = useState(true);
+  const profileDoctorId = assignedDoctorId(profile.doctorName);
+  const [deskItems, setDeskItems] = useState<Appointment[]>([]);
+  const [historyItems, setHistoryItems] = useState<Appointment[]>([]);
+  const [deskLoading, setDeskLoading] = useState(true);
+  const [historyLoading, setHistoryLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [doctorFilter, setDoctorFilter] = useState("all");
+  const [doctorFilter, setDoctorFilter] = useState(
+    profile.role === "doctor" && profileDoctorId ? profileDoctorId : "all",
+  );
   const [dateFilter, setDateFilter] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -144,6 +161,18 @@ function AppointmentDesk() {
     key: "",
     slots: new Set(),
   });
+  const deskDate = dateFilter || today;
+  const loading = deskLoading || historyLoading;
+  const items = useMemo(() => {
+    const merged = new Map<string, Appointment>();
+    historyItems.forEach((appointment) => merged.set(appointment.id, appointment));
+    deskItems.forEach((appointment) => merged.set(appointment.id, appointment));
+    return Array.from(merged.values()).sort((left, right) => {
+      const dateDifference = right.preferredDate.localeCompare(left.preferredDate);
+      if (dateDifference !== 0) return dateDifference;
+      return right.preferredTime.localeCompare(left.preferredTime);
+    });
+  }, [deskItems, historyItems]);
 
   useEffect(() => {
     const openAppointment = () => setShowCreate(true);
@@ -235,16 +264,39 @@ function AppointmentDesk() {
 
   useEffect(() => {
     if (!firestore) return;
-    const appointmentsQuery = query(collection(firestore, "appointments"), orderBy("createdAt", "desc"), limit(200));
+    const deskQuery = query(
+      collection(firestore, "appointments"),
+      where("preferredDate", "==", deskDate),
+    );
     return onSnapshot(
-      appointmentsQuery,
+      deskQuery,
       (snapshot) => {
-        setItems(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Appointment));
-        setLoading(false);
+        setDeskItems(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Appointment));
+        setDeskLoading(false);
       },
       () => {
-        setError("Appointments could not be loaded. Please check staff access and try again.");
-        setLoading(false);
+        setError("The active clinic desk could not be loaded. Please check staff access and try again.");
+        setDeskLoading(false);
+      },
+    );
+  }, [deskDate]);
+
+  useEffect(() => {
+    if (!firestore) return;
+    const historyQuery = query(
+      collection(firestore, "appointments"),
+      orderBy("createdAt", "desc"),
+      limit(200),
+    );
+    return onSnapshot(
+      historyQuery,
+      (snapshot) => {
+        setHistoryItems(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Appointment));
+        setHistoryLoading(false);
+      },
+      () => {
+        setError("Recent appointment history could not be loaded. The live clinic desk remains available.");
+        setHistoryLoading(false);
       },
     );
   }, []);
@@ -269,6 +321,19 @@ function AppointmentDesk() {
     });
   }, [dateFilter, doctorFilter, items, search, statusFilter]);
 
+  function canManageClinicalAppointment(item: Appointment) {
+    return profile.role === "admin"
+      || (profile.role === "doctor" && profileDoctorId !== null && item.doctorId === profileDoctorId);
+  }
+
+  function canApplyStatus(item: Appointment, status: AppointmentStatus) {
+    if (profile.role === "admin") return true;
+    if (profile.role === "doctor") return canManageClinicalAppointment(item);
+    return item.status !== "in_consultation"
+      && item.status !== "completed"
+      && FRONT_DESK_STATUSES.has(status);
+  }
+
   async function changeStatus(id: string, status: AppointmentStatus) {
     if (!firestore) return false;
     const database = firestore;
@@ -282,25 +347,55 @@ function AppointmentDesk() {
       if (!appointmentTransitionOptions(item.status).includes(status)) {
         throw new Error("Choose the next available step in the visit workflow.");
       }
+      if (!canApplyStatus(item, status)) {
+        throw new Error(
+          profile.role === "doctor"
+            ? "This visit is assigned to another doctor. Only an administrator can re-route clinical work."
+            : "Reception access is limited to front-desk queue steps.",
+        );
+      }
 
       if (status === "checked_in") {
-        const queueAppointments = items.filter(
-          (appointment) => appointment.doctorId === item.doctorId && appointment.preferredDate === item.preferredDate,
-        );
-        const queueIds = Array.from(new Set([...queueAppointments.map((appointment) => appointment.id), item.id]));
+        const counterRef = doc(database, "queueCounters", `${item.doctorId}_${item.preferredDate}`);
+        const existingCounter = await getDoc(counterRef);
+        let migrationSeed = 0;
+        if (!existingCounter.exists()) {
+          const dateSnapshot = await getDocs(query(
+            collection(database, "appointments"),
+            where("preferredDate", "==", item.preferredDate),
+          ));
+          migrationSeed = dateSnapshot.docs.reduce((maximum, snapshot) => {
+            const appointment = snapshot.data() as Partial<Appointment>;
+            if (appointment.doctorId !== item.doctorId || !Number.isInteger(appointment.queueToken)) return maximum;
+            return Math.max(maximum, Number(appointment.queueToken));
+          }, 0);
+        }
         const assignedToken = await runTransaction(database, async (transaction) => {
-          const liveAppointments: Appointment[] = [];
-          for (const appointmentId of queueIds) {
-            const snapshot = await transaction.get(doc(database, "appointments", appointmentId));
-            if (snapshot.exists()) {
-              liveAppointments.push({ id: snapshot.id, ...snapshot.data() } as Appointment);
-            }
+          const appointmentRef = doc(database, "appointments", item.id);
+          const latestSnapshot = await transaction.get(appointmentRef);
+          const counterSnapshot = await transaction.get(counterRef);
+          if (!latestSnapshot.exists()) throw new Error("Appointment not found");
+          const latestItem = { id: latestSnapshot.id, ...latestSnapshot.data() } as Appointment;
+          if (!appointmentTransitionOptions(latestItem.status).includes(status)) {
+            throw new Error("This visit was updated elsewhere. Refresh the desk and try again.");
           }
-          const latestItem = liveAppointments.find((appointment) => appointment.id === item.id);
-          if (!latestItem) throw new Error("Appointment not found");
-          const token = latestItem.queueToken || nextQueueToken(liveAppointments, latestItem);
+          const currentCounter = counterSnapshot.exists()
+            ? Number(counterSnapshot.data().lastToken || 0)
+            : migrationSeed;
+          const token = latestItem.queueToken || currentCounter + 1;
+          if (!Number.isInteger(token) || token < 1 || token > 999) {
+            throw new Error("The daily queue is full. Ask an administrator to open a new queue.");
+          }
           const changedAt = serverTimestamp();
-          transaction.update(doc(database, "appointments", item.id), {
+          if (!latestItem.queueToken) {
+            transaction.set(counterRef, {
+              doctorId: latestItem.doctorId,
+              date: latestItem.preferredDate,
+              lastToken: token,
+              updatedAt: changedAt,
+            });
+          }
+          transaction.update(appointmentRef, {
             status,
             queueToken: token,
             checkedInAt: changedAt,
@@ -320,9 +415,6 @@ function AppointmentDesk() {
         ...(timestampField ? { [timestampField]: changedAt } : {}),
         updatedAt: changedAt,
       });
-      if (status === "cancelled" && item?.slotId) {
-        batch.delete(doc(firestore, "appointmentSlots", item.slotId));
-      }
       await batch.commit();
       setNotice(`Visit moved to ${appointmentStatusLabel(status).toLowerCase()}.`);
       return true;
@@ -336,7 +428,7 @@ function AppointmentDesk() {
   }
 
   async function beginConsultation(item: Appointment) {
-    if (profile.role === "reception") return;
+    if (!canManageClinicalAppointment(item)) return;
     const updated = item.status === "in_consultation"
       ? true
       : await changeStatus(item.id, "in_consultation");
@@ -412,7 +504,7 @@ function AppointmentDesk() {
   function clearFilters() {
     setSearch("");
     setStatusFilter("all");
-    setDoctorFilter("all");
+    setDoctorFilter(profile.role === "doctor" && profileDoctorId ? profileDoctorId : "all");
     setDateFilter("");
   }
 
@@ -519,7 +611,7 @@ function AppointmentDesk() {
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search patient, phone or reason" className={inputClass + " w-full pl-10"} />
           </label>
           <label><span className="sr-only">Status</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as StatusFilter)} className={inputClass + " w-full"}><option value="all">All statuses</option>{APPOINTMENT_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-          <label><span className="sr-only">Doctor</span><select value={doctorFilter} onChange={(event) => setDoctorFilter(event.target.value)} className={inputClass + " w-full"}><option value="all">All doctors</option><option value="pediatrics">Dr. Shafi Ahamad</option><option value="obg">Dr. Shaik Reshma</option></select></label>
+          <label><span className="sr-only">Doctor</span><select disabled={profile.role === "doctor" && Boolean(profileDoctorId)} value={doctorFilter} onChange={(event) => setDoctorFilter(event.target.value)} className={inputClass + " w-full disabled:bg-slate-100 disabled:text-slate-500"}><option value="all">All doctors</option><option value="pediatrics">Dr. Shafi Ahamad</option><option value="obg">Dr. Shaik Reshma</option></select></label>
           <label><span className="sr-only">Preferred date</span><input value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} type="date" className={inputClass + " w-full"} /></label>
           <button type="button" disabled={!activeFilters} onClick={clearFilters} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"><XCircle size={17} /> Clear</button>
         </div>
@@ -541,9 +633,8 @@ function AppointmentDesk() {
         {filteredItems.map((item) => {
           const isUpdating = updatingId === item.id;
           const token = queueTokenLabel(item.queueToken, item.doctorId);
-          const nextStatuses = appointmentTransitionOptions(item.status).filter(
-            (status) => profile.role !== "reception" || (status !== "in_consultation" && status !== "completed"),
-          );
+          const nextStatuses = appointmentTransitionOptions(item.status).filter((status) => canApplyStatus(item, status));
+          const canManageClinical = canManageClinicalAppointment(item);
           const canCheckInToday = item.preferredDate === today;
           const message = "Hello " + item.patientName + ", your appointment request at Asher Women & Child Healthcare for " + prettyDate(item.preferredDate) + " at " + formatAppointmentTime(item.preferredTime) + " with " + doctorName(item.doctorId) + " has been received. Please reply here if you need help.";
           return (
@@ -574,12 +665,12 @@ function AppointmentDesk() {
 
                 <div className="min-w-0 xl:min-w-[230px]">
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-1">
-                    {item.status === "requested" && <button type="button" disabled={isUpdating} onClick={() => void changeStatus(item.id, "confirmed")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-blue-700 px-3 py-2.5 text-xs font-bold text-white disabled:opacity-50"><CheckCircle2 size={15} /> Confirm</button>}
-                    {(item.status === "confirmed" || item.status === "no_show") && <button type="button" disabled={isUpdating || !canCheckInToday} title={canCheckInToday ? "Assign the next queue token" : "Check-in is available on the appointment date"} onClick={() => void changeStatus(item.id, "checked_in")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-cyan-700 px-3 py-2.5 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-45"><LogIn size={15} /> Check in &amp; issue token</button>}
-                    {item.status === "checked_in" && <button type="button" disabled={isUpdating} onClick={() => void changeStatus(item.id, "waiting")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-700 px-3 py-2.5 text-xs font-bold text-white disabled:opacity-50"><Clock3 size={15} /> Add to waiting</button>}
-                    {profile.role !== "reception" && item.status === "waiting" && <button type="button" disabled={isUpdating} onClick={() => void beginConsultation(item)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#233A59] px-3 py-2.5 text-xs font-bold text-white disabled:opacity-50"><Play size={15} /> Start consultation</button>}
-                    {profile.role !== "reception" && item.status === "in_consultation" && <button type="button" disabled={isUpdating} onClick={() => void beginConsultation(item)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-fuchsia-700 px-3 py-2.5 text-xs font-bold text-white disabled:opacity-50"><Stethoscope size={15} /> Open consultation</button>}
-                    {["confirmed", "checked_in", "waiting"].includes(item.status) && <button type="button" disabled={isUpdating || !canCheckInToday} title={canCheckInToday ? "Record that the patient did not attend" : "No-show can be recorded on the appointment date"} onClick={() => void changeStatus(item.id, "no_show")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-orange-200 bg-orange-50 px-3 py-2.5 text-xs font-bold text-orange-800 disabled:cursor-not-allowed disabled:opacity-45"><UserX size={15} /> Mark no-show</button>}
+                    {item.status === "requested" && canApplyStatus(item, "confirmed") && <button type="button" disabled={isUpdating} onClick={() => void changeStatus(item.id, "confirmed")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-blue-700 px-3 py-2.5 text-xs font-bold text-white disabled:opacity-50"><CheckCircle2 size={15} /> Confirm</button>}
+                    {(item.status === "confirmed" || item.status === "no_show") && canApplyStatus(item, "checked_in") && <button type="button" disabled={isUpdating || !canCheckInToday} title={canCheckInToday ? "Assign the next queue token" : "Check-in is available on the appointment date"} onClick={() => void changeStatus(item.id, "checked_in")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-cyan-700 px-3 py-2.5 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-45"><LogIn size={15} /> Check in &amp; issue token</button>}
+                    {item.status === "checked_in" && canApplyStatus(item, "waiting") && <button type="button" disabled={isUpdating} onClick={() => void changeStatus(item.id, "waiting")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-700 px-3 py-2.5 text-xs font-bold text-white disabled:opacity-50"><Clock3 size={15} /> Add to waiting</button>}
+                    {canManageClinical && item.status === "waiting" && <button type="button" disabled={isUpdating} onClick={() => void beginConsultation(item)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#233A59] px-3 py-2.5 text-xs font-bold text-white disabled:opacity-50"><Play size={15} /> Start consultation</button>}
+                    {canManageClinical && item.status === "in_consultation" && <button type="button" disabled={isUpdating} onClick={() => void beginConsultation(item)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-fuchsia-700 px-3 py-2.5 text-xs font-bold text-white disabled:opacity-50"><Stethoscope size={15} /> Open consultation</button>}
+                    {["confirmed", "checked_in", "waiting"].includes(item.status) && canApplyStatus(item, "no_show") && <button type="button" disabled={isUpdating || !canCheckInToday} title={canCheckInToday ? "Record that the patient did not attend" : "No-show can be recorded on the appointment date"} onClick={() => void changeStatus(item.id, "no_show")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-orange-200 bg-orange-50 px-3 py-2.5 text-xs font-bold text-orange-800 disabled:cursor-not-allowed disabled:opacity-45"><UserX size={15} /> Mark no-show</button>}
                   </div>
                   <label className="mt-3 block text-xs font-bold uppercase tracking-wide text-slate-500">Move visit
                     <select disabled={isUpdating || nextStatuses.length === 0} value={item.status} onChange={(event) => void changeStatus(item.id, event.target.value as AppointmentStatus)} className="mt-2 block min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold normal-case text-slate-700 disabled:opacity-50"><option value={item.status}>{appointmentStatusLabel(item.status)}</option>{nextStatuses.map((status) => <option key={status} value={status}>{appointmentStatusLabel(status)}</option>)}</select>
