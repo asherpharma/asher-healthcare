@@ -20,9 +20,57 @@ import {
 const DOCTORS = ["pediatrics", "obg"];
 const STAFF_SOURCES = ["reception", "phone", "walk-in"];
 const PUBLIC_FORM_MINIMUM_MS = 750;
+const PUBLIC_CLIENT_WINDOW_MS = 60_000;
+const PUBLIC_PHONE_WINDOW_MS = 5 * 60_000;
 
 function cleanText(value, maximum) {
   return typeof value === "string" ? value.trim().slice(0, maximum) : "";
+}
+
+function normalizedPhone(value) {
+  return cleanText(value, 20).replace(/\D/gu, "");
+}
+
+function clientAddress(request) {
+  return cleanText(
+    request.headers.get("CF-Connecting-IP")
+      || request.headers.get("X-Forwarded-For")?.split(",")[0]
+      || "unknown",
+    64,
+  );
+}
+
+async function fingerprint(value) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 32);
+}
+
+async function publicBookingGuards(request, phoneDigits, now) {
+  const userAgent = cleanText(request.headers.get("User-Agent"), 200);
+  const clientHash = await fingerprint(`asher-booking-client-v1\n${clientAddress(request)}\n${userAgent}`);
+  const phoneHash = await fingerprint(`asher-booking-phone-v1\n${phoneDigits}`);
+  const clientBucket = Math.floor(now.getTime() / PUBLIC_CLIENT_WINDOW_MS);
+  const phoneBucket = Math.floor(now.getTime() / PUBLIC_PHONE_WINDOW_MS);
+  return [
+    {
+      path: `bookingGuards/client_${clientHash}_${clientBucket}`,
+      data: {
+        kind: "client-minute",
+        createdAt: now,
+        expiresAt: new Date(now.getTime() + PUBLIC_CLIENT_WINDOW_MS * 2),
+      },
+    },
+    {
+      path: `bookingGuards/phone_${phoneHash}_${phoneBucket}`,
+      data: {
+        kind: "phone-five-minutes",
+        createdAt: now,
+        expiresAt: new Date(now.getTime() + PUBLIC_PHONE_WINDOW_MS * 2),
+      },
+    },
+  ];
 }
 
 function validDate(value) {
@@ -54,6 +102,7 @@ export async function onRequestPost(context) {
     const body = await readJson(context.request);
     const patientName = cleanText(body.patientName, 80);
     const phone = cleanText(body.phone, 20);
+    const phoneDigits = normalizedPhone(phone);
     const doctorId = cleanText(body.doctorId, 30);
     const preferredDate = cleanText(body.preferredDate, 10);
     const preferredTime = cleanText(body.preferredTime, 5);
@@ -63,7 +112,9 @@ export async function onRequestPost(context) {
     const clinicNow = clinicClock(now);
 
     if (patientName.length < 2) throw new HttpError(400, "Enter the patient’s full name.");
-    if (phone.replace(/\D/gu, "").length < 10) throw new HttpError(400, "Enter a valid mobile number.");
+    if (phoneDigits.length < 10 || phoneDigits.length > 15) {
+      throw new HttpError(400, "Enter a valid mobile number.");
+    }
     if (!DOCTORS.includes(doctorId)) throw new HttpError(400, "Select a clinic doctor.");
     if (!validDate(preferredDate) || preferredDate < clinicNow.date) {
       throw new HttpError(400, "Choose a valid appointment date.");
@@ -126,7 +177,13 @@ export async function onRequestPost(context) {
           capturedAt: null,
           capturedBy: null,
         };
+    const guardWrites = source === "website"
+      ? (await publicBookingGuards(context.request, phoneDigits, now)).map((guard) => (
+          createDocumentWrite(context.env, guard.path, guard.data)
+        ))
+      : [];
     await commitWrites(context.env, [
+      ...guardWrites,
       createDocumentWrite(context.env, `appointmentSlots/${slotId}`, {
         appointmentId,
         doctorId,
@@ -157,7 +214,9 @@ export async function onRequestPost(context) {
     return json({ appointmentId, slotId, status }, 201);
   } catch (error) {
     if (error instanceof HttpError && error.status === 409) {
-      return json({ error: "That time was just booked. Please choose another available slot." }, 409);
+      return json({
+        error: "That slot is no longer available, or this appointment was submitted recently. Please refresh and try again shortly.",
+      }, 409);
     }
     return errorResponse(error);
   }

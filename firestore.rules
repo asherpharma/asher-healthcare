@@ -24,6 +24,65 @@ service cloud.firestore {
       return isStaff() && staffProfile().data.role in ['admin', 'doctor'];
     }
 
+    function isReception() {
+      return isStaff() && staffProfile().data.role == 'reception';
+    }
+
+    function validAppointmentTransition() {
+      return (resource.data.status == 'requested'
+          && request.resource.data.status in ['confirmed', 'cancelled'])
+        || (resource.data.status == 'confirmed'
+          && request.resource.data.status in ['checked_in', 'cancelled', 'no_show'])
+        || (resource.data.status == 'checked_in'
+          && request.resource.data.status in ['waiting', 'no_show'])
+        || (resource.data.status == 'waiting'
+          && request.resource.data.status in ['in_consultation', 'no_show'])
+        || (resource.data.status == 'in_consultation'
+          && request.resource.data.status in ['completed', 'waiting'])
+        || (resource.data.status == 'no_show'
+          && request.resource.data.status in ['checked_in', 'cancelled']);
+    }
+
+    function validAppointmentQueueUpdate() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      let keys = request.resource.data.keys();
+      return changed.hasOnly([
+          'status', 'queueToken', 'checkedInAt', 'waitingAt',
+          'consultationStartedAt', 'completedAt', 'noShowAt', 'updatedAt'
+        ])
+        && request.resource.data.status in [
+          'requested', 'confirmed', 'checked_in', 'waiting',
+          'in_consultation', 'completed', 'no_show', 'cancelled'
+        ]
+        && validAppointmentTransition()
+        && request.resource.data.updatedAt == request.time
+        && (
+          !keys.hasAny(['queueToken'])
+          || (request.resource.data.queueToken is int
+            && request.resource.data.queueToken > 0
+            && request.resource.data.queueToken <= 999)
+        )
+        && (!keys.hasAny(['checkedInAt']) || request.resource.data.checkedInAt == null || request.resource.data.checkedInAt is timestamp)
+        && (!keys.hasAny(['waitingAt']) || request.resource.data.waitingAt == null || request.resource.data.waitingAt is timestamp)
+        && (!keys.hasAny(['consultationStartedAt']) || request.resource.data.consultationStartedAt == null || request.resource.data.consultationStartedAt is timestamp)
+        && (!keys.hasAny(['completedAt']) || request.resource.data.completedAt == null || request.resource.data.completedAt is timestamp)
+        && (!keys.hasAny(['noShowAt']) || request.resource.data.noShowAt == null || request.resource.data.noShowAt is timestamp)
+        && (!changed.hasAny(['queueToken']) || request.resource.data.status in ['checked_in', 'waiting'])
+        && (request.resource.data.status != 'checked_in' || (keys.hasAll(['queueToken']) && changed.hasAll(['checkedInAt'])))
+        && (request.resource.data.status != 'waiting' || changed.hasAll(['waitingAt']))
+        && (request.resource.data.status != 'in_consultation' || changed.hasAll(['consultationStartedAt']))
+        && (request.resource.data.status != 'completed' || changed.hasAll(['completedAt']))
+        && (request.resource.data.status != 'no_show' || changed.hasAll(['noShowAt']))
+        && (!changed.hasAny(['checkedInAt']) || (request.resource.data.status in ['checked_in', 'waiting'] && request.resource.data.checkedInAt == request.time))
+        && (!changed.hasAny(['waitingAt']) || (request.resource.data.status == 'waiting' && request.resource.data.waitingAt == request.time))
+        && (!changed.hasAny(['consultationStartedAt']) || (request.resource.data.status == 'in_consultation' && request.resource.data.consultationStartedAt == request.time))
+        && (!changed.hasAny(['completedAt']) || (request.resource.data.status == 'completed' && request.resource.data.completedAt == request.time))
+        && (!changed.hasAny(['noShowAt']) || (request.resource.data.status == 'no_show' && request.resource.data.noShowAt == request.time))
+        && (!isReception() || request.resource.data.status in [
+          'requested', 'confirmed', 'checked_in', 'waiting', 'no_show', 'cancelled'
+        ]);
+    }
+
     function validClinicalCreate() {
       return isClinicalStaff()
         && request.resource.data.createdBy == request.auth.uid
@@ -57,10 +116,9 @@ service cloud.firestore {
       // doctor/date/time slot can be locked atomically and never double-booked.
       allow create: if false;
       allow read: if isStaff();
-      allow update: if isStaff()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
-        && request.resource.data.status in ['requested', 'confirmed', 'completed', 'cancelled']
-        && request.resource.data.updatedAt == request.time;
+      // Patient, doctor, slot, source, and consent data are immutable. Reception
+      // can operate the front-desk queue but cannot start or complete care.
+      allow update: if isStaff() && validAppointmentQueueUpdate();
       allow delete: if isAdmin();
     }
 
@@ -69,6 +127,12 @@ service cloud.firestore {
       allow read: if true;
       allow create, update: if false;
       allow delete: if isStaff();
+    }
+
+    // Short-lived, pseudonymous rate-limit markers are written only by the
+    // trusted booking service. They are never readable or writable by clients.
+    match /bookingGuards/{guardId} {
+      allow read, write: if false;
     }
 
     match /clinicSettings/appointmentSchedule {
@@ -91,10 +155,10 @@ service cloud.firestore {
     }
 
     // The management dashboard reads clinical visits across all patient
-    // records. This grants only staff read access; writes remain governed by
-    // the patient-specific visit rules below.
+    // records. Clinical content stays unavailable to reception accounts;
+    // writes remain governed by the patient-specific rules below.
     match /{path=**}/visits/{visitId} {
-      allow read: if isStaff();
+      allow read: if isClinicalStaff();
     }
 
     match /invoices/{invoiceId} {
@@ -225,7 +289,8 @@ service cloud.firestore {
           && request.resource.data.auditLogId is string
           && request.resource.data.auditLogId.size() > 0
           && request.resource.data.auditLogId.size() <= 128;
-        allow delete: if isAdmin();
+        // Financial history is corrected by reversal, never deletion.
+        allow delete: if false;
       }
     }
 
@@ -519,21 +584,21 @@ service cloud.firestore {
       allow delete: if isAdmin();
 
       match /visits/{visitId} {
-        allow read: if isStaff();
+        allow read: if isClinicalStaff();
         allow create: if validClinicalCreate();
         allow update: if validClinicalUpdate();
         allow delete: if isAdmin();
       }
 
       match /prescriptions/{prescriptionId} {
-        allow read: if isStaff();
+        allow read: if isClinicalStaff();
         allow create: if validClinicalCreate();
         allow update: if validClinicalUpdate();
         allow delete: if isAdmin();
       }
 
       match /vaccinations/{vaccinationId} {
-        allow read: if isStaff();
+        allow read: if isClinicalStaff();
         allow create: if validClinicalCreate()
           && request.resource.data.keys().hasAll([
             'vaccineName', 'doseNumber', 'administeredDate', 'nextDueDate',
@@ -576,7 +641,7 @@ service cloud.firestore {
       }
 
       match /pregnancyRecords/{pregnancyRecordId} {
-        allow read: if isStaff();
+        allow read: if isClinicalStaff();
         allow create: if validClinicalCreate()
           && request.resource.data.keys().hasAll([
             'recordedDate', 'lmpDate', 'eddDate', 'gestationalWeeks',
@@ -632,7 +697,7 @@ service cloud.firestore {
       }
 
       match /growthRecords/{growthRecordId} {
-        allow read: if isStaff();
+        allow read: if isClinicalStaff();
         allow create: if validClinicalCreate()
           && request.resource.data.keys().hasAll([
             'measuredDate', 'weightKg', 'heightCm', 'headCircumferenceCm',
