@@ -13,8 +13,11 @@ import {
 } from "firebase/firestore";
 import {
   CheckCircle2,
+  Clock3,
   KeyRound,
   LoaderCircle,
+  MailCheck,
+  RefreshCw,
   ShieldCheck,
   UserPlus,
   UsersRound,
@@ -29,7 +32,11 @@ type StaffRecord = {
   doctorName?: string;
   active: boolean;
   createdAt?: Timestamp;
+  inviteEmailSentAt?: Timestamp;
+  inviteStatus?: "pending" | "accepted" | "expired" | "revoked";
 };
+
+type InviteState = "active" | "invited" | "expired" | "disabled";
 
 const inputClass =
   "mt-2 h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-base font-semibold text-slate-700 outline-none transition focus:border-[#233A59] focus:ring-2 focus:ring-[#233A59]/10 sm:h-11 sm:rounded-xl sm:text-sm";
@@ -52,12 +59,40 @@ const roles: { value: StaffRole; label: string; detail: string }[] = [
   },
 ];
 
+function inviteState(record: StaffRecord): InviteState {
+  if (!record.active || record.inviteStatus === "revoked") {
+    return "disabled";
+  }
+  if (record.inviteStatus === "accepted") return "active";
+  if (record.inviteStatus === "expired") return "expired";
+  if (record.inviteStatus === "pending" || record.inviteEmailSentAt) {
+    return "invited";
+  }
+  return "active";
+}
+
+function formatInviteTime(value?: Timestamp) {
+  if (!value?.toDate) return "";
+  return new Intl.DateTimeFormat("en-IN", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(value.toDate());
+}
+
+const inviteLabels: Record<InviteState, { label: string; className: string }> = {
+  active: { label: "Active", className: "bg-emerald-50 text-emerald-800 ring-emerald-200" },
+  invited: { label: "Invite sent", className: "bg-blue-50 text-blue-800 ring-blue-200" },
+  expired: { label: "Invite expired", className: "bg-amber-50 text-amber-900 ring-amber-200" },
+  disabled: { label: "Disabled", className: "bg-red-50 text-red-700 ring-red-200" },
+};
+
 export default function StaffAccessManager() {
   const { profile, user } = useStaff();
   const [staff, setStaff] = useState<StaffRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [updatingUid, setUpdatingUid] = useState("");
+  const [resendingUid, setResendingUid] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
@@ -87,6 +122,7 @@ export default function StaffAccessManager() {
     setError("");
     const form = event.currentTarget;
     const data = new FormData(form);
+    const email = String(data.get("email") || "").trim();
 
     try {
       const idToken = await user.getIdToken();
@@ -98,8 +134,7 @@ export default function StaffAccessManager() {
         },
         body: JSON.stringify({
           displayName: String(data.get("displayName") || "").trim(),
-          email: String(data.get("email") || "").trim(),
-          password: String(data.get("password") || ""),
+          email,
           role: String(data.get("role") || ""),
           doctorName: String(data.get("doctorName") || ""),
         }),
@@ -110,7 +145,7 @@ export default function StaffAccessManager() {
       }
       form.reset();
       setNotice(
-        "Staff login created. Share the email and temporary password privately, then ask the staff member to sign in from the app.",
+        `Invitation sent to ${email}. The email includes secure password setup, staff login, and app installation links.`,
       );
     } catch (createError) {
       setError(
@@ -120,6 +155,36 @@ export default function StaffAccessManager() {
       );
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function resendInvite(record: StaffRecord) {
+    setResendingUid(record.uid);
+    setNotice("");
+    setError("");
+    try {
+      const idToken = await user.getIdToken();
+      const response = await fetch("/api/admin/staff/resend", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ uid: record.uid }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(result.error || "The staff invitation could not be resent.");
+      }
+      setNotice(`A fresh invitation was sent to ${record.email}.`);
+    } catch (resendError) {
+      setError(
+        resendError instanceof Error
+          ? resendError.message
+          : "The staff invitation could not be resent.",
+      );
+    } finally {
+      setResendingUid("");
     }
   }
 
@@ -145,9 +210,9 @@ export default function StaffAccessManager() {
     }
   }
 
-  const activeCount = staff.filter((record) => record.active).length;
+  const activeCount = staff.filter((record) => inviteState(record) === "active").length;
   const doctorCount = staff.filter((record) => record.active && record.role === "doctor").length;
-  const inactiveCount = staff.filter((record) => !record.active).length;
+  const pendingCount = staff.filter((record) => ["invited", "expired"].includes(inviteState(record))).length;
 
   return (
     <section id="staff-access" className="space-y-5">
@@ -172,7 +237,7 @@ export default function StaffAccessManager() {
           {[
             [String(activeCount), "Active"],
             [String(doctorCount), "Doctors"],
-            [String(inactiveCount), "Disabled"],
+            [String(pendingCount), "Invited"],
           ].map(([value, label]) => (
             <div key={label} className="rounded-2xl bg-white/10 p-3 text-center ring-1 ring-white/10">
               <p className="text-xl font-bold sm:text-2xl">{value}</p>
@@ -188,12 +253,12 @@ export default function StaffAccessManager() {
             <UserPlus size={21} />
           </span>
           <div>
-            <h3 className="text-xl font-bold text-[#233A59]">Create a new staff login</h3>
-            <p className="mt-1 text-sm text-slate-500">The login works on Android, iPhone, tablet, and desktop.</p>
+            <h3 className="text-xl font-bold text-[#233A59]">Invite a staff member</h3>
+            <p className="mt-1 text-sm text-slate-500">We email secure password setup, login, and app-installation links automatically.</p>
           </div>
         </div>
 
-        <form onSubmit={createStaff} className="mt-6 grid gap-4 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2 sm:p-5 xl:grid-cols-5">
+        <form onSubmit={createStaff} className="mt-6 grid gap-4 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2 sm:p-5 xl:grid-cols-4">
           <label className="text-sm font-bold text-slate-700">
             Staff name
             <input name="displayName" required minLength={2} maxLength={100} autoComplete="name" placeholder="Full name" className={inputClass} />
@@ -201,10 +266,6 @@ export default function StaffAccessManager() {
           <label className="text-sm font-bold text-slate-700">
             Email address
             <input name="email" type="email" required autoComplete="off" inputMode="email" placeholder="staff@clinic.com" className={inputClass} />
-          </label>
-          <label className="text-sm font-bold text-slate-700">
-            Temporary password
-            <input name="password" type="password" required minLength={8} maxLength={72} autoComplete="new-password" placeholder="Minimum 8 characters" className={inputClass} />
           </label>
           <label className="text-sm font-bold text-slate-700">
             Access role
@@ -219,14 +280,14 @@ export default function StaffAccessManager() {
               {DOCTORS.map((doctor) => <option key={doctor.id} value={doctor.name}>{doctor.name}</option>)}
             </select>
           </label>
-          <div className="sm:col-span-2 xl:col-span-5">
+          <div className="sm:col-span-2 xl:col-span-4">
             <button
               type="submit"
               disabled={creating}
               className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#A8864A] px-5 py-3 text-sm font-bold text-white transition hover:bg-[#92713b] disabled:opacity-60 sm:w-auto"
             >
               {creating ? <LoaderCircle size={18} className="animate-spin" /> : <UserPlus size={18} />}
-              {creating ? "Creating secure login…" : "Create staff login"}
+              {creating ? "Sending invitation…" : "Send staff invitation"}
             </button>
           </div>
         </form>
@@ -238,7 +299,7 @@ export default function StaffAccessManager() {
       <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 bg-slate-50 px-5 py-4">
           <h3 className="font-bold text-[#233A59]">Current staff accounts</h3>
-          <p className="mt-1 text-sm text-slate-500">Change roles or disable a login without deleting its audit history.</p>
+          <p className="mt-1 text-sm text-slate-500">See invite progress, resend expired invitations, or disable access without deleting audit history.</p>
         </div>
         {loading ? (
           <div className="flex items-center gap-3 p-5 text-sm text-slate-500"><LoaderCircle size={18} className="animate-spin" />Loading staff access…</div>
@@ -248,7 +309,11 @@ export default function StaffAccessManager() {
           <div className="divide-y divide-slate-200">
             {staff.map((record) => {
               const updating = updatingUid === record.uid;
+              const resending = resendingUid === record.uid;
               const isSelf = record.uid === profile.uid;
+              const state = inviteState(record);
+              const status = inviteLabels[state];
+              const sentAt = formatInviteTime(record.inviteEmailSentAt);
               return (
                 <article key={record.uid} className="grid gap-4 p-5 sm:grid-cols-[1.4fr_1.2fr_auto] sm:items-center">
                   <div>
@@ -257,6 +322,16 @@ export default function StaffAccessManager() {
                       {isSelf ? <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-blue-700">You</span> : null}
                     </div>
                     <p className="mt-1 break-all text-xs text-slate-500">{record.email}</p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ring-1 ${status.className}`}>
+                        {status.label}
+                      </span>
+                      {sentAt ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500">
+                          <Clock3 size={12} aria-hidden="true" /> Sent {sentAt}
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
                   <div className="grid gap-2">
                     <select
@@ -284,17 +359,30 @@ export default function StaffAccessManager() {
                       </select>
                     ) : null}
                   </div>
-                  <button
-                    type="button"
-                    disabled={updating || isSelf}
-                    onClick={() => void updateStaffAccess(record, { active: !record.active })}
-                    className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 text-xs font-bold transition ${
-                      record.active ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-700"
-                    } disabled:cursor-not-allowed disabled:opacity-60`}
-                  >
-                    {updating ? <LoaderCircle size={15} className="animate-spin" /> : record.active ? <ShieldCheck size={15} /> : <KeyRound size={15} />}
-                    {record.active ? "Active" : "Deactivated"}
-                  </button>
+                  <div className="grid gap-2">
+                    {record.active ? (
+                      <button
+                        type="button"
+                        disabled={resending || updating}
+                        onClick={() => void resendInvite(record)}
+                        className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-blue-50 px-4 text-xs font-bold text-blue-800 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {resending ? <LoaderCircle size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+                        {resending ? "Sending…" : state === "active" ? "Send reset email" : "Resend invite"}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      disabled={updating || resending || isSelf}
+                      onClick={() => void updateStaffAccess(record, { active: !record.active })}
+                      className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 text-xs font-bold transition ${
+                        record.active ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-700"
+                      } disabled:cursor-not-allowed disabled:opacity-60`}
+                    >
+                      {updating ? <LoaderCircle size={15} className="animate-spin" /> : record.active ? <ShieldCheck size={15} /> : <KeyRound size={15} />}
+                      {record.active ? "Access enabled" : "Access disabled"}
+                    </button>
+                  </div>
                 </article>
               );
             })}
@@ -303,7 +391,8 @@ export default function StaffAccessManager() {
       </div>
 
       <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm leading-6 text-blue-900">
-        <strong>Access safety:</strong> use a different login for every person and share temporary passwords privately. The current administrator cannot disable their own account here.
+        <MailCheck className="mr-2 inline" size={17} aria-hidden="true" />
+        <strong>Access safety:</strong> every person receives a private password-setup link. Passwords are never shown to or shared by the administrator. Verified mobile OTP can be enabled later as an optional sign-in method.
       </div>
     </section>
   );

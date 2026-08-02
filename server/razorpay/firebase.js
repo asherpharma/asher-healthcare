@@ -282,12 +282,30 @@ async function identityToolkitRequest(env, path, body) {
       throw new HttpError(409, "A sign-in account already exists for this email address.");
     }
     if (code.includes("WEAK_PASSWORD")) {
-      throw new HttpError(400, "The temporary password does not meet Firebase security requirements.");
+      throw new HttpError(503, "The secure staff credential could not be generated. Please try again.");
+    }
+    if (code.includes("EMAIL_NOT_FOUND") || code.includes("USER_NOT_FOUND")) {
+      throw new HttpError(409, "This staff sign-in account no longer exists.");
+    }
+    if (code.includes("TOO_MANY_ATTEMPTS_TRY_LATER")) {
+      throw new HttpError(429, "Too many invitation emails were requested. Please wait and try again.");
+    }
+    if (
+      code.includes("UNAUTHORIZED_DOMAIN")
+      || code.includes("INVALID_CONTINUE_URI")
+      || code.includes("MISSING_CONTINUE_URI")
+    ) {
+      throw new HttpError(503, "The secure staff invitation link is not configured correctly.");
     }
     console.error("Identity Toolkit error", response.status, code);
     throw new HttpError(503, "The secure staff account service could not complete this request.");
   }
   return result;
+}
+
+export function createRandomPassword() {
+  const randomBytes = crypto.getRandomValues(new Uint8Array(32));
+  return `${bytesToBase64Url(randomBytes)}-aA1!`;
 }
 
 export function createAuthUser(env, { displayName, email, password }) {
@@ -309,5 +327,19 @@ export function deleteAuthUser(env, localId) {
     env,
     `projects/${encodeURIComponent(env.FIREBASE_PROJECT_ID)}/accounts:delete`,
     { localId },
+  );
+}
+
+export function sendPasswordResetEmail(env, email, continueUrl) {
+  return identityToolkitRequest(
+    env,
+    "accounts:sendOobCode",
+    {
+      requestType: "PASSWORD_RESET",
+      email,
+      continueUrl,
+      canHandleCodeInApp: false,
+      targetProjectId: env.FIREBASE_PROJECT_ID,
+    },
   );
 }

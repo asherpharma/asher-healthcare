@@ -2,8 +2,10 @@ import {
   commitWrites,
   createAuthUser,
   createDocumentWrite,
+  createRandomPassword,
   deleteAuthUser,
   requireAdminStaff,
+  sendPasswordResetEmail,
 } from "../../../../server/razorpay/firebase.js";
 import {
   assertSameOrigin,
@@ -15,6 +17,7 @@ import {
 
 const STAFF_ROLES = ["admin", "doctor", "reception"];
 const DOCTOR_NAMES = ["Dr. Lt Col Shafi Ahamad", "Dr. Shaik Reshma"];
+const STAFF_INVITE_CONTINUE_URL = "https://asherhealthcare.in/admin/login?welcome=1";
 
 export async function onRequestPost(context) {
   let createdUid = "";
@@ -24,7 +27,6 @@ export async function onRequestPost(context) {
     const body = await readJson(context.request);
     const displayName = String(body.displayName || "").trim();
     const email = String(body.email || "").trim().toLowerCase();
-    const password = String(body.password || "");
     const role = String(body.role || "");
     const doctorName = String(body.doctorName || "").trim();
 
@@ -33,9 +35,6 @@ export async function onRequestPost(context) {
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email) || email.length > 254) {
       throw new HttpError(400, "Enter a valid staff email address.");
-    }
-    if (password.length < 8 || password.length > 72) {
-      throw new HttpError(400, "Use a temporary password between 8 and 72 characters.");
     }
     if (!STAFF_ROLES.includes(role)) {
       throw new HttpError(400, "Choose a valid staff role.");
@@ -47,9 +46,11 @@ export async function onRequestPost(context) {
     const user = await createAuthUser(context.env, {
       displayName,
       email,
-      password,
+      password: createRandomPassword(),
     });
     createdUid = user.localId;
+    await sendPasswordResetEmail(context.env, email, STAFF_INVITE_CONTINUE_URL);
+
     const now = new Date();
     await commitWrites(context.env, [
       createDocumentWrite(context.env, `staff/${createdUid}`, {
@@ -61,11 +62,25 @@ export async function onRequestPost(context) {
         active: true,
         createdBy: administrator.uid,
         createdAt: now,
+        inviteStatus: "pending",
+        invitedAt: now,
+        invitedBy: administrator.uid,
+        inviteEmailSentAt: now,
+        inviteEmailLastAttemptAt: now,
+        inviteEmailLastAttemptBy: administrator.uid,
         updatedAt: now,
       }),
     ]);
 
-    return json({ uid: createdUid, displayName, email, role, active: true }, 201);
+    return json({
+      uid: createdUid,
+      displayName,
+      email,
+      role,
+      active: true,
+      inviteStatus: "pending",
+      inviteEmailSentAt: now.toISOString(),
+    }, 201);
   } catch (error) {
     if (createdUid) {
       try {

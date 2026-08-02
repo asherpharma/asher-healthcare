@@ -34,6 +34,34 @@ If nameservers must stay at GoDaddy, Cloudflare Pages can connect www with a CNA
 6. Do not store patient records until access controls, backups, and the clinic's privacy process are reviewed.
 
 Never commit .env.local or clinic credentials to GitHub.
+
+## Staff invitation email and sign-in
+
+Staff invitations use Firebase Authentication's **Password reset** email as a one-time
+set-password link. The clinic must not send or store temporary passwords.
+
+1. In Firebase, open **Authentication -> Settings -> Authorized domains** and add
+   `asherhealthcare.in`.
+2. Open **Authentication -> Templates -> Password reset** and use wording similar to:
+
+   - Subject: `Your Asher Staff access is ready`
+   - Message: `Hello %DISPLAY_NAME%, you have been invited to Asher Staff. Your login
+     email is %EMAIL%. Select %LINK% to create your password. Then open or install the
+     staff app at https://asherhealthcare.in/admin/login. If you did not expect this
+     invitation, contact the clinic administrator.`
+
+3. Keep the invitation continuation and app link on
+   `https://asherhealthcare.in/admin/login` so Firebase accepts the production domain.
+4. Test a new invitation, a resent invitation, password creation, forgotten-password
+   recovery, and installation from both Android Chrome and iPhone Safari before adding
+   real staff accounts.
+
+Phone OTP sign-in is **not enabled**. Production SMS verification requires Firebase's
+Blaze pay-as-you-go plan and per-SMS billing, plus the Phone provider, India SMS region,
+reCAPTCHA, and the authorized production domain. Do not enable or deploy OTP until the
+clinic owner explicitly approves Blaze billing. Email-and-password remains the supported
+staff login method in the meantime.
+
 ## Razorpay secure payment setup
 
 The public website remains a static Next.js export. Secure payment endpoints run as Cloudflare Pages Functions under `/api/razorpay/*`; Razorpay secrets are never included in browser JavaScript.

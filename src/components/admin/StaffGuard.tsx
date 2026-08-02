@@ -66,6 +66,18 @@ export default function StaffGuard({ children }: { children: ReactNode }) {
             doctorName: String(data.doctorName || ""),
           },
         });
+
+        if (data?.inviteStatus === "pending" || data?.inviteStatus === "expired") {
+          void user.getIdToken()
+            .then((idToken) => fetch("/api/staff/onboarding/complete", {
+              method: "POST",
+              headers: { Authorization: `Bearer ${idToken}` },
+            }))
+            .catch(() => {
+              // This status is informational. Authentication and the active
+              // staff profile above remain the source of access control.
+            });
+        }
       } catch {
         setError("We could not verify this staff account. Please try again.");
       }
