@@ -1,15 +1,8 @@
 "use client";
 
 import type { StaffRole } from "@/components/admin/StaffGuard";
-import { firestore } from "@/firebase/config";
-import {
-  collection,
-  getDocs,
-  limit,
-  orderBy,
-  query,
-  type Timestamp,
-} from "firebase/firestore";
+import { firebaseAuth } from "@/firebase/config";
+import { fetchPatientDirectory } from "@/lib/patient-directory";
 import {
   ArrowRight,
   CalendarPlus,
@@ -40,7 +33,6 @@ type PatientSearchRecord = {
   fullName: string;
   phone: string;
   doctorName?: string;
-  createdAt?: Timestamp;
 };
 
 type QuickAction = {
@@ -92,8 +84,8 @@ function actionsFor(role: StaffRole): QuickAction[] {
   return [
     {
       label: "Register patient",
-      detail: "Create patient and invoice",
-      href: "/admin/patients?new=1",
+      detail: "Express check-in, invoice and payment",
+      href: "/admin/reception",
       icon: UserPlus,
       tone: "bg-emerald-50 text-emerald-900",
     },
@@ -106,17 +98,6 @@ function actionsFor(role: StaffRole): QuickAction[] {
       tone: "bg-violet-50 text-violet-900",
     },
   ];
-}
-
-function patientDate(value?: Timestamp) {
-  try {
-    return value?.toDate().toLocaleDateString("en-IN", {
-      day: "2-digit",
-      month: "short",
-    }) ?? "Recent";
-  } catch {
-    return "Recent";
-  }
 }
 
 export default function StaffCommandCenter({ role }: { role: StaffRole }) {
@@ -133,18 +114,15 @@ export default function StaffCommandCenter({ role }: { role: StaffRole }) {
   const actions = useMemo(() => actionsFor(role), [role]);
 
   const loadPatients = useCallback(async () => {
-    if (!firestore || loadingRef.current) return;
+    if (loadingRef.current) return;
     loadingRef.current = true;
     setLoading(true);
     setError("");
     try {
-      const snapshot = await getDocs(
-        query(collection(firestore, "patients"), orderBy("createdAt", "desc"), limit(100)),
-      );
-      setPatients(snapshot.docs.map((item) => ({
-        id: item.id,
-        ...item.data(),
-      }) as PatientSearchRecord));
+      const user = firebaseAuth?.currentUser;
+      if (!user) throw new Error("Staff session missing");
+      const directory = await fetchPatientDirectory(user);
+      setPatients(directory as PatientSearchRecord[]);
       setLoaded(true);
     } catch (loadError) {
       console.error("Staff patient search could not be loaded", loadError);
@@ -200,9 +178,6 @@ export default function StaffCommandCenter({ role }: { role: StaffRole }) {
   }
 
   function navigate(href: string) {
-    if (href === "/admin/patients?new=1" && pathname === "/admin/patients") {
-      window.dispatchEvent(new CustomEvent("asher:new-patient"));
-    }
     if (href === "/admin/appointments?new=1" && pathname === "/admin/appointments") {
       window.dispatchEvent(new CustomEvent("asher:new-appointment"));
     }
@@ -310,7 +285,6 @@ export default function StaffCommandCenter({ role }: { role: StaffRole }) {
                           <strong className="block truncate text-sm text-[#233A59]">{patient.fullName}</strong>
                           <span className="mt-1 block truncate text-xs text-slate-500">{patient.patientNumber ?? "Patient"} · {patient.phone}{patient.doctorName ? ` · ${patient.doctorName}` : ""}</span>
                         </span>
-                        <span className="hidden text-xs font-semibold text-slate-400 sm:block">{patientDate(patient.createdAt)}</span>
                         <ArrowRight className="shrink-0 text-slate-300" size={17} />
                       </button>
                     ))}

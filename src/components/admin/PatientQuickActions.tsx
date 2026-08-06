@@ -1,3 +1,6 @@
+"use client";
+
+import { useStaff, type StaffRole } from "@/components/admin/StaffGuard";
 import Link from "next/link";
 import {
   CalendarPlus,
@@ -21,6 +24,7 @@ type RouteAction = {
   href: string;
   icon: LucideIcon;
   tone: string;
+  roles: StaffRole[];
 };
 
 function normalisePhone(phone: string) {
@@ -36,33 +40,39 @@ function normaliseIndianWhatsAppNumber(phone: string) {
 }
 
 export default function PatientQuickActions({ patient }: PatientQuickActionsProps) {
+  const { profile } = useStaff();
   const patientId = encodeURIComponent(patient.id);
-  const routeActions: RouteAction[] = [
+  const allRouteActions: RouteAction[] = [
     {
       label: "Consult",
       href: `/admin/consultations?patient=${patientId}`,
       icon: Stethoscope,
       tone: "bg-blue-50 text-blue-700",
+      roles: ["admin", "doctor"],
     },
     {
       label: "Book",
       href: `/admin/appointments?new=1&patient=${patientId}`,
       icon: CalendarPlus,
       tone: "bg-violet-50 text-violet-700",
+      roles: ["admin", "doctor", "reception"],
     },
     {
       label: "Bill",
       href: `/admin/billing?new=1&patient=${patientId}`,
       icon: IndianRupee,
       tone: "bg-emerald-50 text-emerald-700",
+      roles: ["admin", "reception"],
     },
     {
       label: "Lab",
       href: `/admin/lab?new=1&patient=${patientId}`,
       icon: FlaskConical,
       tone: "bg-amber-50 text-amber-700",
+      roles: ["admin", "doctor", "reception"],
     },
   ];
+  const routeActions = allRouteActions.filter((action) => action.roles.includes(profile.role));
   const phoneNumber = normalisePhone(patient.phone);
   const whatsappNumber = normaliseIndianWhatsAppNumber(patient.phone);
 

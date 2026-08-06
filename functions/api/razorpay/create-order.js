@@ -1,8 +1,11 @@
 import {
+  assertActivePatientDocument,
+  assertBillingStaff,
   createDocumentWrite,
   commitWrites,
   getDocument,
   requireActiveStaff,
+  verifyDocumentWrite,
 } from "../../../server/razorpay/firebase.js";
 import {
   assertSameOrigin,
@@ -19,7 +22,9 @@ export async function onRequestPost(context) {
   try {
     assertSameOrigin(context.request);
     requireEnvironment(context.env, ["RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET"]);
-    const staff = await requireActiveStaff(context.request, context.env);
+    const staff = assertBillingStaff(
+      await requireActiveStaff(context.request, context.env),
+    );
     const body = await readJson(context.request);
     if (!validDocumentId(body.invoiceId)) {
       throw new HttpError(400, "Select a valid clinic invoice.");
@@ -27,6 +32,17 @@ export async function onRequestPost(context) {
 
     const invoice = await getDocument(context.env, `invoices/${body.invoiceId}`);
     if (!invoice) throw new HttpError(404, "This invoice could not be found.");
+    const patientId = invoice.data.patientId;
+    if (!validDocumentId(patientId)) {
+      throw new HttpError(409, "This invoice is not linked to an active patient record. Correct the invoice before starting a payment.");
+    }
+    const patient = assertActivePatientDocument(
+      await getDocument(context.env, `patients/${patientId}`),
+      {
+        missingMessage: "The patient record linked to this invoice no longer exists. Restore or correct it before starting a payment.",
+        archivedMessage: "The patient record linked to this invoice is archived. Restore it before starting a payment.",
+      },
+    );
     const requestedPaise = toPaise(body.amount);
     const balancePaise = toPaise(invoice.data.balance);
     if (requestedPaise <= 0 || requestedPaise > balancePaise) {
@@ -45,9 +61,12 @@ export async function onRequestPost(context) {
     });
     const createdAt = new Date();
     await commitWrites(context.env, [
+      verifyDocumentWrite(context.env, `invoices/${body.invoiceId}`, invoice.updateTime),
+      verifyDocumentWrite(context.env, `patients/${patientId}`, patient.updateTime),
       createDocumentWrite(context.env, `paymentOrders/${order.id}`, {
         orderId: order.id,
         invoiceId: body.invoiceId,
+        patientId,
         invoiceNumber: invoice.data.invoiceNumber,
         amount: requestedPaise / 100,
         amountPaise: requestedPaise,

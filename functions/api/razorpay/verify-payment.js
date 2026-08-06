@@ -1,4 +1,7 @@
-import { requireActiveStaff } from "../../../server/razorpay/firebase.js";
+import {
+  assertBillingStaff,
+  requireActiveStaff,
+} from "../../../server/razorpay/firebase.js";
 import {
   assertSameOrigin,
   errorResponse,
@@ -19,7 +22,9 @@ function validGatewayId(value, prefix) {
 export async function onRequestPost(context) {
   try {
     assertSameOrigin(context.request);
-    const staff = await requireActiveStaff(context.request, context.env);
+    const staff = assertBillingStaff(
+      await requireActiveStaff(context.request, context.env),
+    );
     const body = await readJson(context.request);
     const orderId = body.razorpay_order_id;
     const paymentId = body.razorpay_payment_id;

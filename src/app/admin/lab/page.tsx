@@ -2,6 +2,7 @@
 
 import { useStaff } from "@/components/admin/StaffGuard";
 import { firestore, storage } from "@/firebase/config";
+import { fetchPatientDirectory } from "@/lib/patient-directory";
 import {
   addDoc,
   collection,
@@ -12,6 +13,8 @@ import {
   query,
   serverTimestamp,
   updateDoc,
+  where,
+  writeBatch,
   type Timestamp,
 } from "firebase/firestore";
 import { getBlob, ref, uploadBytes } from "firebase/storage";
@@ -33,6 +36,7 @@ type Patient = {
   patientNumber?: string;
   fullName: string;
   phone: string;
+  archived?: boolean;
 };
 
 type LabStatus = "ordered" | "collected" | "processing" | "completed" | "cancelled";
@@ -55,6 +59,7 @@ type LabOrder = {
   reportContentType?: string;
   reportSize?: number;
   orderedAt?: Timestamp;
+  completedAt?: Timestamp;
   updatedAt?: Timestamp;
 };
 
@@ -91,6 +96,48 @@ const cardClass = "rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-
 const fieldClass = "mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-[#A8864A] focus:ring-2 focus:ring-[#A8864A]/15";
 const labelClass = "text-sm font-semibold text-slate-700";
 
+type AcceptedReport = {
+  contentType: "application/pdf" | "image/jpeg" | "image/png" | "image/webp";
+  extension: "pdf" | "jpg" | "png" | "webp";
+};
+
+function bytesStartWith(bytes: Uint8Array, signature: number[]) {
+  return signature.every((value, index) => bytes[index] === value);
+}
+
+async function inspectReportFile(file: File): Promise<AcceptedReport | null> {
+  const bytes = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+  if (bytesStartWith(bytes, [0x25, 0x50, 0x44, 0x46, 0x2d])) {
+    return { contentType: "application/pdf", extension: "pdf" };
+  }
+  if (bytesStartWith(bytes, [0xff, 0xd8, 0xff])) {
+    return { contentType: "image/jpeg", extension: "jpg" };
+  }
+  if (bytesStartWith(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) {
+    return { contentType: "image/png", extension: "png" };
+  }
+  if (
+    bytesStartWith(bytes, [0x52, 0x49, 0x46, 0x46])
+    && bytesStartWith(bytes.slice(8), [0x57, 0x45, 0x42, 0x50])
+  ) {
+    return { contentType: "image/webp", extension: "webp" };
+  }
+  return null;
+}
+
+function normalizedReportName(originalName: string, extension: AcceptedReport["extension"]) {
+  const stem = originalName
+    .replace(/\.[^.]*$/, "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-_.]+|[-_.]+$/g, "")
+    .slice(0, 80)
+    .toLowerCase() || "lab-report";
+  return `${stem}.${extension}`;
+}
+
 function dateTime(value?: Timestamp) {
   if (!value?.toDate) return "—";
   return value.toDate().toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" });
@@ -103,7 +150,7 @@ function makeOrderNumber() {
 }
 
 function LabDesk() {
-  const { user } = useStaff();
+  const { user, profile } = useStaff();
   const db = firestore!;
   const files = storage!;
   const [patients, setPatients] = useState<Patient[]>([]);
@@ -117,12 +164,15 @@ function LabDesk() {
   const [statusFilter, setStatusFilter] = useState<"all" | LabStatus>("all");
   const [priorityFilter, setPriorityFilter] = useState<"all" | LabOrder["priority"]>("all");
   const [patientsLoaded, setPatientsLoaded] = useState(false);
+  const [patientDirectoryScope, setPatientDirectoryScope] = useState("");
   const [patientId, setPatientId] = useState("");
   const [selectedTests, setSelectedTests] = useState<string[]>([]);
   const [customTest, setCustomTest] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const deepLinkedPatientHandled = useRef(false);
+  const directoryScope = `${profile.role}:${profile.doctorName ?? ""}`;
+  const patientDirectoryAvailable = patientsLoaded && patientDirectoryScope === directoryScope;
 
   useEffect(() => {
     const requestedPriority = new URLSearchParams(window.location.search).get("priority");
@@ -132,27 +182,61 @@ function LabDesk() {
   }, []);
 
   useEffect(() => {
-    const patientQuery = query(collection(db, "patients"), orderBy("createdAt", "desc"), limit(300));
-    const stopPatients = onSnapshot(patientQuery, (snapshot) => {
-      setPatients(snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as Omit<Patient, "id">) })));
-      setPatientsLoaded(true);
-    }, () => {
-      setError("Unable to load patient records.");
-      setPatientsLoaded(true);
-    });
-    const ordersQuery = query(collection(db, "labOrders"), orderBy("orderedAt", "desc"), limit(300));
+    let active = true;
+    void fetchPatientDirectory(user)
+      .then((directory) => {
+        if (!active) return;
+        setPatients(directory.map((patient) => ({
+          id: patient.id,
+          patientNumber: patient.patientNumber,
+          fullName: patient.fullName,
+          phone: patient.phone,
+          archived: patient.archived,
+        })));
+        setPatientDirectoryScope(directoryScope);
+      })
+      .catch((directoryError) => {
+        console.error("Unable to load the secure patient directory.", directoryError);
+        if (active) {
+          setPatients([]);
+          setShowCreate(false);
+          setResultOrder(null);
+          setPatientDirectoryScope("");
+          setError("Unable to load the active patient directory. Laboratory actions are unavailable until it is refreshed.");
+        }
+      })
+      .finally(() => {
+        if (active) setPatientsLoaded(true);
+      });
+    return () => { active = false; };
+  }, [directoryScope, user]);
+
+  useEffect(() => {
+    if (profile.role === "doctor" && !profile.doctorName?.trim()) {
+      const timer = window.setTimeout(() => {
+        setOrders([]);
+        setError("This doctor login is not linked to a clinic doctor. Laboratory orders are unavailable.");
+        setLoading(false);
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+    const ordersQuery = profile.role === "doctor"
+      ? query(collection(db, "labOrders"), where("clinician", "==", profile.doctorName), limit(300))
+      : query(collection(db, "labOrders"), orderBy("orderedAt", "desc"), limit(300));
     const stopOrders = onSnapshot(ordersQuery, (snapshot) => {
-      setOrders(snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as Omit<LabOrder, "id">) })));
+      setOrders(snapshot.docs
+        .map((entry) => ({ id: entry.id, ...(entry.data() as Omit<LabOrder, "id">) }))
+        .sort((left, right) => (right.orderedAt?.toMillis?.() ?? 0) - (left.orderedAt?.toMillis?.() ?? 0)));
       setLoading(false);
     }, () => {
       setError("Unable to load laboratory orders.");
       setLoading(false);
     });
-    return () => { stopPatients(); stopOrders(); };
-  }, [db]);
+    return stopOrders;
+  }, [db, profile.doctorName, profile.role]);
 
   useEffect(() => {
-    if (!patientsLoaded || deepLinkedPatientHandled.current) return;
+    if (!patientDirectoryAvailable || deepLinkedPatientHandled.current) return;
 
     const params = new URLSearchParams(window.location.search);
     const requestedPatientId = params.get("patient")?.trim();
@@ -166,23 +250,32 @@ function LabDesk() {
       setError("");
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [patients, patientsLoaded]);
+  }, [patientDirectoryAvailable, patients]);
 
   const filteredOrders = useMemo(() => {
+    if (!patientsLoaded || !patientDirectoryAvailable) return [];
+    const activePatientIds = new Set(patients.map((patient) => patient.id));
     const term = search.trim().toLowerCase();
     return orders.filter((order) => {
+      if (!activePatientIds.has(order.patientId)) return false;
       const matchesStatus = statusFilter === "all" || order.status === statusFilter;
       const matchesPriority = priorityFilter === "all" || order.priority === priorityFilter;
       const haystack = [order.orderNumber, order.patientName, order.patientPhone, order.patientNumber, order.tests.join(" ")].join(" ").toLowerCase();
       return matchesStatus && matchesPriority && (!term || haystack.includes(term));
     });
-  }, [orders, priorityFilter, search, statusFilter]);
+  }, [orders, patientDirectoryAvailable, patients, patientsLoaded, priorityFilter, search, statusFilter]);
+
+  const accessibleOrders = useMemo(() => {
+    if (!patientsLoaded || !patientDirectoryAvailable) return [];
+    const activePatientIds = new Set(patients.map((patient) => patient.id));
+    return orders.filter((order) => activePatientIds.has(order.patientId));
+  }, [orders, patientDirectoryAvailable, patients, patientsLoaded]);
 
   const stats = useMemo(() => ({
-    active: orders.filter((item) => !["completed", "cancelled"].includes(item.status)).length,
-    urgent: orders.filter((item) => item.priority === "urgent" && item.status !== "completed" && item.status !== "cancelled").length,
-    completed: orders.filter((item) => item.status === "completed").length,
-  }), [orders]);
+    active: accessibleOrders.filter((item) => !["completed", "cancelled"].includes(item.status)).length,
+    urgent: accessibleOrders.filter((item) => item.priority === "urgent" && item.status !== "completed" && item.status !== "cancelled").length,
+    completed: accessibleOrders.filter((item) => item.status === "completed").length,
+  }), [accessibleOrders]);
 
   function toggleTest(test: string) {
     setSelectedTests((current) => current.includes(test) ? current.filter((item) => item !== test) : [...current, test]);
@@ -197,6 +290,10 @@ function LabDesk() {
 
   async function createOrder(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!patientDirectoryAvailable) {
+      setError("The active patient directory is unavailable. Refresh before creating a laboratory order.");
+      return;
+    }
     const selectedPatient = patients.find((item) => item.id === patientId);
     if (!selectedPatient || selectedTests.length === 0) {
       setError("Choose a registered patient and at least one test.");
@@ -234,11 +331,15 @@ function LabDesk() {
   }
 
   async function changeStatus(order: LabOrder, status: LabStatus) {
+    if (!patientDirectoryAvailable || !patients.some((patient) => patient.id === order.patientId)) {
+      setError("This laboratory order is no longer linked to an available active patient.");
+      return;
+    }
     setError("");
     try {
       const values: Record<string, unknown> = { status, updatedAt: serverTimestamp() };
       if (status === "collected") values.specimenCollectedAt = serverTimestamp();
-      if (status === "completed") values.completedAt = serverTimestamp();
+      if (status === "completed" && !order.completedAt) values.completedAt = serverTimestamp();
       await updateDoc(doc(db, "labOrders", order.id), values);
     } catch {
       setError("Unable to update the laboratory status.");
@@ -248,6 +349,11 @@ function LabDesk() {
   async function saveResult(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!resultOrder) return;
+    if (!patientDirectoryAvailable || !patients.some((patient) => patient.id === resultOrder.patientId)) {
+      setResultOrder(null);
+      setError("This laboratory order is no longer linked to an available active patient.");
+      return;
+    }
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const summary = String(form.get("resultSummary") || "").trim();
@@ -256,37 +362,48 @@ function LabDesk() {
       setError("Add a result summary or upload the report file.");
       return;
     }
+    let acceptedReport: AcceptedReport | null = null;
     if (reportFile instanceof File && reportFile.size > 0) {
-      if (reportFile.type !== "application/pdf" && !reportFile.type.startsWith("image/")) {
-        setError("Only PDF and image reports are allowed.");
-        return;
-      }
       if (reportFile.size >= 10 * 1024 * 1024) {
         setError("Reports must be smaller than 10 MB.");
+        return;
+      }
+      try {
+        acceptedReport = await inspectReportFile(reportFile);
+      } catch {
+        setError("The selected report could not be checked. Please choose it again.");
+        return;
+      }
+      if (!acceptedReport) {
+        setError("Only genuine PDF, JPEG, PNG, or WebP reports are allowed.");
         return;
       }
     }
 
     setUploading(true);
     setError("");
+    let uploadedStoragePath = "";
     try {
       const updateValues: Record<string, unknown> = {
         resultSummary: summary,
         status: "completed",
-        completedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       };
-      if (reportFile instanceof File && reportFile.size > 0) {
-        const safeName = reportFile.name.replace(/[^a-zA-Z0-9._-]/g, "-") || "lab-report";
-        const storagePath = "reports/" + resultOrder.patientId + "/" + Date.now() + "-" + safeName;
+      if (!resultOrder.completedAt) updateValues.completedAt = serverTimestamp();
+      const batch = writeBatch(db);
+      if (reportFile instanceof File && reportFile.size > 0 && acceptedReport) {
+        const safeName = normalizedReportName(reportFile.name, acceptedReport.extension);
+        const storagePath = `reports/${resultOrder.patientId}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}-${safeName}`;
         await uploadBytes(ref(files, storagePath), reportFile, {
-          contentType: reportFile.type,
+          contentType: acceptedReport.contentType,
           customMetadata: { patientId: resultOrder.patientId, uploadedBy: user.uid, labOrderId: resultOrder.id },
         });
-        await addDoc(collection(db, "patients", resultOrder.patientId, "reports"), {
-          fileName: reportFile.name,
+        uploadedStoragePath = storagePath;
+        const patientReportRef = doc(collection(db, "patients", resultOrder.patientId, "reports"));
+        batch.set(patientReportRef, {
+          fileName: safeName,
           storagePath,
-          contentType: reportFile.type,
+          contentType: acceptedReport.contentType,
           size: reportFile.size,
           category: "Lab report",
           reportDate: new Date().toISOString().slice(0, 10),
@@ -296,17 +413,22 @@ function LabDesk() {
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
-        updateValues.reportFileName = reportFile.name;
+        updateValues.reportFileName = safeName;
         updateValues.reportStoragePath = storagePath;
-        updateValues.reportContentType = reportFile.type;
+        updateValues.reportContentType = acceptedReport.contentType;
         updateValues.reportSize = reportFile.size;
       }
-      await updateDoc(doc(db, "labOrders", resultOrder.id), updateValues);
+      batch.update(doc(db, "labOrders", resultOrder.id), updateValues);
+      await batch.commit();
       setResultOrder(null);
       setNotice("Lab result saved securely in the patient record.");
     } catch (resultError) {
       console.error(resultError);
-      setError("The lab result could not be saved.");
+      if (uploadedStoragePath) {
+        setError("The confirmation was interrupted after the report upload. The file has been retained securely; refresh the laboratory desk before retrying so it can be reconciled without creating a duplicate.");
+      } else {
+        setError("The lab result could not be saved. Please refresh the laboratory desk and check the order before retrying.");
+      }
     } finally {
       setUploading(false);
     }
@@ -314,6 +436,10 @@ function LabDesk() {
 
   async function openReport(order: LabOrder) {
     if (!order.reportStoragePath) return;
+    if (!patientDirectoryAvailable || !patients.some((patient) => patient.id === order.patientId)) {
+      setError("This report is no longer linked to an available active patient.");
+      return;
+    }
     setError("");
     try {
       const blob = await getBlob(ref(files, order.reportStoragePath));
@@ -339,7 +465,7 @@ function LabDesk() {
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-[#233A59] sm:text-4xl">Lab orders & results</h1>
           <p className="mt-3 text-slate-600">Track samples, test status, results, and secure reports from one desk.</p>
         </div>
-        <button type="button" onClick={() => setShowCreate(true)} className="inline-flex items-center gap-2 rounded-xl bg-[#233A59] px-5 py-3 text-sm font-bold text-white shadow-lg shadow-[#233A59]/15">
+        <button type="button" disabled={!patientDirectoryAvailable} onClick={() => setShowCreate(true)} className="inline-flex items-center gap-2 rounded-xl bg-[#233A59] px-5 py-3 text-sm font-bold text-white shadow-lg shadow-[#233A59]/15 disabled:cursor-not-allowed disabled:opacity-50">
           <Plus size={18} /> New lab order
         </button>
       </div>
@@ -392,8 +518,8 @@ function LabDesk() {
                 <select value={order.status} onChange={(event) => void changeStatus(order, event.target.value as LabStatus)} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700">
                   {statusOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
                 </select>
-                <button type="button" onClick={() => { setResultOrder(order); setError(""); }} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#233A59] px-4 py-2.5 text-sm font-bold text-white"><TestTube2 size={17} /> Add result</button>
-                {order.reportStoragePath && <button type="button" onClick={() => void openReport(order)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-[#233A59]"><Download size={17} /> Open report</button>}
+                <button type="button" onClick={() => { setResultOrder(order); setError(""); }} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#233A59] px-4 py-2.5 text-sm font-bold text-white"><TestTube2 size={17} /> {order.status === "completed" ? "Edit result" : "Add result"}</button>
+                {order.reportStoragePath && profile.role !== "reception" && <button type="button" onClick={() => void openReport(order)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-[#233A59]"><Download size={17} /> Open report</button>}
               </div>
             </div>
           </article>
@@ -407,7 +533,7 @@ function LabDesk() {
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
               <label className={labelClass + " sm:col-span-2"}>Registered patient<select required value={patientId} onChange={(event) => setPatientId(event.target.value)} className={fieldClass}><option value="">Select patient</option>{patients.map((patient) => <option key={patient.id} value={patient.id}>{patient.fullName} · {patient.phone}</option>)}</select></label>
               <label className={labelClass}>Priority<select name="priority" className={fieldClass}><option value="routine">Routine</option><option value="urgent">Urgent</option></select></label>
-              <label className={labelClass}>Ordering clinician<input name="clinician" placeholder="Doctor name" className={fieldClass} /></label>
+              <label className={labelClass}>Ordering clinician{profile.role === "doctor" ? <input name="clinician" value={profile.doctorName ?? ""} readOnly required className={fieldClass + " cursor-not-allowed bg-slate-100 text-slate-700"} /> : <input name="clinician" placeholder="Doctor name" className={fieldClass} />}</label>
               <fieldset className="sm:col-span-2"><legend className={labelClass}>Tests</legend><div className="mt-3 grid gap-2 sm:grid-cols-2">{commonTests.map((test) => <label key={test} className="flex cursor-pointer items-center gap-3 rounded-xl border border-slate-200 p-3 text-sm font-medium text-slate-700"><input type="checkbox" checked={selectedTests.includes(test)} onChange={() => toggleTest(test)} className="h-4 w-4 accent-[#233A59]" />{test}</label>)}</div></fieldset>
               <div className="flex gap-2 sm:col-span-2"><input value={customTest} onChange={(event) => setCustomTest(event.target.value)} placeholder="Add another test" className={fieldClass + " mt-0"} /><button type="button" onClick={addCustomTest} className="rounded-xl border border-slate-200 px-4 text-sm font-bold">Add</button></div>
               {selectedTests.length > 0 && <div className="flex flex-wrap gap-2 sm:col-span-2">{selectedTests.map((test) => <button type="button" key={test} onClick={() => toggleTest(test)} className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-800">{test} ×</button>)}</div>}
@@ -423,7 +549,14 @@ function LabDesk() {
           <form onSubmit={saveResult} className="w-full max-w-xl rounded-[2rem] bg-white p-6 shadow-2xl sm:p-8">
             <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-widest text-[#A8864A]">{resultOrder.orderNumber}</p><h2 className="mt-1 text-2xl font-bold text-[#233A59]">Record lab result</h2><p className="mt-1 text-sm text-slate-500">{resultOrder.patientName}</p></div><button type="button" onClick={() => setResultOrder(null)} aria-label="Close"><X size={22} /></button></div>
             <label className={labelClass + " mt-6 block"}>Result summary<textarea name="resultSummary" defaultValue={resultOrder.resultSummary ?? ""} rows={5} placeholder="Key findings, values, or interpretation" className={fieldClass} /></label>
-            <label className={labelClass + " mt-4 block"}>Report PDF or image<div className="mt-2 rounded-xl border border-dashed border-slate-300 p-4"><div className="flex items-center gap-3 text-sm text-slate-600"><FileUp size={20} /><input name="reportFile" type="file" accept="application/pdf,image/*" /></div><p className="mt-2 text-xs text-slate-500">Secure storage, maximum 10 MB.</p></div></label>
+            {resultOrder.reportStoragePath ? (
+              <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm leading-6 text-emerald-900">
+                <p className="font-bold">Secure report already attached</p>
+                <p className="mt-1">The stored file is immutable. You can update the result summary without replacing the original report.</p>
+              </div>
+            ) : (
+              <label className={labelClass + " mt-4 block"}>Report PDF or image<div className="mt-2 rounded-xl border border-dashed border-slate-300 p-4"><div className="flex items-center gap-3 text-sm text-slate-600"><FileUp size={20} /><input name="reportFile" type="file" accept="application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp" /></div><p className="mt-2 text-xs text-slate-500">PDF, JPEG, PNG, or WebP only. Secure storage, maximum 10 MB.</p></div></label>
+            )}
             <div className="mt-6 flex justify-end gap-3"><button type="button" onClick={() => setResultOrder(null)} className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold">Cancel</button><button disabled={uploading} className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white disabled:opacity-60">{uploading ? <LoaderCircle className="animate-spin" size={18} /> : <CheckCircle2 size={18} />} Save result</button></div>
           </form>
         </div>

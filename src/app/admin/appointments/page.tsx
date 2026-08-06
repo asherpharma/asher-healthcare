@@ -3,6 +3,7 @@
 import { useStaff } from "@/components/admin/StaffGuard";
 import { firebaseAuth, firestore } from "@/firebase/config";
 import { useAppointmentSchedule } from "@/hooks/useAppointmentSchedule";
+import { fetchPatientDirectory } from "@/lib/patient-directory";
 import {
   clinicDate,
   dateIsEnabled,
@@ -35,7 +36,6 @@ import {
   runTransaction,
   serverTimestamp,
   where,
-  writeBatch,
   type Timestamp,
 } from "firebase/firestore";
 import {
@@ -59,10 +59,11 @@ import {
   XCircle,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 
 type Appointment = {
   id: string;
+  patientId?: string;
   patientName: string;
   phone: string;
   doctorId: string;
@@ -144,8 +145,11 @@ function AppointmentDesk() {
   const profileDoctorId = assignedDoctorId(profile.doctorName);
   const [deskItems, setDeskItems] = useState<Appointment[]>([]);
   const [historyItems, setHistoryItems] = useState<Appointment[]>([]);
+  const [activePatientIds, setActivePatientIds] = useState<Set<string>>(new Set());
   const [deskLoading, setDeskLoading] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(true);
+  const [archiveLoading, setArchiveLoading] = useState(true);
+  const [archiveSafetyError, setArchiveSafetyError] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [updatingId, setUpdatingId] = useState<string | null>(null);
@@ -164,8 +168,8 @@ function AppointmentDesk() {
     slots: new Set(),
   });
   const deskDate = dateFilter || today;
-  const loading = deskLoading || historyLoading;
-  const items = useMemo(() => {
+  const loading = deskLoading || historyLoading || archiveLoading;
+  const allItems = useMemo(() => {
     const merged = new Map<string, Appointment>();
     historyItems.forEach((appointment) => merged.set(appointment.id, appointment));
     deskItems.forEach((appointment) => merged.set(appointment.id, appointment));
@@ -175,6 +179,35 @@ function AppointmentDesk() {
       return right.preferredTime.localeCompare(left.preferredTime);
     });
   }, [deskItems, historyItems]);
+  const items = useMemo(
+    () => allItems.filter((appointment) => (
+      !appointment.patientId || activePatientIds.has(appointment.patientId)
+    )),
+    [activePatientIds, allItems],
+  );
+  const archivedExcludedCount = allItems.length - items.length;
+
+  const refreshPatientSafety = useCallback(async () => {
+    try {
+      const user = firebaseAuth?.currentUser;
+      if (!user) throw new Error("Staff session missing");
+      const directory = await fetchPatientDirectory(user, {
+        includeArchived: profile.role === "admin",
+      });
+      const activeIds = new Set(
+        directory.filter((patient) => patient.archived !== true).map((patient) => patient.id),
+      );
+      setActivePatientIds(activeIds);
+      setArchiveSafetyError("");
+      return activeIds;
+    } catch (directoryError) {
+      console.error(directoryError);
+      setArchiveSafetyError("Archived patient safeguards could not be loaded. Appointment actions are paused to protect patient records.");
+      return null;
+    } finally {
+      setArchiveLoading(false);
+    }
+  }, [profile.role]);
 
   useEffect(() => {
     const openAppointment = () => setShowCreate(true);
@@ -195,16 +228,25 @@ function AppointmentDesk() {
     }, 0);
 
     const patientId = params.get("patient")?.trim();
-    if (params.get("new") === "1" && patientId && firestore) {
-      void getDoc(doc(firestore, "patients", patientId))
-        .then((snapshot) => {
-          if (!active || !snapshot.exists()) return;
-          const patient = snapshot.data();
+    if (params.get("new") === "1" && patientId) {
+      const user = firebaseAuth?.currentUser;
+      const directoryRequest = user
+        ? fetchPatientDirectory(user, { includeArchived: profile.role === "admin" })
+        : Promise.reject(new Error("Staff session missing"));
+      void directoryRequest
+        .then((directory) => {
+          if (!active) return;
+          const patient = directory.find((entry) => entry.id === patientId);
+          if (!patient || patient.archived === true) {
+            setBookingError("This patient record is unavailable or archived. An administrator must restore it before a new appointment can be created.");
+            setBooking((current) => ({ ...current, patientId: "", patientName: "", phone: "" }));
+            return;
+          }
           const doctorDescriptor = `${String(patient.doctorName || "")} ${String(patient.specialty || "")}`.toLowerCase();
           const doctorId: DoctorId = /(reshma|obstetric|gyn|obg|women)/.test(doctorDescriptor) ? "obg" : "pediatrics";
           setBooking((current) => ({
             ...current,
-            patientId: snapshot.id,
+            patientId: patient.id,
             patientName: String(patient.fullName || ""),
             phone: String(patient.phone || ""),
             doctorId,
@@ -219,7 +261,7 @@ function AppointmentDesk() {
       window.clearTimeout(routeTimer);
       window.removeEventListener("asher:new-appointment", openAppointment);
     };
-  }, [today]);
+  }, [profile.role, today]);
 
   const bookingSlots = useMemo(
     () => dateIsEnabled(schedule, booking.preferredDate)
@@ -267,10 +309,24 @@ function AppointmentDesk() {
 
   useEffect(() => {
     if (!firestore) return;
-    const deskQuery = query(
-      collection(firestore, "appointments"),
-      where("preferredDate", "==", deskDate),
-    );
+    if (profile.role === "doctor" && !profileDoctorId) {
+      const timer = window.setTimeout(() => {
+        setDeskItems([]);
+        setDeskLoading(false);
+        setError("This doctor login is not linked to a clinic doctor. Ask an administrator to update staff access.");
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+    const deskQuery = profile.role === "doctor"
+      ? query(
+          collection(firestore, "appointments"),
+          where("doctorId", "==", profileDoctorId),
+          where("preferredDate", "==", deskDate),
+        )
+      : query(
+          collection(firestore, "appointments"),
+          where("preferredDate", "==", deskDate),
+        );
     return onSnapshot(
       deskQuery,
       (snapshot) => {
@@ -282,15 +338,29 @@ function AppointmentDesk() {
         setDeskLoading(false);
       },
     );
-  }, [deskDate]);
+  }, [deskDate, profile.role, profileDoctorId]);
 
   useEffect(() => {
     if (!firestore) return;
-    const historyQuery = query(
-      collection(firestore, "appointments"),
-      orderBy("createdAt", "desc"),
-      limit(200),
-    );
+    if (profile.role === "doctor" && !profileDoctorId) {
+      const timer = window.setTimeout(() => {
+        setHistoryItems([]);
+        setHistoryLoading(false);
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+    const historyQuery = profile.role === "doctor"
+      ? query(
+          collection(firestore, "appointments"),
+          where("doctorId", "==", profileDoctorId),
+          orderBy("createdAt", "desc"),
+          limit(200),
+        )
+      : query(
+          collection(firestore, "appointments"),
+          orderBy("createdAt", "desc"),
+          limit(200),
+        );
     return onSnapshot(
       historyQuery,
       (snapshot) => {
@@ -302,7 +372,21 @@ function AppointmentDesk() {
         setHistoryLoading(false);
       },
     );
-  }, []);
+  }, [profile.role, profileDoctorId]);
+
+  useEffect(() => {
+    const refresh = () => void refreshPatientSafety();
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [refreshPatientSafety]);
 
   const stats = useMemo(() => ({
     requested: items.filter((item) => item.status === "requested").length,
@@ -324,17 +408,42 @@ function AppointmentDesk() {
     });
   }, [dateFilter, doctorFilter, items, search, statusFilter]);
 
-  function canManageClinicalAppointment(item: Appointment) {
+  function appointmentPatientIsUnavailable(item: Appointment) {
+    return Boolean(item.patientId && !activePatientIds.has(item.patientId));
+  }
+
+  async function verifyPatientIsActive(patientId?: string) {
+    if (!patientId) return;
+    const refreshedActiveIds = await refreshPatientSafety();
+    if (!refreshedActiveIds) {
+      throw new Error("Patient status could not be verified. Appointment actions are paused; please try again.");
+    }
+    if (!refreshedActiveIds.has(patientId)) {
+      throw new Error("This patient record is archived or unavailable. Appointment actions are no longer available.");
+    }
+  }
+
+  function roleCanManageClinicalAppointment(item: Appointment) {
     return profile.role === "admin"
       || (profile.role === "doctor" && profileDoctorId !== null && item.doctorId === profileDoctorId);
   }
 
-  function canApplyStatus(item: Appointment, status: AppointmentStatus) {
+  function canManageClinicalAppointment(item: Appointment) {
+    if (archiveLoading || archiveSafetyError || appointmentPatientIsUnavailable(item)) return false;
+    return roleCanManageClinicalAppointment(item);
+  }
+
+  function roleCanApplyStatus(item: Appointment, status: AppointmentStatus) {
     if (profile.role === "admin") return true;
-    if (profile.role === "doctor") return canManageClinicalAppointment(item);
+    if (profile.role === "doctor") return roleCanManageClinicalAppointment(item);
     return item.status !== "in_consultation"
       && item.status !== "completed"
       && FRONT_DESK_STATUSES.has(status);
+  }
+
+  function canApplyStatus(item: Appointment, status: AppointmentStatus) {
+    if (archiveLoading || archiveSafetyError || appointmentPatientIsUnavailable(item)) return false;
+    return roleCanApplyStatus(item, status);
   }
 
   async function changeStatus(id: string, status: AppointmentStatus) {
@@ -346,11 +455,12 @@ function AppointmentDesk() {
     try {
       const item = items.find((appointment) => appointment.id === id);
       if (!item) throw new Error("Appointment not found");
+      await verifyPatientIsActive(item.patientId);
       if (item.status === status) return true;
       if (!appointmentTransitionOptions(item.status).includes(status)) {
         throw new Error("Choose the next available step in the visit workflow.");
       }
-      if (!canApplyStatus(item, status)) {
+      if (!roleCanApplyStatus(item, status)) {
         throw new Error(
           profile.role === "doctor"
             ? "This visit is assigned to another doctor. Only an administrator can re-route clinical work."
@@ -369,10 +479,17 @@ function AppointmentDesk() {
         const existingCounter = await getDoc(counterRef);
         let migrationSeed = 0;
         if (!existingCounter.exists()) {
-          const dateSnapshot = await getDocs(query(
-            collection(database, "appointments"),
-            where("preferredDate", "==", item.preferredDate),
-          ));
+          const migrationQuery = profile.role === "doctor"
+            ? query(
+                collection(database, "appointments"),
+                where("doctorId", "==", profileDoctorId),
+                where("preferredDate", "==", item.preferredDate),
+              )
+            : query(
+                collection(database, "appointments"),
+                where("preferredDate", "==", item.preferredDate),
+              );
+          const dateSnapshot = await getDocs(migrationQuery);
           migrationSeed = dateSnapshot.docs.reduce((maximum, snapshot) => {
             const appointment = snapshot.data() as Partial<Appointment>;
             if (appointment.doctorId !== item.doctorId || !Number.isInteger(appointment.queueToken)) return maximum;
@@ -419,16 +536,28 @@ function AppointmentDesk() {
 
       const changedAt = serverTimestamp();
       const timestampField = appointmentStatusTimestampField(status);
-      const batch = writeBatch(firestore);
-      batch.update(doc(firestore, "appointments", id), {
-        status,
-        ...(timestampField ? { [timestampField]: changedAt } : {}),
-        updatedAt: changedAt,
+      await runTransaction(database, async (transaction) => {
+        const appointmentRef = doc(database, "appointments", id);
+        const latestSnapshot = await transaction.get(appointmentRef);
+        if (!latestSnapshot.exists()) throw new Error("Appointment not found");
+        const latestItem = { id: latestSnapshot.id, ...latestSnapshot.data() } as Appointment;
+        if (!appointmentTransitionOptions(latestItem.status).includes(status)) {
+          throw new Error("This visit was updated elsewhere. Refresh the desk and try again.");
+        }
+        // Patient activity was refreshed immediately before this transaction;
+        // Firestore rules verify it again atomically when the write commits.
+        if (!roleCanApplyStatus(latestItem, status)) {
+          throw new Error("You do not have access to apply this visit status.");
+        }
+        transaction.update(appointmentRef, {
+          status,
+          ...(timestampField ? { [timestampField]: changedAt } : {}),
+          updatedAt: changedAt,
+        });
+        if (status === "cancelled" && latestItem.slotId) {
+          transaction.delete(doc(database, "appointmentSlots", latestItem.slotId));
+        }
       });
-      if (status === "cancelled" && item.slotId) {
-        batch.delete(doc(firestore, "appointmentSlots", item.slotId));
-      }
-      await batch.commit();
       setNotice(`Visit moved to ${appointmentStatusLabel(status).toLowerCase()}.`);
       return true;
     } catch (updateError) {
@@ -442,9 +571,16 @@ function AppointmentDesk() {
 
   async function beginConsultation(item: Appointment) {
     if (!canManageClinicalAppointment(item)) return;
-    const updated = item.status === "in_consultation"
-      ? true
-      : await changeStatus(item.id, "in_consultation");
+    if (item.status === "in_consultation") {
+      try {
+        await verifyPatientIsActive(item.patientId);
+        router.push(`/admin/consultations?appointment=${encodeURIComponent(item.id)}`);
+      } catch (verificationError) {
+        setError(verificationError instanceof Error ? verificationError.message : "Patient status could not be verified.");
+      }
+      return;
+    }
+    const updated = await changeStatus(item.id, "in_consultation");
     if (updated) router.push(`/admin/consultations?appointment=${encodeURIComponent(item.id)}`);
   }
 
@@ -477,6 +613,7 @@ function AppointmentDesk() {
     setNotice("");
 
     try {
+      await verifyPatientIsActive(booking.patientId);
       const currentUser = firebaseAuth?.currentUser;
       if (!currentUser) throw new Error("Staff session missing");
       const idToken = await currentUser.getIdToken();
@@ -636,18 +773,24 @@ function AppointmentDesk() {
       </section>
 
       {notice && <p className="mt-5 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">{notice}</p>}
+      {profile.role === "admin" && !archiveLoading && !archiveSafetyError && archivedExcludedCount > 0 && (
+        <p className="mt-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
+          {archivedExcludedCount} appointment {archivedExcludedCount === 1 ? "record is" : "records are"} linked to archived or unavailable patients and hidden from the active desk. Restore the patient record to make it actionable again.
+        </p>
+      )}
       {loading && <div className="mt-10 flex items-center gap-3 text-slate-600"><LoaderCircle className="animate-spin" /> Loading secure appointments…</div>}
+      {archiveSafetyError && <p className="mt-5 rounded-xl bg-red-50 p-4 text-sm font-semibold text-red-700">{archiveSafetyError}</p>}
       {error && <p className="mt-5 rounded-xl bg-red-50 p-4 text-sm font-semibold text-red-700">{error}</p>}
 
-      {!loading && !error && items.length === 0 && (
-        <div className="mt-8 rounded-3xl bg-white p-10 text-center ring-1 ring-slate-200"><CalendarDays className="mx-auto text-[#A8864A]" size={36} /><h2 className="mt-4 text-xl font-bold text-[#233A59]">No requests yet</h2><p className="mt-2 text-slate-600">New website, phone, and walk-in appointments will appear here.</p></div>
+      {!loading && !archiveSafetyError && !error && items.length === 0 && (
+        <div className="mt-8 rounded-3xl bg-white p-10 text-center ring-1 ring-slate-200"><CalendarDays className="mx-auto text-[#A8864A]" size={36} /><h2 className="mt-4 text-xl font-bold text-[#233A59]">No active appointments</h2><p className="mt-2 text-slate-600">New website, phone, and walk-in appointments will appear here.</p></div>
       )}
 
-      {!loading && items.length > 0 && filteredItems.length === 0 && (
+      {!loading && !archiveSafetyError && items.length > 0 && filteredItems.length === 0 && (
         <div className="mt-8 rounded-3xl border border-dashed border-slate-300 bg-white p-10 text-center"><Search className="mx-auto text-slate-400" size={32} /><h2 className="mt-4 text-lg font-bold text-[#233A59]">No matching appointments</h2><p className="mt-2 text-sm text-slate-600">Adjust or clear the filters to see more requests.</p><button type="button" onClick={clearFilters} className="mt-5 rounded-xl bg-[#233A59] px-4 py-2.5 text-sm font-bold text-white">Clear filters</button></div>
       )}
 
-      <div className="performance-list mt-6 space-y-4">
+      {!loading && !archiveSafetyError && <div className="performance-list mt-6 space-y-4">
         {filteredItems.map((item) => {
           const isUpdating = updatingId === item.id;
           const token = queueTokenLabel(item.queueToken, item.doctorId);
@@ -699,7 +842,7 @@ function AppointmentDesk() {
             </article>
           );
         })}
-      </div>
+      </div>}
     </div>
   );
 }

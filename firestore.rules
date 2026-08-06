@@ -129,18 +129,124 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time;
     }
 
-    function validClinicalCreate() {
-      return isClinicalStaff()
+    function patientIsActive(patientId) {
+      return exists(/databases/$(database)/documents/patients/$(patientId))
+        && (
+          !get(/databases/$(database)/documents/patients/$(patientId)).data.keys().hasAny(['archived'])
+          || get(/databases/$(database)/documents/patients/$(patientId)).data.archived != true
+        );
+    }
+
+    function isAssignedPatientDoctor(patientId) {
+      let patientPath = /databases/$(database)/documents/patients/$(patientId);
+      let patient = get(patientPath).data;
+      let hasDoctorName = patient.keys().hasAny(['doctorName']);
+      let hasCanonicalDoctorName = hasDoctorName
+        && patient.doctorName is string
+        && patient.doctorName.size() > 0;
+      let canUseLegacyDoctorId = !hasDoctorName
+        || (patient.doctorName is string && patient.doctorName.size() == 0);
+      return isDoctor()
+        && exists(patientPath)
+        && staffProfile().data.doctorName is string
+        && staffProfile().data.doctorName.size() > 0
+        && (
+          (
+            hasCanonicalDoctorName
+            && patient.doctorName == staffProfile().data.doctorName
+          )
+          || (
+            canUseLegacyDoctorId
+            && staffDoctorId() != ''
+            && patient.keys().hasAny(['doctorId'])
+            && patient.doctorId == staffDoctorId()
+          )
+        );
+    }
+
+    function canAccessPatientClinical(patientId) {
+      return isAdmin() || isAssignedPatientDoctor(patientId);
+    }
+
+    function appointmentPatientIsActive() {
+      return !resource.data.keys().hasAny(['patientId'])
+        || resource.data.patientId == ''
+        || patientIsActive(resource.data.patientId);
+    }
+
+    function canAccessLabOrder(patientId, clinician) {
+      return patientIsActive(patientId)
+        && (
+          isAdmin()
+          || isReception()
+          || (
+            isAssignedPatientDoctor(patientId)
+            && clinician is string
+            && clinician == staffProfile().data.doctorName
+          )
+        );
+    }
+
+    function validClinicalCreate(patientId) {
+      return canAccessPatientClinical(patientId)
+        && patientIsActive(patientId)
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.createdAt == request.time
         && request.resource.data.updatedAt == request.time;
     }
 
-    function validClinicalUpdate() {
-      return isClinicalStaff()
+    function validClinicalUpdate(patientId) {
+      return canAccessPatientClinical(patientId)
+        && patientIsActive(patientId)
         && request.resource.data.createdBy == resource.data.createdBy
         && request.resource.data.createdAt == resource.data.createdAt
         && request.resource.data.updatedAt == request.time;
+    }
+
+    function validReceptionLabReportCreate(patientId) {
+      let orderPath = /databases/$(database)/documents/labOrders/$(request.resource.data.labOrderId);
+      return isReception()
+        && patientIsActive(patientId)
+        && request.resource.data.keys().hasAll([
+          'fileName', 'storagePath', 'contentType', 'size', 'category',
+          'reportDate', 'notes', 'labOrderId', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'fileName', 'storagePath', 'contentType', 'size', 'category',
+          'reportDate', 'notes', 'labOrderId', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.fileName is string
+        && request.resource.data.fileName.size() > 0
+        && request.resource.data.fileName.size() <= 200
+        && request.resource.data.storagePath is string
+        && request.resource.data.storagePath.matches(
+          '^reports/' + patientId + '/[0-9]{13}-[A-Za-z0-9._-]+[.](pdf|jpg|jpeg|png|webp)$'
+        )
+        && request.resource.data.contentType in [
+          'application/pdf', 'image/jpeg', 'image/png', 'image/webp'
+        ]
+        && request.resource.data.size is number
+        && request.resource.data.size > 0
+        && request.resource.data.size < 10 * 1024 * 1024
+        && request.resource.data.category == 'Lab report'
+        && request.resource.data.reportDate is string
+        && request.resource.data.reportDate.size() == 10
+        && request.resource.data.notes is string
+        && request.resource.data.notes.size() <= 500
+        && request.resource.data.labOrderId is string
+        && request.resource.data.labOrderId.matches('^[A-Za-z0-9_-]{1,128}$')
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && exists(orderPath)
+        && get(orderPath).data.patientId == patientId
+        && (
+          get(orderPath).data.status in ['ordered', 'collected', 'processing']
+          || (
+            get(orderPath).data.status == 'completed'
+            && !get(orderPath).data.keys().hasAny(['reportStoragePath'])
+          )
+        );
     }
 
     function validStaffRecordCreate() {
@@ -161,10 +267,11 @@ service cloud.firestore {
       // New appointments are created by the protected booking API so that a
       // doctor/date/time slot can be locked atomically and never double-booked.
       allow create: if false;
-      allow read: if isStaff();
+      allow read: if isAdmin() || isReception() || isAssignedAppointmentDoctor();
       // Patient, doctor, slot, source, and consent data are immutable. Reception
       // can operate the front-desk queue but cannot start or complete care.
-      allow update: if (
+      allow update: if appointmentPatientIsActive()
+        && ((
           isAdmin()
           && (validAppointmentQueueUpdate() || validLegacyAppointmentUpdate())
         ) || (
@@ -174,7 +281,7 @@ service cloud.firestore {
         ) || (
           isAssignedAppointmentDoctor()
           && (validAppointmentQueueUpdate() || validLegacyAppointmentUpdate())
-        );
+        ));
       allow delete: if isAdmin();
     }
 
@@ -263,146 +370,32 @@ service cloud.firestore {
     // Explicit collection-group access is required for the cross-invoice
     // payment audit feed. Writes remain restricted to the invoice path below.
     match /{path=**}/payments/{paymentId} {
-      allow read: if isStaff();
+      allow read: if isAdmin() || isReception();
     }
 
     // The management dashboard reads clinical visits across all patient
     // records. Clinical content stays unavailable to reception accounts;
     // writes remain governed by the patient-specific rules below.
     match /{path=**}/visits/{visitId} {
-      allow read: if isClinicalStaff();
+      allow read: if isAdmin()
+        || (
+          isDoctor()
+          && resource.data.doctorName is string
+          && resource.data.doctorName == staffProfile().data.doctorName
+        );
     }
 
     match /invoices/{invoiceId} {
-      allow read: if isStaff();
-      allow create: if isStaff()
-        && request.resource.data.keys().hasAll([
-          'invoiceNumber', 'patientId', 'patientName', 'patientPhone', 'items',
-          'subtotal', 'discount', 'total', 'amountPaid', 'balance',
-          'paymentStatus', 'paymentMethod', 'createdBy', 'createdAt', 'updatedAt'
-        ])
-        && request.resource.data.keys().hasOnly([
-          'invoiceNumber', 'patientId', 'patientNumber', 'patientName', 'patientPhone',
-          'items', 'subtotal', 'discount', 'total', 'amountPaid', 'balance',
-          'paymentStatus', 'paymentMethod', 'paymentReference', 'notes',
-          'createdBy', 'createdAt', 'updatedAt', 'paidAt'
-        ])
-        && request.resource.data.invoiceNumber is string
-        && request.resource.data.invoiceNumber.size() >= 8
-        && request.resource.data.invoiceNumber.size() <= 40
-        && request.resource.data.patientId is string
-        && request.resource.data.patientId.size() > 0
-        && request.resource.data.patientName is string
-        && request.resource.data.patientName.size() >= 2
-        && request.resource.data.patientName.size() <= 100
-        && request.resource.data.patientPhone is string
-        && request.resource.data.patientPhone.size() <= 20
-        && request.resource.data.items is list
-        && request.resource.data.items.size() > 0
-        && request.resource.data.items.size() <= 50
-        && request.resource.data.subtotal is number
-        && request.resource.data.discount is number
-        && request.resource.data.total is number
-        && request.resource.data.amountPaid is number
-        && request.resource.data.balance is number
-        && request.resource.data.subtotal >= 0
-        && request.resource.data.discount >= 0
-        && request.resource.data.discount <= request.resource.data.subtotal
-        && request.resource.data.total >= 0
-        && request.resource.data.amountPaid >= 0
-        && request.resource.data.amountPaid <= request.resource.data.total
-        && request.resource.data.balance >= 0
-        && request.resource.data.balance <= request.resource.data.total
-        && request.resource.data.paymentStatus in ['unpaid', 'partial', 'paid']
-        && request.resource.data.paymentMethod in ['cash', 'upi', 'card', 'bank_transfer', 'not_recorded']
-        && request.resource.data.createdBy == request.auth.uid
-        && request.resource.data.createdAt == request.time
-        && request.resource.data.updatedAt == request.time;
-      allow update: if (
-          isStaff()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'amountPaid', 'balance', 'paymentStatus', 'paymentMethod',
-            'paymentReference', 'updatedAt', 'paidAt'
-          ])
-          && request.resource.data.amountPaid is number
-          && request.resource.data.balance is number
-          && request.resource.data.amountPaid >= resource.data.amountPaid
-          && request.resource.data.amountPaid <= resource.data.total
-          && request.resource.data.balance >= 0
-          && request.resource.data.balance <= resource.data.balance
-          && request.resource.data.paymentStatus in ['partial', 'paid']
-          && request.resource.data.paymentMethod in ['cash', 'upi', 'card', 'bank_transfer']
-          && request.resource.data.updatedAt == request.time
-        ) || (
-          isAdmin()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'amountPaid', 'balance', 'paymentStatus', 'paymentMethod',
-            'paymentReference', 'updatedAt', 'paidAt'
-          ])
-          && request.resource.data.amountPaid is number
-          && request.resource.data.balance is number
-          && request.resource.data.amountPaid >= 0
-          && request.resource.data.amountPaid < resource.data.amountPaid
-          && request.resource.data.balance == resource.data.total - request.resource.data.amountPaid
-          && request.resource.data.balance > resource.data.balance
-          && (
-            (
-              request.resource.data.amountPaid == 0
-              && request.resource.data.paymentStatus == 'unpaid'
-              && request.resource.data.paymentMethod == 'not_recorded'
-              && request.resource.data.paymentReference == ''
-            )
-            || (
-              request.resource.data.amountPaid > 0
-              && request.resource.data.paymentStatus == 'partial'
-              && request.resource.data.paymentMethod in [
-                'cash', 'upi', 'card', 'bank_transfer', 'online'
-              ]
-            )
-          )
-          && request.resource.data.updatedAt == request.time
-          && request.resource.data.paidAt == null
-        );
-      allow delete: if isAdmin();
+      allow read: if isAdmin() || isReception();
+      // Invoice totals and immutable ledger history are owned by protected,
+      // idempotent server workflows. No browser client may mutate them.
+      allow create, update, delete: if false;
 
       match /payments/{paymentId} {
-        allow read: if isStaff();
-        allow create: if isStaff()
-          && request.resource.data.keys().hasAll([
-            'invoiceId', 'invoiceNumber', 'patientId', 'patientName', 'amount',
-            'method', 'source', 'status', 'createdBy', 'createdAt'
-          ])
-          && request.resource.data.keys().hasOnly([
-            'invoiceId', 'invoiceNumber', 'patientId', 'patientName', 'amount',
-            'method', 'reference', 'source', 'status', 'createdBy', 'createdAt'
-          ])
-          && request.resource.data.invoiceId == invoiceId
-          && request.resource.data.invoiceNumber is string
-          && request.resource.data.patientId is string
-          && request.resource.data.patientName is string
-          && request.resource.data.amount is number
-          && request.resource.data.amount > 0
-          && request.resource.data.method in ['cash', 'upi', 'card', 'bank_transfer']
-          && request.resource.data.source == 'manual'
-          && request.resource.data.status == 'received'
-          && request.resource.data.createdBy == request.auth.uid
-          && request.resource.data.createdAt == request.time;
-        allow update: if isAdmin()
-          && resource.data.status == 'received'
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'status', 'reversedAt', 'reversedBy', 'reversalReason', 'auditLogId'
-          ])
-          && request.resource.data.status == 'reversed'
-          && request.resource.data.reversedAt == request.time
-          && request.resource.data.reversedBy == request.auth.uid
-          && request.resource.data.reversalReason is string
-          && request.resource.data.reversalReason.size() >= 5
-          && request.resource.data.reversalReason.size() <= 300
-          && request.resource.data.auditLogId is string
-          && request.resource.data.auditLogId.size() > 0
-          && request.resource.data.auditLogId.size() <= 128;
-        // Financial history is corrected by reversal, never deletion.
-        allow delete: if false;
+        allow read: if isAdmin() || isReception();
+        // Payments and reversals are immutable ledger operations owned by the
+        // protected server. Financial history is never edited by a browser.
+        allow create, update, delete: if false;
       }
     }
 
@@ -410,46 +403,7 @@ service cloud.firestore {
     // administrator audit event. This is safer than deleting financial history.
     match /billingAuditLogs/{auditId} {
       allow read: if isAdmin();
-      allow create: if isAdmin()
-        && request.resource.data.keys().hasAll([
-          'eventType', 'invoiceId', 'invoiceNumber', 'paymentId',
-          'patientId', 'patientName', 'amount', 'method', 'source', 'reason',
-          'actorUid', 'actorName', 'createdAt'
-        ])
-        && request.resource.data.keys().hasOnly([
-          'eventType', 'invoiceId', 'invoiceNumber', 'paymentId',
-          'patientId', 'patientName', 'amount', 'method', 'source', 'reason',
-          'actorUid', 'actorName', 'createdAt'
-        ])
-        && request.resource.data.eventType == 'payment.reversed'
-        && request.resource.data.invoiceId is string
-        && request.resource.data.invoiceId.size() > 0
-        && request.resource.data.invoiceId.size() <= 128
-        && request.resource.data.invoiceNumber is string
-        && request.resource.data.invoiceNumber.size() >= 8
-        && request.resource.data.invoiceNumber.size() <= 40
-        && request.resource.data.paymentId is string
-        && request.resource.data.paymentId.size() > 0
-        && request.resource.data.paymentId.size() <= 128
-        && request.resource.data.patientId is string
-        && request.resource.data.patientId.size() > 0
-        && request.resource.data.patientId.size() <= 128
-        && request.resource.data.patientName is string
-        && request.resource.data.patientName.size() >= 2
-        && request.resource.data.patientName.size() <= 100
-        && request.resource.data.amount is number
-        && request.resource.data.amount > 0
-        && request.resource.data.method in ['cash', 'upi', 'card', 'bank_transfer', 'online']
-        && request.resource.data.source in ['manual', 'gateway']
-        && request.resource.data.reason is string
-        && request.resource.data.reason.size() >= 5
-        && request.resource.data.reason.size() <= 300
-        && request.resource.data.actorUid == request.auth.uid
-        && request.resource.data.actorName is string
-        && request.resource.data.actorName.size() >= 2
-        && request.resource.data.actorName.size() <= 100
-        && request.resource.data.createdAt == request.time;
-      allow update, delete: if false;
+      allow create, update, delete: if false;
     }
 
     // Refund operations are written only by the secure Cloudflare service
@@ -460,8 +414,20 @@ service cloud.firestore {
     }
 
     match /labOrders/{orderId} {
-      allow read: if isStaff();
-      allow create: if isStaff()
+      // Front-desk staff retain read-only lab history after archival. A doctor
+      // can query their own canonical clinician history; the UI joins it to the
+      // active assigned-patient directory before showing actionable orders.
+      allow read: if isAdmin()
+        || isReception()
+        || (
+          isDoctor()
+          && resource.data.clinician is string
+          && resource.data.clinician == staffProfile().data.doctorName
+        );
+      allow create: if canAccessLabOrder(
+          request.resource.data.patientId,
+          request.resource.data.clinician
+        )
         && request.resource.data.keys().hasAll([
           'orderNumber', 'patientId', 'patientName', 'patientPhone', 'tests',
           'priority', 'clinician', 'notes', 'status', 'createdBy', 'orderedAt', 'updatedAt'
@@ -493,7 +459,7 @@ service cloud.firestore {
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.orderedAt == request.time
         && request.resource.data.updatedAt == request.time;
-      allow update: if isStaff()
+      allow update: if canAccessLabOrder(resource.data.patientId, resource.data.clinician)
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'status', 'resultSummary', 'reportFileName', 'reportStoragePath',
           'reportContentType', 'reportSize', 'specimenCollectedAt',
@@ -515,7 +481,7 @@ service cloud.firestore {
           || request.resource.data.status == 'completed'
         )
         && request.resource.data.updatedAt == request.time;
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() && patientIsActive(resource.data.patientId);
     }
 
     match /staffTasks/{taskId} {
@@ -625,93 +591,45 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
+    // Exact patient-identity reservations are maintained only by protected
+    // server transactions. Exposing them would leak duplicate-detection data
+    // and client writes could detach a reservation from its patient chart.
+    match /patientIdentityKeys/{identityKey} {
+      allow read, write: if false;
+    }
+
     match /patients/{patientId} {
-      allow read: if isStaff();
-      allow create: if isStaff()
-        && request.resource.data.keys().hasOnly([
-          'patientNumber', 'fullName', 'phone', 'dateOfBirth', 'gender', 'address',
-          'doctorName', 'caseType', 'specialty', 'consultationFee',
-          'registrationInvoiceId', 'registrationInvoiceNumber',
-          'allergies', 'medicalHistory', 'createdBy', 'createdAt', 'updatedAt'
-        ])
-        && request.resource.data.patientNumber is string
-        && request.resource.data.patientNumber.size() <= 20
-        && request.resource.data.fullName is string
-        && request.resource.data.fullName.size() >= 2
-        && request.resource.data.fullName.size() <= 100
-        && request.resource.data.phone is string
-        && request.resource.data.phone.size() >= 10
-        && request.resource.data.phone.size() <= 20
-        && request.resource.data.dateOfBirth is string
-        && request.resource.data.dateOfBirth.size() == 10
-        && request.resource.data.gender in ['female', 'male', 'other']
-        && request.resource.data.doctorName in [
-          'Dr. Lt Col Shafi Ahamad',
-          'Dr. Shaik Reshma'
-        ]
-        && request.resource.data.caseType in ['general', 'specialist']
-        && request.resource.data.specialty in ['', 'pediatrics', 'obg']
-        && (
-          (request.resource.data.caseType == 'general'
-            && request.resource.data.specialty == ''
-            && request.resource.data.consultationFee == 250)
-          || (request.resource.data.caseType == 'specialist'
-            && request.resource.data.specialty in ['pediatrics', 'obg']
-            && request.resource.data.consultationFee == 500)
-        )
-        && request.resource.data.registrationInvoiceId is string
-        && request.resource.data.registrationInvoiceId.size() > 0
-        && request.resource.data.registrationInvoiceId.size() <= 128
-        && request.resource.data.registrationInvoiceNumber is string
-        && request.resource.data.registrationInvoiceNumber.size() >= 8
-        && request.resource.data.registrationInvoiceNumber.size() <= 40
-        && request.resource.data.address is string
-        && request.resource.data.address.size() <= 300
-        && request.resource.data.allergies is string
-        && request.resource.data.allergies.size() <= 500
-        && request.resource.data.medicalHistory is string
-        && request.resource.data.medicalHistory.size() <= 1000
-        && request.resource.data.createdBy == request.auth.uid
-        && request.resource.data.createdAt == request.time
-        && request.resource.data.updatedAt == request.time;
-      allow update: if isStaff()
-        && (
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'fullName', 'phone', 'dateOfBirth', 'gender', 'doctorName', 'address',
-            'updatedAt'
-          ])
-          || (
-            isClinicalStaff()
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'fullName', 'phone', 'dateOfBirth', 'gender', 'doctorName', 'address', 'allergies',
-          'medicalHistory', 'updatedAt'
-            ])
-          )
-        )
-        && request.resource.data.doctorName in [
-          'Dr. Lt Col Shafi Ahamad',
-          'Dr. Shaik Reshma'
-        ]
-        && request.resource.data.updatedAt == request.time;
-      allow delete: if isAdmin();
+      // Reception receives only an operational projection from the protected
+      // directory API. Doctors can open only charts currently assigned to them.
+      allow read: if isAdmin() || isAssignedPatientDoctor(patientId);
+      // New arrivals are created only by the protected atomic reception API.
+      allow create: if false;
+      // Identity, assignment, and clinical-background edits all pass through
+      // the protected profile API so the patient and identity-key ownership
+      // change atomically with an immutable audit entry.
+      allow update: if false;
+      // Patient records are archived through the authenticated admin API.
+      // Direct client deletion is intentionally disabled so clinical history
+      // remains recoverable and every lifecycle change has an audit entry.
+      allow delete: if false;
 
       match /visits/{visitId} {
-        allow read: if isClinicalStaff();
-        allow create: if validClinicalCreate();
-        allow update: if validClinicalUpdate();
-        allow delete: if isAdmin();
+        allow read: if canAccessPatientClinical(patientId);
+        allow create: if validClinicalCreate(patientId);
+        allow update: if validClinicalUpdate(patientId);
+        allow delete: if false;
       }
 
       match /prescriptions/{prescriptionId} {
-        allow read: if isClinicalStaff();
-        allow create: if validClinicalCreate();
-        allow update: if validClinicalUpdate();
-        allow delete: if isAdmin();
+        allow read: if canAccessPatientClinical(patientId);
+        allow create: if validClinicalCreate(patientId);
+        allow update: if validClinicalUpdate(patientId);
+        allow delete: if false;
       }
 
       match /vaccinations/{vaccinationId} {
-        allow read: if isClinicalStaff();
-        allow create: if validClinicalCreate()
+        allow read: if canAccessPatientClinical(patientId);
+        allow create: if validClinicalCreate(patientId)
           && request.resource.data.keys().hasAll([
             'vaccineName', 'doseNumber', 'administeredDate', 'nextDueDate',
             'batchNumber', 'manufacturer', 'expiryDate', 'route', 'site',
@@ -748,13 +666,13 @@ service cloud.firestore {
           && request.resource.data.adverseEvents.size() <= 500
           && request.resource.data.notes is string
           && request.resource.data.notes.size() <= 500;
-        allow update: if validClinicalUpdate();
-        allow delete: if isAdmin();
+        allow update: if validClinicalUpdate(patientId);
+        allow delete: if false;
       }
 
       match /pregnancyRecords/{pregnancyRecordId} {
-        allow read: if isClinicalStaff();
-        allow create: if validClinicalCreate()
+        allow read: if canAccessPatientClinical(patientId);
+        allow create: if validClinicalCreate(patientId)
           && request.resource.data.keys().hasAll([
             'recordedDate', 'lmpDate', 'eddDate', 'gestationalWeeks',
             'bloodPressure', 'weight', 'fetalHeartRate', 'nextVisitDate',
@@ -804,13 +722,13 @@ service cloud.firestore {
           && request.resource.data.carePlan.size() <= 800
           && request.resource.data.notes is string
           && request.resource.data.notes.size() <= 800;
-        allow update: if validClinicalUpdate();
-        allow delete: if isAdmin();
+        allow update: if validClinicalUpdate(patientId);
+        allow delete: if false;
       }
 
       match /growthRecords/{growthRecordId} {
-        allow read: if isClinicalStaff();
-        allow create: if validClinicalCreate()
+        allow read: if canAccessPatientClinical(patientId);
+        allow create: if validClinicalCreate(patientId)
           && request.resource.data.keys().hasAll([
             'measuredDate', 'weightKg', 'heightCm', 'headCircumferenceCm',
             'bmi', 'milestone', 'nutritionNotes', 'clinician',
@@ -840,15 +758,16 @@ service cloud.firestore {
             'Dr. Lt Col Shafi Ahamad',
             'Dr. Shaik Reshma'
           ];
-        allow update: if validClinicalUpdate();
-        allow delete: if isAdmin();
+        allow update: if validClinicalUpdate(patientId);
+        allow delete: if false;
       }
 
       match /reports/{reportId} {
-        allow read: if isClinicalStaff();
-        allow create: if validClinicalCreate();
-        allow update: if validClinicalUpdate();
-        allow delete: if isAdmin();
+        allow read: if canAccessPatientClinical(patientId);
+        allow create: if validClinicalCreate(patientId)
+          || validReceptionLabReportCreate(patientId);
+        allow update: if validClinicalUpdate(patientId);
+        allow delete: if false;
       }
     }
 

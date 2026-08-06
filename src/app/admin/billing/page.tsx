@@ -2,19 +2,16 @@
 
 import { useStaff } from "@/components/admin/StaffGuard";
 import { firestore } from "@/firebase/config";
+import { fetchPatientDirectory } from "@/lib/patient-directory";
 import type { ReceiptInvoice } from "@/lib/receipt-pdf";
 import Script from "next/script";
 import {
   collection,
   collectionGroup,
-  doc,
   limit,
   onSnapshot,
   orderBy,
   query,
-  runTransaction,
-  serverTimestamp,
-  writeBatch,
   type Timestamp,
 } from "firebase/firestore";
 import {
@@ -35,6 +32,7 @@ import {
   WalletCards,
   X,
 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 type Patient = {
@@ -43,6 +41,7 @@ type Patient = {
   fullName: string;
   phone: string;
   consultationFee?: number;
+  archived?: boolean;
 };
 
 type LineItem = {
@@ -89,6 +88,19 @@ type PaymentEntry = {
   reversedAt?: Timestamp;
   reversedBy?: string;
   reversalReason?: string;
+};
+
+type ManualPaymentResult = {
+  requestId: string;
+  paymentId: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  patientId: string;
+  patientName: string;
+  amount: number;
+  method: PaymentMethod;
+  reference: string;
+  alreadyProcessed: boolean;
 };
 
 type RefundOperation = {
@@ -180,13 +192,6 @@ function todayKey() {
   return new Date(now.getTime() - offset * 60000).toISOString().slice(0, 10);
 }
 
-function invoiceNumber() {
-  const now = new Date();
-  const date = now.toISOString().slice(0, 10).replaceAll("-", "");
-  const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 6).toUpperCase();
-  return "ASH-" + date + "-" + suffix;
-}
-
 function createdDate(value?: Timestamp) {
   return value ? value.toDate().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "Just now";
 }
@@ -225,16 +230,19 @@ function BillingWorkspace() {
   const [initialPayment, setInitialPayment] = useState(0);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
   const [paymentReference, setPaymentReference] = useState("");
+  const [initialPaymentRequestId, setInitialPaymentRequestId] = useState(() => crypto.randomUUID());
   const [notes, setNotes] = useState("");
   const [payingInvoice, setPayingInvoice] = useState<Invoice | null>(null);
   const [paymentAmount, setPaymentAmount] = useState(0);
   const [followupMethod, setFollowupMethod] = useState<PaymentMethod>("cash");
   const [followupReference, setFollowupReference] = useState("");
+  const [manualPaymentRequestId, setManualPaymentRequestId] = useState(() => crypto.randomUUID());
   const [recordingPayment, setRecordingPayment] = useState(false);
   const [razorpayReady, setRazorpayReady] = useState(false);
   const [gatewayPayment, setGatewayPayment] = useState(false);
   const [reversingPayment, setReversingPayment] = useState<PaymentEntry | null>(null);
   const [reversalReason, setReversalReason] = useState("");
+  const [reversalRequestId, setReversalRequestId] = useState(() => crypto.randomUUID());
   const [reversing, setReversing] = useState(false);
   const [refundingPayment, setRefundingPayment] = useState<PaymentEntry | null>(null);
   const [refundAmount, setRefundAmount] = useState(0);
@@ -257,17 +265,27 @@ function BillingWorkspace() {
   }, []);
 
   useEffect(() => {
-    const unsubscribePatients = onSnapshot(
-      query(collection(db, "patients"), orderBy("createdAt", "desc"), limit(250)),
-      (snapshot) => {
-        setPatients(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Patient));
-        setPatientsLoaded(true);
-      },
-      () => {
-        setError("Patient records could not be loaded.");
-        setPatientsLoaded(true);
-      },
-    );
+    let active = true;
+    const refreshPatientDirectory = () => {
+      void fetchPatientDirectory(user, { includeArchived: profile.role === "admin" })
+        .then((directory) => {
+          if (!active) return;
+          setPatients(directory as Patient[]);
+          setPatientsLoaded(true);
+        })
+        .catch((loadError) => {
+          console.error("Patient directory could not be loaded", loadError);
+          if (!active) return;
+          setError(loadError instanceof Error ? loadError.message : "Patient records could not be loaded.");
+          setPatientsLoaded(true);
+        });
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refreshPatientDirectory();
+    };
+    refreshPatientDirectory();
+    window.addEventListener("focus", refreshPatientDirectory);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
     const unsubscribeInvoices = onSnapshot(
       query(collection(db, "invoices"), orderBy("createdAt", "desc"), limit(250)),
       (snapshot) => {
@@ -306,12 +324,14 @@ function BillingWorkspace() {
         )
       : () => undefined;
     return () => {
-      unsubscribePatients();
+      active = false;
+      window.removeEventListener("focus", refreshPatientDirectory);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
       unsubscribeInvoices();
       unsubscribePayments();
       unsubscribeRefunds();
     };
-  }, [db, profile.role]);
+  }, [db, profile.role, user]);
 
   useEffect(() => {
     if (!patientsLoaded || deepLinkedPatientHandled.current) return;
@@ -320,7 +340,7 @@ function BillingWorkspace() {
     const patientId = params.get("patient")?.trim();
     if (params.get("new") !== "1" || !patientId) return;
 
-    const patient = patients.find((entry) => entry.id === patientId);
+    const patient = patients.find((entry) => entry.id === patientId && entry.archived !== true);
     const timer = window.setTimeout(() => {
       deepLinkedPatientHandled.current = true;
       if (!patient) return;
@@ -340,7 +360,27 @@ function BillingWorkspace() {
     return () => window.clearTimeout(timer);
   }, [patients, patientsLoaded]);
 
-  const selectedPatient = useMemo(() => patients.find((patient) => patient.id === selectedPatientId) ?? null, [patients, selectedPatientId]);
+  const activePatients = useMemo(
+    () => patients.filter((patient) => patient.archived !== true),
+    [patients],
+  );
+  const activePatientIds = useMemo(
+    () => new Set(activePatients.map((patient) => patient.id)),
+    [activePatients],
+  );
+  const selectedPatient = useMemo(
+    () => activePatients.find((patient) => patient.id === selectedPatientId) ?? null,
+    [activePatients, selectedPatientId],
+  );
+
+  useEffect(() => {
+    if (!patientsLoaded || !payingInvoice || activePatientIds.has(payingInvoice.patientId)) return;
+    const timer = window.setTimeout(() => {
+      setPayingInvoice(null);
+      setError("This patient record was archived or became unavailable. Payment controls have been closed.");
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [activePatientIds, patientsLoaded, payingInvoice]);
   const subtotal = useMemo(() => items.reduce((sum, item) => sum + Math.max(0, item.quantity) * Math.max(0, item.unitPrice), 0), [items]);
   const total = Math.max(0, subtotal - Math.max(0, discount));
 
@@ -373,6 +413,15 @@ function BillingWorkspace() {
     });
   }, [invoices, search, statusFilter]);
 
+  function patientAvailabilityLabel(invoice: Invoice) {
+    const patient = patients.find((entry) => entry.id === invoice.patientId);
+    if (patient?.archived === true) return "Archived patient · history only";
+    if (patientsLoaded && !activePatientIds.has(invoice.patientId)) {
+      return "Archived or unavailable patient · history only";
+    }
+    return "";
+  }
+
   function resetInvoiceForm() {
     setSelectedPatientId("");
     setItems([{ id: crypto.randomUUID(), description: "Consultation fee", quantity: 1, unitPrice: 0, amount: 0 }]);
@@ -380,6 +429,7 @@ function BillingWorkspace() {
     setInitialPayment(0);
     setPaymentMethod("cash");
     setPaymentReference("");
+    setInitialPaymentRequestId(crypto.randomUUID());
     setNotes("");
   }
 
@@ -389,21 +439,56 @@ function BillingWorkspace() {
       const next = { ...item, ...patch };
       return { ...next, amount: Math.max(0, Number(next.quantity || 0)) * Math.max(0, Number(next.unitPrice || 0)) };
     }));
+    setInitialPaymentRequestId(crypto.randomUUID());
   }
 
   function addItem() {
     setItems((current) => [...current, { id: crypto.randomUUID(), description: "", quantity: 1, unitPrice: 0, amount: 0 }]);
+    setInitialPaymentRequestId(crypto.randomUUID());
   }
 
   function removeItem(id: string) {
     setItems((current) => current.length === 1 ? current : current.filter((item) => item.id !== id));
+    setInitialPaymentRequestId(crypto.randomUUID());
+  }
+
+  async function submitManualPayment({
+    invoiceId,
+    amount,
+    method,
+    reference,
+    requestId,
+  }: {
+    invoiceId: string;
+    amount: number;
+    method: PaymentMethod;
+    reference: string;
+    requestId: string;
+  }) {
+    const token = await user.getIdToken();
+    const response = await fetch("/api/billing/manual-payment", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ invoiceId, amount, method, reference, requestId }),
+    });
+    const result = await response.json() as {
+      error?: string;
+      payment?: ManualPaymentResult;
+    };
+    if (!response.ok || !result.payment) {
+      throw new Error(result.error || "The secure payment ledger could not record this payment.");
+    }
+    return result.payment;
   }
 
   async function createInvoice(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
     setNotice("");
-    if (!selectedPatient) {
+    if (!selectedPatient || selectedPatient.archived === true) {
       setError("Select a registered patient before creating the invoice.");
       return;
     }
@@ -420,72 +505,76 @@ function BillingWorkspace() {
 
     setSaving(true);
     try {
-      const invoiceRef = doc(collection(db, "invoices"));
-      const number = invoiceNumber();
-      const balance = total - received;
-      const paymentStatus: PaymentStatus = received === 0 ? "unpaid" : balance === 0 ? "paid" : "partial";
-      const invoiceData = {
-        invoiceNumber: number,
-        patientId: selectedPatient.id,
-        patientNumber: selectedPatient.patientNumber ?? "",
-        patientName: selectedPatient.fullName,
-        patientPhone: selectedPatient.phone,
-        items: cleanItems,
-        subtotal,
-        discount: Math.max(0, Number(discount || 0)),
-        total,
-        amountPaid: received,
-        balance,
-        paymentStatus,
-        paymentMethod: received > 0 ? paymentMethod : "not_recorded",
-        paymentReference: received > 0 ? paymentReference.trim() : "",
-        notes: notes.trim(),
-        createdBy: user.uid,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        paidAt: balance === 0 ? serverTimestamp() : null,
-      };
-      const batch = writeBatch(db);
-      batch.set(invoiceRef, invoiceData);
-      if (received > 0) {
-        const paymentRef = doc(collection(invoiceRef, "payments"));
-        batch.set(paymentRef, {
-          invoiceId: invoiceRef.id,
-          invoiceNumber: number,
+      const token = await user.getIdToken();
+      const response = await fetch("/api/billing/invoice-create", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          requestId: initialPaymentRequestId,
           patientId: selectedPatient.id,
-          patientName: selectedPatient.fullName,
-          amount: received,
-          method: paymentMethod,
-          reference: paymentReference.trim(),
-          source: "manual",
-          status: "received",
-          createdBy: user.uid,
-          createdAt: serverTimestamp(),
-        });
+          items: cleanItems.map(({ description, quantity, unitPrice }) => ({ description, quantity, unitPrice })),
+          discount: Math.max(0, Number(discount || 0)),
+          notes: notes.trim(),
+          initialPayment: received > 0
+            ? { amount: received, method: paymentMethod, reference: paymentReference.trim() }
+            : null,
+        }),
+      });
+      const result = await response.json() as {
+        error?: string;
+        invoice?: { invoiceNumber: string };
+        payment?: { amount: number } | null;
+        alreadyProcessed?: boolean;
+      };
+      if (!response.ok || !result.invoice) {
+        throw new Error(result.error || "The secure billing service could not create this invoice.");
       }
-      await batch.commit();
+
+      const number = result.invoice.invoiceNumber;
       resetInvoiceForm();
       setShowCreate(false);
-      setNotice("Invoice " + number + " created successfully.");
+      setNotice(
+        result.alreadyProcessed
+          ? `Invoice ${number} was already confirmed. No duplicate was created.`
+          : result.payment
+            ? `Invoice ${number} created and ${money(result.payment.amount)} recorded in the secure ledger.`
+            : `Invoice ${number} created successfully.`,
+      );
     } catch (createError) {
       console.error(createError);
-      setError("The invoice could not be created. Please try again.");
+      setError(
+        `${createError instanceof Error ? createError.message : "The invoice could not be created."} You can retry safely without creating a duplicate invoice or payment.`,
+      );
     } finally {
       setSaving(false);
     }
   }
 
   function beginPayment(invoice: Invoice) {
+    const unavailableReason = patientAvailabilityLabel(invoice);
+    if (unavailableReason) {
+      setError(`${unavailableReason}. Restore the patient record before receiving another payment.`);
+      return;
+    }
     setPayingInvoice(invoice);
     setPaymentAmount(invoice.balance);
     setFollowupMethod("cash");
     setFollowupReference("");
+    setManualPaymentRequestId(crypto.randomUUID());
     setError("");
   }
 
   async function recordPayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!payingInvoice) return;
+    if (patientAvailabilityLabel(payingInvoice)) {
+      setPayingInvoice(null);
+      setError("This patient record is archived or unavailable. Payment controls are disabled until an administrator restores it.");
+      return;
+    }
     const received = Math.max(0, Number(paymentAmount || 0));
     if (received <= 0 || received > payingInvoice.balance) {
       setError("Enter an amount greater than zero and not more than the outstanding balance.");
@@ -496,44 +585,22 @@ function BillingWorkspace() {
     setError("");
     setNotice("");
     try {
-      const invoiceRef = doc(db, "invoices", payingInvoice.id);
-      const paymentRef = doc(collection(invoiceRef, "payments"));
-      await runTransaction(db, async (transaction) => {
-        const snapshot = await transaction.get(invoiceRef);
-        if (!snapshot.exists()) throw new Error("Invoice not found");
-        const current = snapshot.data() as Invoice;
-        const currentBalance = Number(current.balance || 0);
-        if (received > currentBalance) throw new Error("Payment exceeds current balance");
-        const amountPaid = Number(current.amountPaid || 0) + received;
-        const balance = Math.max(0, Number(current.total || 0) - amountPaid);
-        transaction.update(invoiceRef, {
-          amountPaid,
-          balance,
-          paymentStatus: balance === 0 ? "paid" : "partial",
-          paymentMethod: followupMethod,
-          paymentReference: followupReference.trim(),
-          updatedAt: serverTimestamp(),
-          paidAt: balance === 0 ? serverTimestamp() : null,
-        });
-        transaction.set(paymentRef, {
-          invoiceId: payingInvoice.id,
-          invoiceNumber: payingInvoice.invoiceNumber,
-          patientId: payingInvoice.patientId,
-          patientName: payingInvoice.patientName,
-          amount: received,
-          method: followupMethod,
-          reference: followupReference.trim(),
-          source: "manual",
-          status: "received",
-          createdBy: user.uid,
-          createdAt: serverTimestamp(),
-        });
+      const payment = await submitManualPayment({
+        invoiceId: payingInvoice.id,
+        amount: received,
+        method: followupMethod,
+        reference: followupReference.trim(),
+        requestId: manualPaymentRequestId,
       });
-      setNotice("Payment of " + money(received) + " recorded for " + payingInvoice.invoiceNumber + ".");
+      setNotice(
+        `${payment.alreadyProcessed ? "Payment already confirmed" : "Payment recorded"}: ${money(payment.amount)} for ${payment.invoiceNumber}.`,
+      );
       setPayingInvoice(null);
     } catch (paymentError) {
       console.error(paymentError);
-      setError("The payment could not be recorded. Refresh and try again.");
+      setError(
+        `${paymentError instanceof Error ? paymentError.message : "The payment could not be recorded."} You can retry safely without creating a duplicate entry.`,
+      );
     } finally {
       setRecordingPayment(false);
     }
@@ -553,8 +620,14 @@ function BillingWorkspace() {
   }
 
   function beginPaymentReversal(payment: PaymentEntry) {
+    const invoice = invoices.find((entry) => entry.id === payment.invoiceId);
+    if (!invoice || patientAvailabilityLabel(invoice)) {
+      setError("This invoice belongs to an archived or unavailable patient. Financial controls are disabled until the patient is restored.");
+      return;
+    }
     setReversingPayment(payment);
     setReversalReason("");
+    setReversalRequestId(crypto.randomUUID());
     setError("");
     setNotice("");
   }
@@ -562,6 +635,12 @@ function BillingWorkspace() {
   async function reversePayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!reversingPayment || profile.role !== "admin") return;
+    const reversingInvoice = invoices.find((entry) => entry.id === reversingPayment.invoiceId);
+    if (!reversingInvoice || patientAvailabilityLabel(reversingInvoice)) {
+      setReversingPayment(null);
+      setError("This patient was archived or became unavailable. The financial correction was cancelled.");
+      return;
+    }
 
     const reason = reversalReason.trim();
     if (reason.length < 5) {
@@ -573,68 +652,41 @@ function BillingWorkspace() {
     setError("");
     setNotice("");
     try {
-      const invoiceRef = doc(db, "invoices", reversingPayment.invoiceId);
-      const paymentRef = doc(db, "invoices", reversingPayment.invoiceId, "payments", reversingPayment.id);
-      const auditRef = doc(collection(db, "billingAuditLogs"));
-
-      await runTransaction(db, async (transaction) => {
-        const [invoiceSnapshot, paymentSnapshot] = await Promise.all([
-          transaction.get(invoiceRef),
-          transaction.get(paymentRef),
-        ]);
-        if (!invoiceSnapshot.exists() || !paymentSnapshot.exists()) throw new Error("Billing record not found");
-
-        const currentInvoice = invoiceSnapshot.data() as Invoice;
-        const currentPayment = paymentSnapshot.data() as PaymentEntry;
-        if (currentPayment.status !== "received") throw new Error("Payment was already corrected");
-
-        const paymentAmount = Number(currentPayment.amount || 0);
-        const currentAmountPaid = Number(currentInvoice.amountPaid || 0);
-        if (paymentAmount <= 0 || paymentAmount > currentAmountPaid) throw new Error("Invoice totals need administrator review");
-
-        const amountPaid = Math.max(0, currentAmountPaid - paymentAmount);
-        const balance = Math.max(0, Number(currentInvoice.total || 0) - amountPaid);
-        const paymentStatus: PaymentStatus = amountPaid === 0 ? "unpaid" : "partial";
-
-        transaction.update(invoiceRef, {
-          amountPaid,
-          balance,
-          paymentStatus,
-          paymentMethod: amountPaid === 0 ? "not_recorded" : currentInvoice.paymentMethod,
-          paymentReference: amountPaid === 0 ? "" : currentInvoice.paymentReference ?? "",
-          updatedAt: serverTimestamp(),
-          paidAt: null,
-        });
-        transaction.update(paymentRef, {
-          status: "reversed",
-          reversedAt: serverTimestamp(),
-          reversedBy: user.uid,
-          reversalReason: reason,
-          auditLogId: auditRef.id,
-        });
-        transaction.set(auditRef, {
-          eventType: "payment.reversed",
+      const token = await user.getIdToken();
+      const response = await fetch("/api/billing/reverse-payment", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          requestId: reversalRequestId,
           invoiceId: reversingPayment.invoiceId,
-          invoiceNumber: currentInvoice.invoiceNumber,
           paymentId: reversingPayment.id,
-          patientId: currentInvoice.patientId,
-          patientName: currentInvoice.patientName,
-          amount: paymentAmount,
-          method: currentPayment.method,
-          source: currentPayment.source,
           reason,
-          actorUid: user.uid,
-          actorName: profile.displayName,
-          createdAt: serverTimestamp(),
-        });
+        }),
       });
+      const result = await response.json() as {
+        error?: string;
+        reversal?: { amount: number; alreadyProcessed: boolean };
+      };
+      if (!response.ok || !result.reversal) {
+        throw new Error(result.error || "The secure billing service could not complete this correction.");
+      }
 
-      setNotice(`Payment of ${money(reversingPayment.amount)} was reversed with a permanent audit record.`);
+      setNotice(
+        result.reversal.alreadyProcessed
+          ? `The ${money(result.reversal.amount)} payment reversal was already confirmed. No duplicate correction was made.`
+          : `Payment of ${money(result.reversal.amount)} was reversed with a permanent audit record.`,
+      );
       setReversingPayment(null);
       setReversalReason("");
+      setReversalRequestId(crypto.randomUUID());
     } catch (reversalError) {
       console.error(reversalError);
-      setError(reversalError instanceof Error ? reversalError.message : "The payment correction could not be completed.");
+      setError(
+        `${reversalError instanceof Error ? reversalError.message : "The payment correction could not be completed."} You can retry safely without reversing the payment twice.`,
+      );
     } finally {
       setReversing(false);
     }
@@ -642,6 +694,11 @@ function BillingWorkspace() {
 
   function beginRazorpayRefund(payment: PaymentEntry) {
     if (profile.role !== "admin" || payment.source !== "gateway") return;
+    const invoice = invoices.find((entry) => entry.id === payment.invoiceId);
+    if (!invoice || patientAvailabilityLabel(invoice)) {
+      setError("This invoice belongs to an archived or unavailable patient. Refund controls are disabled until the patient is restored.");
+      return;
+    }
     setRefundingPayment(payment);
     setRefundAmount(refundablePaymentAmount(payment));
     setRefundReason("");
@@ -654,6 +711,12 @@ function BillingWorkspace() {
   async function submitRazorpayRefund(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!refundingPayment || profile.role !== "admin") return;
+    const refundInvoice = invoices.find((entry) => entry.id === refundingPayment.invoiceId);
+    if (!refundInvoice || patientAvailabilityLabel(refundInvoice)) {
+      setRefundingPayment(null);
+      setError("This patient was archived or became unavailable. The refund action was cancelled.");
+      return;
+    }
 
     const amount = Number(refundAmount || 0);
     const refundable = refundablePaymentAmount(refundingPayment);
@@ -738,6 +801,11 @@ function BillingWorkspace() {
   async function startRazorpayPayment() {
     if (!payingInvoice) return;
     const invoice = payingInvoice;
+    if (patientAvailabilityLabel(invoice)) {
+      setPayingInvoice(null);
+      setError("This patient record is archived or unavailable. Online payment is disabled until an administrator restores it.");
+      return;
+    }
     const received = Math.max(0, Number(paymentAmount || 0));
     if (received <= 0 || received > invoice.balance) {
       setError("Enter an amount greater than zero and not more than the outstanding balance.");
@@ -881,8 +949,8 @@ function BillingWorkspace() {
           <div className="flex items-start justify-between gap-4"><div><h2 className="text-2xl font-bold text-[#233A59]">Create patient invoice</h2><p className="mt-1 text-sm text-slate-600">Every payment creates a permanent, traceable audit entry.</p></div><button type="button" onClick={() => setShowCreate(false)} aria-label="Close invoice form" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={19} /></button></div>
           <form onSubmit={createInvoice} className="mt-6 space-y-6">
             <div className="grid gap-4 md:grid-cols-2">
-              <label className={labelClass}>Registered patient<select required value={selectedPatientId} onChange={(event) => setSelectedPatientId(event.target.value)} className={inputClass}><option value="">Select patient</option>{patients.map((patient) => <option key={patient.id} value={patient.id}>{patient.patientNumber ? patient.patientNumber + " · " : ""}{patient.fullName} · {patient.phone}</option>)}</select></label>
-              <label className={labelClass}>Notes<input value={notes} maxLength={500} onChange={(event) => setNotes(event.target.value)} placeholder="Optional billing note" className={inputClass} /></label>
+              <label className={labelClass}>Registered patient<select required value={selectedPatientId} onChange={(event) => { setSelectedPatientId(event.target.value); setInitialPaymentRequestId(crypto.randomUUID()); }} className={inputClass}><option value="">Select active patient</option>{activePatients.map((patient) => <option key={patient.id} value={patient.id}>{patient.patientNumber ? patient.patientNumber + " · " : ""}{patient.fullName} · {patient.phone}</option>)}</select></label>
+              <label className={labelClass}>Notes<input value={notes} maxLength={500} onChange={(event) => { setNotes(event.target.value); setInitialPaymentRequestId(crypto.randomUUID()); }} placeholder="Optional billing note" className={inputClass} /></label>
             </div>
 
             <div>
@@ -901,10 +969,10 @@ function BillingWorkspace() {
             </div>
 
             <div className="grid gap-4 rounded-2xl border border-slate-200 p-4 md:grid-cols-2 xl:grid-cols-4">
-              <label className={labelClass}>Discount<input type="number" min="0" max={subtotal} step="0.01" value={discount} onChange={(event) => setDiscount(Number(event.target.value))} className={inputClass} /></label>
-              <label className={labelClass}>Amount received<input type="number" min="0" max={total} step="0.01" value={initialPayment} onChange={(event) => setInitialPayment(Number(event.target.value))} className={inputClass} /></label>
-              <label className={labelClass}>Payment method<select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as PaymentMethod)} className={inputClass}><option value="cash">Cash</option><option value="upi">UPI</option><option value="card">Card</option><option value="bank_transfer">Bank transfer</option></select></label>
-              <label className={labelClass}>Reference<input value={paymentReference} maxLength={100} onChange={(event) => setPaymentReference(event.target.value)} placeholder="UPI / card / bank reference" className={inputClass} /></label>
+              <label className={labelClass}>Discount<input type="number" min="0" max={subtotal} step="0.01" value={discount} onChange={(event) => { setDiscount(Number(event.target.value)); setInitialPaymentRequestId(crypto.randomUUID()); }} className={inputClass} /></label>
+              <label className={labelClass}>Amount received<input type="number" min="0" max={total} step="0.01" value={initialPayment} onChange={(event) => { setInitialPayment(Number(event.target.value)); setInitialPaymentRequestId(crypto.randomUUID()); }} className={inputClass} /></label>
+              <label className={labelClass}>Payment method<select value={paymentMethod} onChange={(event) => { setPaymentMethod(event.target.value as PaymentMethod); setInitialPaymentRequestId(crypto.randomUUID()); }} className={inputClass}><option value="cash">Cash</option><option value="upi">UPI</option><option value="card">Card</option><option value="bank_transfer">Bank transfer</option></select></label>
+              <label className={labelClass}>Reference<input value={paymentReference} maxLength={100} onChange={(event) => { setPaymentReference(event.target.value); setInitialPaymentRequestId(crypto.randomUUID()); }} placeholder="UPI / card / bank reference" className={inputClass} /></label>
             </div>
 
             <div className="flex flex-col gap-5 rounded-2xl bg-[#233A59] p-5 text-white sm:flex-row sm:items-center sm:justify-between">
@@ -919,9 +987,9 @@ function BillingWorkspace() {
         <section className="mt-6 rounded-3xl border border-emerald-200 bg-emerald-50 p-5 sm:p-7">
           <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.14em] text-emerald-700">Receive payment</p><h2 className="mt-2 text-xl font-bold text-[#233A59]">{payingInvoice.invoiceNumber} · {payingInvoice.patientName}</h2><p className="mt-1 text-sm text-slate-600">Outstanding balance: {money(payingInvoice.balance)}</p></div><button type="button" onClick={() => setPayingInvoice(null)} aria-label="Close payment form" className="rounded-lg p-2 text-slate-500 hover:bg-white"><X size={19} /></button></div>
           <form onSubmit={recordPayment} className="mt-5 grid gap-4 md:grid-cols-[1fr_1fr_1.2fr_auto] md:items-end">
-            <label className={labelClass}>Amount<input required type="number" min="0.01" max={payingInvoice.balance} step="0.01" value={paymentAmount} onChange={(event) => setPaymentAmount(Number(event.target.value))} className={inputClass} /></label>
-            <label className={labelClass}>Manual method<select value={followupMethod} onChange={(event) => setFollowupMethod(event.target.value as PaymentMethod)} className={inputClass}><option value="cash">Cash</option><option value="upi">UPI</option><option value="card">Card</option><option value="bank_transfer">Bank transfer</option></select></label>
-            <label className={labelClass}>Reference<input value={followupReference} maxLength={100} onChange={(event) => setFollowupReference(event.target.value)} placeholder="Optional transaction reference" className={inputClass} /></label>
+            <label className={labelClass}>Amount<input required type="number" min="0.01" max={payingInvoice.balance} step="0.01" value={paymentAmount} onChange={(event) => { setPaymentAmount(Number(event.target.value)); setManualPaymentRequestId(crypto.randomUUID()); }} className={inputClass} /></label>
+            <label className={labelClass}>Manual method<select value={followupMethod} onChange={(event) => { setFollowupMethod(event.target.value as PaymentMethod); setManualPaymentRequestId(crypto.randomUUID()); }} className={inputClass}><option value="cash">Cash</option><option value="upi">UPI</option><option value="card">Card</option><option value="bank_transfer">Bank transfer</option></select></label>
+            <label className={labelClass}>Reference<input value={followupReference} maxLength={100} onChange={(event) => { setFollowupReference(event.target.value); setManualPaymentRequestId(crypto.randomUUID()); }} placeholder="Optional transaction reference" className={inputClass} /></label>
             <button type="submit" disabled={recordingPayment || gatewayPayment} className="inline-flex h-[46px] items-center justify-center gap-2 rounded-xl bg-emerald-700 px-5 text-sm font-bold text-white disabled:opacity-60">{recordingPayment ? <LoaderCircle size={17} className="animate-spin" /> : <CheckCircle2 size={17} />} Record manual</button>
           </form>
           <div className="mt-5 flex flex-col gap-4 rounded-2xl border border-blue-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -947,10 +1015,10 @@ function BillingWorkspace() {
                 This restores the invoice balance and preserves the original entry as reversed. It does not issue a Razorpay or bank refund.
               </p>
             </div>
-            <button type="button" onClick={() => setReversingPayment(null)} aria-label="Close payment correction" className="rounded-lg p-2 text-slate-500 hover:bg-white"><X size={19} /></button>
+            <button type="button" onClick={() => { setReversingPayment(null); setReversalReason(""); setReversalRequestId(crypto.randomUUID()); }} aria-label="Close payment correction" className="rounded-lg p-2 text-slate-500 hover:bg-white"><X size={19} /></button>
           </div>
           <form onSubmit={reversePayment} className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-end">
-            <label className={labelClass + " flex-1"}>Mandatory correction reason<textarea required minLength={5} maxLength={300} rows={2} value={reversalReason} onChange={(event) => setReversalReason(event.target.value)} placeholder="Example: Test payment entered during setup" className={inputClass + " resize-none"} /></label>
+            <label className={labelClass + " flex-1"}>Mandatory correction reason<textarea required minLength={5} maxLength={300} rows={2} value={reversalReason} onChange={(event) => { setReversalReason(event.target.value); setReversalRequestId(crypto.randomUUID()); }} placeholder="Example: Test payment entered during setup" className={inputClass + " resize-none"} /></label>
             <button type="submit" disabled={reversing || reversalReason.trim().length < 5} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-amber-700 px-5 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">
               {reversing ? <LoaderCircle size={18} className="animate-spin" /> : <RotateCcw size={18} />}
               {reversing ? "Correcting…" : "Confirm reversal"}
@@ -1058,12 +1126,14 @@ function BillingWorkspace() {
       <div className="performance-list mt-6 space-y-4">
         {filteredInvoices.map((invoice) => {
           const invoicePayments = paymentsByInvoice.get(invoice.id) ?? [];
+          const unavailableReason = patientAvailabilityLabel(invoice);
+          const paymentControlsEnabled = patientsLoaded && !unavailableReason;
           return (
             <article key={invoice.id} className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
               <div className="grid gap-5 xl:grid-cols-[1fr_1fr_auto] xl:items-center">
-                <div><div className="flex flex-wrap items-center gap-2"><h2 className="font-bold text-[#233A59]">{invoice.invoiceNumber}</h2><span className={"rounded-full px-2.5 py-1 text-xs font-bold capitalize " + (invoice.paymentStatus === "paid" ? "bg-emerald-50 text-emerald-800" : invoice.paymentStatus === "partial" ? "bg-amber-50 text-amber-800" : "bg-red-50 text-red-800")}>{invoice.paymentStatus === "partial" ? "Partially paid" : invoice.paymentStatus}</span></div><p className="mt-2 font-semibold text-slate-700">{invoice.patientName}</p><p className="mt-1 text-sm text-slate-500">{invoice.patientNumber || "No patient ID"} · {invoice.patientPhone} · {createdDate(invoice.createdAt)}</p></div>
+                <div><div className="flex flex-wrap items-center gap-2"><h2 className="font-bold text-[#233A59]">{invoice.invoiceNumber}</h2><span className={"rounded-full px-2.5 py-1 text-xs font-bold capitalize " + (invoice.paymentStatus === "paid" ? "bg-emerald-50 text-emerald-800" : invoice.paymentStatus === "partial" ? "bg-amber-50 text-amber-800" : "bg-red-50 text-red-800")}>{invoice.paymentStatus === "partial" ? "Partially paid" : invoice.paymentStatus}</span>{unavailableReason ? <span className="rounded-full bg-slate-200 px-2.5 py-1 text-xs font-bold text-slate-700">{unavailableReason}</span> : null}</div><p className="mt-2 font-semibold text-slate-700">{invoice.patientName}</p><p className="mt-1 text-sm text-slate-500">{invoice.patientNumber || "No patient ID"} · {invoice.patientPhone} · {createdDate(invoice.createdAt)}</p></div>
                 <div className="grid grid-cols-2 gap-x-6 gap-y-1 rounded-xl bg-slate-50 p-4 text-sm"><span className="text-slate-500">Total</span><strong className="text-right text-[#233A59]">{money(invoice.total)}</strong><span className="text-slate-500">Received</span><strong className="text-right text-emerald-700">{money(invoice.amountPaid)}</strong><span className="text-slate-500">Balance</span><strong className="text-right text-red-700">{money(invoice.balance)}</strong><span className="text-slate-500">Last method</span><strong className="text-right text-slate-700">{methodLabel(invoice.paymentMethod)}</strong></div>
-                <div className="flex flex-wrap gap-2 xl:max-w-[250px] xl:justify-end"><button type="button" disabled={receiptActionId === invoice.id} onClick={() => void prepareReceipt(invoice)} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-[#233A59] hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60">{receiptActionId === invoice.id ? <LoaderCircle className="animate-spin" size={15} /> : <Download size={15} />} {receiptActionId === invoice.id ? "Preparing…" : "Receipt PDF"}</button>{invoice.balance > 0 && <button type="button" onClick={() => beginPayment(invoice)} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-emerald-700 px-3 py-2 text-xs font-bold text-white"><IndianRupee size={15} /> Record payment</button>}</div>
+                <div className="flex flex-wrap gap-2 xl:max-w-[250px] xl:justify-end"><button type="button" disabled={receiptActionId === invoice.id} onClick={() => void prepareReceipt(invoice)} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-[#233A59] hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60">{receiptActionId === invoice.id ? <LoaderCircle className="animate-spin" size={15} /> : <Download size={15} />} {receiptActionId === invoice.id ? "Preparing…" : "Receipt PDF"}</button>{invoice.balance > 0 && paymentControlsEnabled ? <button type="button" onClick={() => beginPayment(invoice)} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-emerald-700 px-3 py-2 text-xs font-bold text-white"><IndianRupee size={15} /> Record payment</button> : null}</div>
               </div>
 
               {invoicePayments.length > 0 && (
@@ -1086,10 +1156,10 @@ function BillingWorkspace() {
                             {refundedAmount > 0 && <span className="rounded-full bg-rose-100 px-2 py-1 text-xs font-bold text-rose-800">Refunded {money(refundedAmount)}</span>}
                             {refundPending && <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-bold text-amber-800">Refund pending</span>}
                           </div>
-                          {profile.role === "admin" && payment.status === "received" && payment.source === "manual" && (
+                          {profile.role === "admin" && paymentControlsEnabled && payment.status === "received" && payment.source === "manual" && (
                             <button type="button" onClick={() => beginPaymentReversal(payment)} className="inline-flex min-h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-800 hover:bg-amber-50"><RotateCcw size={14} /> Correct payment</button>
                           )}
-                          {profile.role === "admin" && payment.source === "gateway" && refundable > 0 && !refundPending && (
+                          {profile.role === "admin" && paymentControlsEnabled && payment.source === "gateway" && refundable > 0 && !refundPending && (
                             <button type="button" onClick={() => beginRazorpayRefund(payment)} className="inline-flex min-h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-rose-300 bg-white px-3 py-2 text-xs font-bold text-rose-800 hover:bg-rose-50"><RotateCcw size={14} /> Refund patient</button>
                           )}
                           {profile.role === "admin" && refundPending && payment.activeRefundOperationId && (
@@ -1111,6 +1181,25 @@ function BillingWorkspace() {
   );
 }
 
-export default function BillingPage() {
+function BillingAccess() {
+  const { profile } = useStaff();
+  if (profile.role === "doctor") {
+    return (
+      <section className="mx-auto max-w-2xl rounded-3xl border border-amber-200 bg-white p-8 text-center shadow-sm">
+        <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-amber-50 text-amber-700"><ShieldCheck size={28} /></span>
+        <p className="mt-5 text-xs font-bold uppercase tracking-[0.18em] text-[#A8864A]">Financial access</p>
+        <h1 className="mt-2 text-3xl font-bold text-[#233A59]">Billing is managed by the front desk</h1>
+        <p className="mt-3 leading-7 text-slate-600">Invoice, payment and refund records are available only to administrators and reception staff. No financial records were loaded for this doctor session.</p>
+        <div className="mt-7 flex flex-wrap justify-center gap-3">
+          <Link href="/admin/consultations" className="rounded-xl bg-[#233A59] px-5 py-3 text-sm font-bold text-white">Doctor workspace</Link>
+          <Link href="/admin/appointments" className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold text-[#233A59]">Appointments</Link>
+        </div>
+      </section>
+    );
+  }
   return <BillingWorkspace />;
+}
+
+export default function BillingPage() {
+  return <BillingAccess />;
 }

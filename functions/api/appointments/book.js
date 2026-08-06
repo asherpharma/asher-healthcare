@@ -1,8 +1,10 @@
 import {
+  assertActivePatientDocument,
   commitWrites,
   createDocumentWrite,
   getDocument,
   requireActiveStaff,
+  verifyDocumentWrite,
 } from "../../../server/razorpay/firebase.js";
 import {
   assertSameOrigin,
@@ -16,6 +18,7 @@ import {
   normalizeSchedule,
   timeSlots,
 } from "../../../server/appointments/schedule.js";
+import { validDocumentId } from "../../../server/razorpay/payments.js";
 
 const DOCTORS = ["pediatrics", "obg"];
 const STAFF_SOURCES = ["reception", "phone", "walk-in"];
@@ -150,14 +153,24 @@ export async function onRequestPost(context) {
     let actorUid = "public-website";
     let status = "requested";
     let patientId = "";
+    let patientDocument = null;
     if (source !== "website") {
       if (!STAFF_SOURCES.includes(source)) throw new HttpError(400, "Choose a valid booking source.");
       const staff = await requireActiveStaff(context.request, context.env);
       actorUid = staff.uid;
       status = "confirmed";
       if (requestedPatientId) {
-        const patientDocument = await getDocument(context.env, `patients/${requestedPatientId}`);
-        if (!patientDocument) throw new HttpError(400, "The selected patient record no longer exists.");
+        if (!validDocumentId(requestedPatientId)) {
+          throw new HttpError(400, "Select a valid patient record.");
+        }
+        patientDocument = assertActivePatientDocument(
+          await getDocument(context.env, `patients/${requestedPatientId}`),
+          {
+            missingStatus: 400,
+            missingMessage: "The selected patient record no longer exists.",
+            archivedMessage: "The selected patient record is archived. Restore it before booking an appointment.",
+          },
+        );
         if (
           normalizedPhone(patientDocument.data.phone) !== phoneDigits
           || normalizedName(patientDocument.data.fullName) !== normalizedName(patientName)
@@ -213,6 +226,13 @@ export async function onRequestPost(context) {
       : [];
     await commitWrites(context.env, [
       ...guardWrites,
+      ...(patientId && patientDocument
+        ? [verifyDocumentWrite(
+            context.env,
+            `patients/${patientId}`,
+            patientDocument.updateTime,
+          )]
+        : []),
       createDocumentWrite(context.env, `appointmentSlots/${slotId}`, {
         appointmentId,
         doctorId,

@@ -1,4 +1,5 @@
 import {
+  assertBillingStaff,
   getDocument,
   requireActiveStaff,
 } from "../../../server/razorpay/firebase.js";
@@ -25,7 +26,9 @@ function validQrId(value) {
 export async function onRequestPost(context) {
   try {
     assertSameOrigin(context.request);
-    const staff = await requireActiveStaff(context.request, context.env);
+    const staff = assertBillingStaff(
+      await requireActiveStaff(context.request, context.env),
+    );
     const body = await readJson(context.request);
     if (!validQrId(body.qrId)) {
       throw new HttpError(400, "This payment QR is not valid.");

@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:rules": "firebase emulators:exec --only firestore --project asher-healthcare-rules-test \"node --test tests/firestore.rules.test.mjs\""
+    "test:unit": "node --test tests/firebase-write-guards.test.mjs tests/invoice-create.test.mjs tests/manual-payment.test.mjs tests/patient-directory.test.mjs tests/patient-identity.test.mjs tests/patient-profile.test.mjs tests/reception-workflow.test.mjs tests/reverse-payment.test.mjs",
+    "test:rules": "firebase emulators:exec --only firestore,storage --project asher-healthcare-rules-test \"node --test --test-concurrency=1 tests/firestore.rules.test.mjs tests/storage.rules.test.mjs\""
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

@@ -1,24 +1,122 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+    function staffProfile() {
+      return firestore.get(/databases/(default)/documents/staff/$(request.auth.uid));
+    }
+
     function isStaff() {
       return request.auth != null
         && firestore.exists(/databases/(default)/documents/staff/$(request.auth.uid))
-        && firestore.get(/databases/(default)/documents/staff/$(request.auth.uid)).data.active == true
-        && firestore.get(/databases/(default)/documents/staff/$(request.auth.uid)).data.role in ['admin', 'doctor', 'reception'];
+        && staffProfile().data.active == true
+        && staffProfile().data.role in ['admin', 'doctor', 'reception'];
     }
 
     function isAdmin() {
       return isStaff()
-        && firestore.get(/databases/(default)/documents/staff/$(request.auth.uid)).data.role == 'admin';
+        && staffProfile().data.role == 'admin';
+    }
+
+    function isReception() {
+      return isStaff()
+        && staffProfile().data.role == 'reception';
+    }
+
+    function isDoctor() {
+      return isStaff()
+        && staffProfile().data.role == 'doctor';
+    }
+
+    function staffDoctorId() {
+      return staffProfile().data.doctorName == 'Dr. Lt Col Shafi Ahamad'
+        ? 'pediatrics'
+        : (staffProfile().data.doctorName == 'Dr. Shaik Reshma' ? 'obg' : '');
+    }
+
+    function patientExists(patientId) {
+      return firestore.exists(/databases/(default)/documents/patients/$(patientId));
+    }
+
+    function patientProfile(patientId) {
+      return firestore.get(/databases/(default)/documents/patients/$(patientId));
+    }
+
+    function patientIsActive(patientId) {
+      return patientExists(patientId)
+        && (
+          !patientProfile(patientId).data.keys().hasAny(['archived'])
+          || patientProfile(patientId).data.archived != true
+        );
+    }
+
+    function isAssignedDoctor(patientId) {
+      return isDoctor()
+        && patientExists(patientId)
+        && staffProfile().data.doctorName is string
+        && staffProfile().data.doctorName.size() > 0
+        && staffDoctorId() != ''
+        && (
+          (
+            patientProfile(patientId).data.keys().hasAny(['doctorName'])
+            && patientProfile(patientId).data.doctorName is string
+            && patientProfile(patientId).data.doctorName.size() > 0
+            && patientProfile(patientId).data.doctorName == staffProfile().data.doctorName
+          )
+          || (
+            (
+              !patientProfile(patientId).data.keys().hasAny(['doctorName'])
+              || (
+                patientProfile(patientId).data.doctorName is string
+                && patientProfile(patientId).data.doctorName.size() == 0
+              )
+            )
+            && patientProfile(patientId).data.keys().hasAny(['doctorId'])
+            && patientProfile(patientId).data.doctorId is string
+            && patientProfile(patientId).data.doctorId == staffDoctorId()
+          )
+        );
+    }
+
+    function validOptionalLabOrderMetadata() {
+      let metadataKeys = request.resource.metadata.keys();
+      return !metadataKeys.hasAny(['labOrderId'])
+        || (
+          request.resource.metadata.labOrderId is string
+          && request.resource.metadata.labOrderId.matches('^[A-Za-z0-9_-]{1,128}$')
+        );
+    }
+
+    function validReportCreate(patientId, fileName) {
+      let metadataKeys = request.resource.metadata.keys();
+      return patientId.matches('^[A-Za-z0-9_-]{1,128}$')
+        && patientIsActive(patientId)
+        && request.resource.size > 0
+        && request.resource.size < 10 * 1024 * 1024
+        && fileName.matches('^[0-9]{13}-[A-Za-z0-9._-]+[.](pdf|jpg|jpeg|png|webp)$')
+        && request.resource.contentType.matches('^(application/pdf|image/jpeg|image/png|image/webp)$')
+        && metadataKeys.hasAll(['patientId', 'uploadedBy'])
+        && metadataKeys.hasOnly(['patientId', 'uploadedBy', 'labOrderId'])
+        && request.resource.metadata.patientId == patientId
+        && request.resource.metadata.uploadedBy == request.auth.uid
+        && validOptionalLabOrderMetadata();
     }
 
     match /reports/{patientId}/{fileName} {
-      allow read: if isStaff();
-      allow create, update: if isStaff()
-        && request.resource.size < 10 * 1024 * 1024
-        && fileName.matches('.*[.](pdf|jpg|jpeg|png|webp)$')
-        && request.resource.contentType.matches('^(application/pdf|image/jpeg|image/png|image/webp)$');
+      // Reception can intake a new report, but only an administrator or the
+      // doctor assigned on the patient's Firestore profile can open it.
+      allow read: if isAdmin() || isAssignedDoctor(patientId);
+      allow create: if (isAdmin() || isReception() || isAssignedDoctor(patientId))
+        && validReportCreate(patientId, fileName)
+        && (
+          !isReception()
+          || request.resource.metadata.keys().hasAll(['labOrderId'])
+        );
+
+      // Reports use unique object names. Prevent any role from silently
+      // replacing the bytes or metadata of an existing clinical document.
+      allow update: if false;
+      // A failed client acknowledgement is ambiguous: the Firestore record may
+      // already exist. Retain immutable uploads for administrator reconciliation.
       allow delete: if isAdmin();
     }
 

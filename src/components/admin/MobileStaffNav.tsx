@@ -3,6 +3,7 @@
 import { InstallAppButton } from "@/components/pwa/PwaRegister";
 import {
   CalendarDays,
+  ClipboardPlus,
   FlaskConical,
   LayoutDashboard,
   ListTodo,
@@ -38,9 +39,9 @@ function primaryNavigationFor(role: string): MobileNavigationItem[] {
 
   if (role === "reception") {
     return [
+      { href: "/admin/reception", label: "New patient", icon: ClipboardPlus },
       { href: "/admin/appointments", label: "Bookings", icon: CalendarDays },
       { href: "/admin/patients", label: "Patients", icon: UsersRound },
-      { href: "/admin/billing", label: "Billing", icon: ReceiptIndianRupee },
     ];
   }
 
@@ -167,6 +168,12 @@ export default function MobileStaffNav({ role, onLock }: { role: string; onLock:
             </div>
 
             <div className="mt-5 grid grid-cols-2 gap-3">
+              {role !== "doctor" ? (
+                <Link href="/admin/reception" onClick={() => setMoreOpen(false)} className="flex min-h-24 flex-col justify-between rounded-2xl bg-rose-50 p-4 font-bold text-rose-900">
+                  <ClipboardPlus size={25} />
+                  Express reception
+                </Link>
+              ) : null}
               {role === "admin" ? (
                 <Link href="/admin/staff" onClick={() => setMoreOpen(false)} className="flex min-h-24 flex-col justify-between rounded-2xl bg-amber-50 p-4 font-bold text-amber-900">
                   <UserRoundCog size={25} />
@@ -179,7 +186,7 @@ export default function MobileStaffNav({ role, onLock }: { role: string; onLock:
                   Consultations
                 </Link>
               ) : null}
-              {role !== "reception" ? (
+              {role !== "doctor" ? (
                 <Link href="/admin/billing" onClick={() => setMoreOpen(false)} className="flex min-h-24 flex-col justify-between rounded-2xl bg-emerald-50 p-4 font-bold text-emerald-900">
                   <ReceiptIndianRupee size={25} />
                   Billing

@@ -186,6 +186,21 @@ export async function getDocument(env, path) {
   };
 }
 
+export function assertActivePatientDocument(patientDocument, {
+  missingStatus = 409,
+  missingMessage = "The selected patient record no longer exists.",
+  archivedStatus = 409,
+  archivedMessage = "The selected patient record is archived. Restore it before continuing.",
+} = {}) {
+  if (!patientDocument) {
+    throw new HttpError(missingStatus, missingMessage);
+  }
+  if (patientDocument.data?.archived === true) {
+    throw new HttpError(archivedStatus, archivedMessage);
+  }
+  return patientDocument;
+}
+
 export async function commitWrites(env, writes) {
   return firestoreRequest(
     env,
@@ -201,6 +216,37 @@ export function createDocumentWrite(env, path, data) {
       fields: encodeFields(data),
     },
     currentDocument: { exists: false },
+  };
+}
+
+export function verifyDocumentWrite(env, path, updateTime) {
+  const segments = typeof path === "string" ? path.split("/") : [];
+  const validPath = (
+    typeof path === "string"
+    && path === path.trim()
+    && path.length > 0
+    && path.length <= 1_500
+    && segments.length % 2 === 0
+    && segments.every((segment) => (
+      segment.length > 0
+      && segment !== "."
+      && segment !== ".."
+      && !/[\u0000-\u001f\u007f]/u.test(segment)
+    ))
+  );
+  const validUpdateTime = (
+    typeof updateTime === "string"
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/u.test(updateTime)
+    && !Number.isNaN(Date.parse(updateTime))
+  );
+
+  if (!validPath || !validUpdateTime) {
+    throw new HttpError(500, "A secure database write precondition was invalid.");
+  }
+
+  return {
+    verify: documentName(env, path),
+    currentDocument: { updateTime },
   };
 }
 
@@ -250,7 +296,15 @@ export async function requireActiveStaff(request, env) {
     email: firebaseUser.email || "",
     displayName: staff.data.displayName || firebaseUser.displayName || firebaseUser.email || "Clinic staff",
     role,
+    staffUpdateTime: staff.updateTime,
   };
+}
+
+export function assertBillingStaff(staff) {
+  if (!staff || !["admin", "reception"].includes(staff.role)) {
+    throw new HttpError(403, "Only clinic administrators and reception staff can manage payments.");
+  }
+  return staff;
 }
 
 export async function requireAdminStaff(request, env) {

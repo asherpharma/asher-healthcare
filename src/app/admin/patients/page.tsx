@@ -1,29 +1,26 @@
 "use client";
 
-import ReceptionPayment, {
-  type ReceptionInvoice,
-} from "@/components/admin/ReceptionPayment";
 import PatientQuickActions from "@/components/admin/PatientQuickActions";
 import { useStaff } from "@/components/admin/StaffGuard";
 import { firestore, storage } from "@/firebase/config";
+import { fetchPatientDirectory } from "@/lib/patient-directory";
 import {
   addDoc,
   collection,
   doc,
-  getDocs,
   limit,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
-  updateDoc,
   where,
-  writeBatch,
   type Timestamp,
 } from "firebase/firestore";
-import { deleteObject, getBlob, ref, uploadBytes } from "firebase/storage";
+import { getBlob, ref, uploadBytes } from "firebase/storage";
 import {
   Activity,
+  Archive,
+  ArchiveRestore,
   Baby,
   CalendarClock,
   ChartNoAxesCombined,
@@ -38,7 +35,6 @@ import {
   HeartPulse,
   LoaderCircle,
   NotebookTabs,
-  Plus,
   Printer,
   Ruler,
   Search,
@@ -47,11 +43,12 @@ import {
   Stethoscope,
   Syringe,
   TriangleAlert,
-  Trash2,
   UserRound,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Gender = "female" | "male" | "other";
 type CaseType = "general" | "specialist";
@@ -63,6 +60,7 @@ type Patient = {
   phone: string;
   dateOfBirth: string;
   gender: Gender;
+  doctorId?: string;
   doctorName?: string;
   caseType?: CaseType;
   specialty?: Specialty;
@@ -70,8 +68,12 @@ type Patient = {
   registrationInvoiceId?: string;
   registrationInvoiceNumber?: string;
   address: string;
-  allergies: string;
-  medicalHistory: string;
+  allergies?: string;
+  medicalHistory?: string;
+  archived?: boolean;
+  archivedAt?: Timestamp;
+  archivedBy?: string;
+  archiveReason?: string;
   createdAt?: Timestamp;
 };
 type BaseRecord = { id: string; createdAt?: Timestamp };
@@ -166,12 +168,6 @@ type TimelineItem = {
   status?: string;
 };
 type TabKey = "overview" | "timeline" | "visits" | "prescriptions" | "growth" | "vaccinations" | "pregnancy" | "reports";
-type RegistrationResult = {
-  patient: Patient & { doctorName: string };
-  invoice: ReceptionInvoice;
-  consultationLabel: string;
-};
-
 const inputClass = "mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 font-normal text-slate-900 outline-none transition focus:border-[#233A59] focus:ring-2 focus:ring-[#233A59]/10";
 const labelClass = "text-sm font-bold text-slate-700";
 const cardClass = "rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200";
@@ -212,27 +208,24 @@ function friendlyDate(value: string) {
     : date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 }
 
-function registrationInvoiceNumber() {
-  const date = new Date().toISOString().slice(0, 10).replaceAll("-", "");
-  const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 6).toUpperCase();
-  return `ASH-${date}-${suffix}`;
+function doctorIdForName(doctorName?: string) {
+  if (doctorName === "Dr. Lt Col Shafi Ahamad") return "pediatrics";
+  if (doctorName === "Dr. Shaik Reshma") return "obg";
+  return "";
 }
 
 function PatientRegister() {
   const { user, profile } = useStaff();
+  const router = useRouter();
   const db = firestore!;
   const files = storage!;
-  const [patients, setPatients] = useState<Patient[]>([]);
+  const [recentPatients, setRecentPatients] = useState<Patient[]>([]);
+  const [archivedRegistry, setArchivedRegistry] = useState<Patient[]>([]);
   const [search, setSearch] = useState("");
   const [visibleCount, setVisibleCount] = useState(20);
-  const [showForm, setShowForm] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
-  const [lastRegistered, setLastRegistered] = useState<RegistrationResult | null>(null);
-  const [caseType, setCaseType] = useState<CaseType>("general");
-  const [specialty, setSpecialty] = useState<Specialty>("");
-  const [generalDoctor, setGeneralDoctor] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
   const [visits, setVisits] = useState<VisitRecord[]>([]);
@@ -245,49 +238,174 @@ function PatientRegister() {
   const [labOrders, setLabOrders] = useState<LabRecord[]>([]);
   const [uploading, setUploading] = useState(false);
   const [reportActionId, setReportActionId] = useState<string | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<Patient | null>(null);
-  const [deleteConfirmation, setDeleteConfirmation] = useState("");
-  const [deleting, setDeleting] = useState(false);
+  const [archiveTarget, setArchiveTarget] = useState<Patient | null>(null);
+  const [archiveConfirmation, setArchiveConfirmation] = useState("");
+  const [archiveReason, setArchiveReason] = useState("");
+  const [lifecycleActionId, setLifecycleActionId] = useState<string | null>(null);
+  const [patientView, setPatientView] = useState<"active" | "archived">("active");
   const deepLinkedPatient = useRef("");
+  const canEditDemographics = profile.role === "admin" || profile.role === "reception";
   const canEditClinical = profile.role === "admin" || profile.role === "doctor";
 
+  const resetPatientDetailData = useCallback(() => {
+    setVisits([]);
+    setPrescriptions([]);
+    setVaccinations([]);
+    setPregnancyRecords([]);
+    setGrowthRecords([]);
+    setReports([]);
+    setInvoices([]);
+    setLabOrders([]);
+    setReportActionId(null);
+  }, []);
+
+  const clearSelectedPatientData = useCallback((reason?: string) => {
+    resetPatientDetailData();
+    setSelectedId(null);
+    setShowEdit(false);
+    setActiveTab("overview");
+    if (reason) setMessage(reason);
+  }, [resetPatientDetailData]);
+
+  const selectPatient = useCallback((patientId: string) => {
+    resetPatientDetailData();
+    setSelectedId(patientId);
+    setShowEdit(false);
+    setActiveTab("overview");
+  }, [resetPatientDetailData]);
+
   useEffect(() => {
-    const openRegistration = () => setShowForm(true);
+    const openRegistration = () => router.push("/admin/reception");
     const openPatient = (event: Event) => {
       const patientId = (event as CustomEvent<{ patientId?: string }>).detail?.patientId;
-      if (patientId) setSelectedId(patientId);
+      if (patientId) selectPatient(patientId);
     };
     window.addEventListener("asher:new-patient", openRegistration);
     window.addEventListener("asher:open-patient", openPatient);
     if (new URLSearchParams(window.location.search).get("new") === "1") {
-      window.setTimeout(() => setShowForm(true), 0);
+      router.replace("/admin/reception");
     }
     return () => {
       window.removeEventListener("asher:new-patient", openRegistration);
       window.removeEventListener("asher:open-patient", openPatient);
     };
-  }, []);
+  }, [router, selectPatient]);
 
   useEffect(() => {
-    const patientsQuery = query(collection(db, "patients"), orderBy("createdAt", "desc"), limit(100));
+    if (profile.role !== "admin") {
+      let active = true;
+      void fetchPatientDirectory(user)
+        .then((directory) => {
+          if (!active) return;
+          setRecentPatients(directory as Patient[]);
+        })
+        .catch((loadError) => {
+          console.error("Patient directory could not be loaded", loadError);
+          if (active) {
+            setRecentPatients([]);
+            clearSelectedPatientData();
+            setMessage(loadError instanceof Error ? loadError.message : "Patient records could not be loaded.");
+          }
+        });
+      return () => {
+        active = false;
+      };
+    }
+
+    const patientsQuery = query(collection(db, "patients"), orderBy("createdAt", "desc"), limit(500));
     return onSnapshot(patientsQuery, (snapshot) => {
-      setPatients(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Patient));
+      setRecentPatients(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Patient));
     });
-  }, [db]);
+  }, [clearSelectedPatientData, db, profile.role, user]);
+
+  useEffect(() => {
+    if (profile.role !== "admin") return;
+    const archivedQuery = query(collection(db, "patients"), where("archived", "==", true));
+    return onSnapshot(archivedQuery, (snapshot) => {
+      setArchivedRegistry(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Patient));
+    });
+  }, [db, profile.role]);
+
+  const patients = useMemo(() => {
+    const merged = new Map(recentPatients.map((patient) => [patient.id, patient]));
+    archivedRegistry.forEach((patient) => merged.set(patient.id, patient));
+    return Array.from(merged.values());
+  }, [archivedRegistry, recentPatients]);
 
   useEffect(() => {
     const patientId = new URLSearchParams(window.location.search).get("patient") ?? "";
     if (!patientId || deepLinkedPatient.current === patientId) return;
-    if (patients.some((patient) => patient.id === patientId)) {
+    const patient = patients.find((candidate) => candidate.id === patientId);
+    if (patient) {
       deepLinkedPatient.current = patientId;
-      window.setTimeout(() => setSelectedId(patientId), 0);
+      window.setTimeout(() => {
+        if (patient.archived === true) {
+          if (profile.role !== "admin") {
+            setMessage("This patient record is archived and can only be opened by an administrator.");
+            return;
+          }
+          setPatientView("archived");
+        } else {
+          setPatientView("active");
+        }
+        selectPatient(patientId);
+      }, 0);
     }
-  }, [patients]);
+  }, [patients, profile.role, selectPatient]);
 
-  const selectedPatient = useMemo(
-    () => patients.find((patient) => patient.id === selectedId) ?? null,
-    [patients, selectedId],
+  const activePatients = useMemo(
+    () => patients.filter((patient) => patient.archived !== true),
+    [patients],
   );
+  const archivedPatients = useMemo(
+    () => patients
+      .filter((patient) => patient.archived === true)
+      .sort((left, right) => {
+        const leftTime = left.archivedAt?.toMillis?.() ?? left.createdAt?.toMillis?.() ?? 0;
+        const rightTime = right.archivedAt?.toMillis?.() ?? right.createdAt?.toMillis?.() ?? 0;
+        return rightTime - leftTime;
+      }),
+    [patients],
+  );
+  const patientPool = profile.role === "admin" && patientView === "archived"
+    ? archivedPatients
+    : activePatients;
+  const selectedPatient = useMemo(
+    () => patientPool.find((patient) => patient.id === selectedId) ?? null,
+    [patientPool, selectedId],
+  );
+  const canModifySelectedPatient = canEditClinical && selectedPatient?.archived !== true;
+  const canEditSelectedProfile = (canEditDemographics || canEditClinical)
+    && selectedPatient?.archived !== true;
+
+  useEffect(() => {
+    if (profile.role !== "doctor" || !profile.doctorName || !selectedId) return;
+    return onSnapshot(
+      doc(db, "patients", selectedId),
+      (snapshot) => {
+        if (!snapshot.exists()) {
+          clearSelectedPatientData("This patient record is no longer available.");
+          return;
+        }
+        const freshPatient = { id: snapshot.id, ...snapshot.data() } as Patient;
+        const freshDoctorName = freshPatient.doctorName?.trim() ?? "";
+        const assignedDoctorId = doctorIdForName(profile.doctorName);
+        const doctorMatches = freshDoctorName
+          ? freshDoctorName === profile.doctorName
+          : Boolean(assignedDoctorId && freshPatient.doctorId === assignedDoctorId);
+        if (freshPatient.archived === true || !doctorMatches) {
+          clearSelectedPatientData("This patient is archived or is no longer assigned to your account.");
+          return;
+        }
+        setRecentPatients((current) => current.map((patient) =>
+          patient.id === freshPatient.id ? { ...patient, ...freshPatient } : patient));
+      },
+      (loadError) => {
+        console.error("Assigned patient clinical profile could not be loaded", loadError);
+        clearSelectedPatientData("Access to this patient record is no longer available.");
+      },
+    );
+  }, [clearSelectedPatientData, db, profile.doctorName, profile.role, selectedId]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -295,17 +413,30 @@ function PatientRegister() {
       onSnapshot(
         query(collection(db, "patients", selectedId, name), orderBy("createdAt", "desc"), limit(50)),
         (snapshot) => setter(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as T)),
+        () => setter([]),
       );
-    const unsubscribers: Array<() => void> = [
-      onSnapshot(
+    const unsubscribers: Array<() => void> = [];
+    if (profile.role !== "doctor") {
+      unsubscribers.push(onSnapshot(
         query(collection(db, "invoices"), where("patientId", "==", selectedId), limit(50)),
         (snapshot) => setInvoices(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as InvoiceRecord)),
-      ),
-      onSnapshot(
-        query(collection(db, "labOrders"), where("patientId", "==", selectedId), limit(50)),
-        (snapshot) => setLabOrders(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as LabRecord)),
-      ),
-    ];
+        () => setInvoices([]),
+      ));
+    }
+
+    const labOrdersQuery = profile.role === "doctor" && profile.doctorName
+      ? query(
+          collection(db, "labOrders"),
+          where("patientId", "==", selectedId),
+          where("clinician", "==", profile.doctorName),
+          limit(50),
+        )
+      : query(collection(db, "labOrders"), where("patientId", "==", selectedId), limit(50));
+    unsubscribers.push(onSnapshot(
+      labOrdersQuery,
+      (snapshot) => setLabOrders(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as LabRecord)),
+      () => setLabOrders([]),
+    ));
     if (canEditClinical) {
       unsubscribers.push(
         subscribe<VisitRecord>("visits", setVisits),
@@ -317,7 +448,7 @@ function PatientRegister() {
       );
     }
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
-  }, [canEditClinical, db, selectedId]);
+  }, [canEditClinical, db, profile.doctorName, profile.role, selectedId]);
 
   const timeline = useMemo<TimelineItem[]>(() => {
     const items: TimelineItem[] = [
@@ -335,223 +466,144 @@ function PatientRegister() {
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
-    if (!term) return patients;
-    return patients.filter((patient) =>
+    if (!term) return patientPool;
+    return patientPool.filter((patient) =>
       [patient.fullName, patient.phone, patient.patientNumber ?? ""].some((value) => value.toLowerCase().includes(term)),
     );
-  }, [patients, search]);
+  }, [patientPool, search]);
 
   const visiblePatients = useMemo(
     () => search.trim() ? filtered : filtered.slice(0, visibleCount),
     [filtered, search, visibleCount],
   );
 
-  async function addPatient(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const registrationForm = event.currentTarget;
-    setSaving(true);
-    setMessage("");
-    const form = new FormData(registrationForm);
-    const patientRef = doc(collection(db, "patients"));
-    const invoiceRef = doc(collection(db, "invoices"));
-    const patientNumber = "ASH-" + patientRef.id.slice(0, 7).toUpperCase();
-    const consultationFee = caseType === "general" ? 250 : 500;
-    const consultationLabel = caseType === "general"
-      ? "General consultation"
-      : specialty === "pediatrics"
-        ? "Pediatric consultation"
-        : "Obstetrics & Gynaecology consultation";
-    const doctorName = caseType === "general"
-      ? generalDoctor
-      : specialty === "pediatrics"
-        ? "Dr. Lt Col Shafi Ahamad"
-        : specialty === "obg"
-          ? "Dr. Shaik Reshma"
-          : "";
-    if (!doctorName) {
-      setSaving(false);
-      setMessage("Select the consulting doctor or specialist department.");
-      return;
-    }
-    const number = registrationInvoiceNumber();
-    const patientData = {
-      patientNumber,
-      fullName: text(form, "fullName"),
-      phone: text(form, "phone"),
-      dateOfBirth: text(form, "dateOfBirth"),
-      gender: text(form, "gender") as Gender,
-      doctorName,
-      caseType,
-      specialty: caseType === "specialist" ? specialty : "" as Specialty,
-      consultationFee,
-      registrationInvoiceId: invoiceRef.id,
-      registrationInvoiceNumber: number,
-      address: text(form, "address"),
-      allergies: text(form, "allergies"),
-      medicalHistory: text(form, "medicalHistory"),
-    };
-    const invoiceData = {
-      invoiceNumber: number,
-      patientId: patientRef.id,
-      patientNumber,
-      patientName: patientData.fullName,
-      patientPhone: patientData.phone,
-      items: [{
-        description: consultationLabel,
-        quantity: 1,
-        unitPrice: consultationFee,
-        amount: consultationFee,
-      }],
-      subtotal: consultationFee,
-      discount: 0,
-      total: consultationFee,
-      amountPaid: 0,
-      balance: consultationFee,
-      paymentStatus: "unpaid",
-      paymentMethod: "not_recorded",
-      paymentReference: "",
-      notes: "Created automatically during reception registration.",
-      createdBy: user.uid,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-      paidAt: null,
-    };
-    try {
-      const batch = writeBatch(db);
-      batch.set(patientRef, {
-        ...patientData,
-        createdBy: user.uid,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-      batch.set(invoiceRef, invoiceData);
-      await batch.commit();
-      registrationForm.reset();
-      setCaseType("general");
-      setSpecialty("");
-      setGeneralDoctor("");
-      setShowForm(false);
-      setSelectedId(patientRef.id);
-      setLastRegistered({
-        patient: { id: patientRef.id, ...patientData },
-        invoice: {
-          id: invoiceRef.id,
-          patientId: patientRef.id,
-          patientNumber,
-          invoiceNumber: number,
-          patientName: patientData.fullName,
-          patientPhone: patientData.phone,
-          items: invoiceData.items,
-          subtotal: consultationFee,
-          discount: 0,
-          total: consultationFee,
-          amountPaid: 0,
-          balance: consultationFee,
-          paymentStatus: "unpaid",
-          paymentMethod: "not_recorded",
-          paymentReference: "",
-          notes: invoiceData.notes,
-        },
-        consultationLabel,
-      });
-      setMessage("Patient registered securely. Collect the consultation fee to release the receipt and prescription.");
-    } catch (error) {
-      console.error("Reception registration failed", error);
-      setMessage("Patient registration and consultation invoice could not be created. Please check access and try again.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
   async function editPatient(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedPatient) return;
+    if (selectedPatient.archived === true) {
+      setMessage("Restore this patient before changing the profile.");
+      return;
+    }
     setSaving(true);
+    setMessage("");
     const form = new FormData(event.currentTarget);
     try {
-      const profileUpdates: Record<string, unknown> = {
-        fullName: text(form, "fullName"),
-        phone: text(form, "phone"),
-        dateOfBirth: text(form, "dateOfBirth"),
-        gender: text(form, "gender"),
-        doctorName: text(form, "doctorName"),
-        address: text(form, "address"),
-        updatedAt: serverTimestamp(),
+      const profileUpdates: Record<string, string> = {
+        patientId: selectedPatient.id,
       };
+      if (canEditDemographics) {
+        Object.assign(profileUpdates, {
+          fullName: text(form, "fullName"),
+          phone: text(form, "phone"),
+          dateOfBirth: text(form, "dateOfBirth"),
+          gender: text(form, "gender"),
+          doctorName: text(form, "doctorName"),
+          address: text(form, "address"),
+        });
+      }
       if (canEditClinical) {
         profileUpdates.allergies = text(form, "allergies");
         profileUpdates.medicalHistory = text(form, "medicalHistory");
       }
-      await updateDoc(doc(db, "patients", selectedPatient.id), profileUpdates);
+      const token = await user.getIdToken();
+      const response = await fetch("/api/staff/patients/profile", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(profileUpdates),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(result.error || "Patient update failed.");
+      }
+      if (result.patient) {
+        setRecentPatients((current) => current.map((patient) => (
+          patient.id === selectedPatient.id ? { ...patient, ...result.patient } : patient
+        )));
+      }
       setShowEdit(false);
       setMessage("Patient profile updated.");
-    } catch {
-      setMessage("Patient update failed.");
+    } catch (error) {
+      console.error("Protected patient profile update failed", error);
+      setMessage(error instanceof Error ? error.message : "Patient update failed.");
     } finally {
       setSaving(false);
     }
   }
 
-  async function deletePatientPermanently() {
-    if (profile.role !== "admin" || !deleteTarget) return;
-    const patientNumber = deleteTarget.patientNumber || deleteTarget.id;
-    if (deleteConfirmation.trim() !== patientNumber) {
-      setMessage("Type the patient ID exactly to confirm deletion.");
+  async function patientLifecycleRequest(
+    action: "archive" | "restore",
+    patient: Patient,
+    reason: string,
+  ) {
+    const token = await user.getIdToken();
+    const response = await fetch(`/api/admin/patients/${action}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ patientId: patient.id, reason }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(result.error || `Patient ${action} could not be completed.`);
+    }
+  }
+
+  async function archivePatient() {
+    if (profile.role !== "admin" || !archiveTarget) return;
+    const patientNumber = archiveTarget.patientNumber || archiveTarget.id;
+    if (archiveConfirmation.trim() !== patientNumber) {
+      setMessage("Type the patient ID exactly to confirm archiving.");
+      return;
+    }
+    if (archiveReason.trim().length < 8) {
+      setMessage("Add a brief reason so this change is clear in the audit history.");
       return;
     }
 
-    setDeleting(true);
+    setLifecycleActionId(archiveTarget.id);
     setMessage("");
     try {
-      const patientRef = doc(db, "patients", deleteTarget.id);
-      const collectionNames = ["visits", "prescriptions", "vaccinations", "pregnancyRecords", "growthRecords", "reports"] as const;
-      const childSnapshots = await Promise.all(
-        collectionNames.map((name) => getDocs(collection(patientRef, name))),
-      );
-      const childRefs = childSnapshots.flatMap((snapshot) => snapshot.docs.map((item) => item.ref));
-      const reportPaths = childSnapshots[5].docs
-        .map((item) => String(item.data().storagePath || ""))
-        .filter(Boolean);
-
-      while (childRefs.length > 450) {
-        const batch = writeBatch(db);
-        childRefs.splice(0, 450).forEach((recordRef) => batch.delete(recordRef));
-        await batch.commit();
-      }
-
-      const finalBatch = writeBatch(db);
-      childRefs.forEach((recordRef) => finalBatch.delete(recordRef));
-      finalBatch.delete(patientRef);
-      await finalBatch.commit();
-
-      await Promise.allSettled(reportPaths.map((storagePath) => deleteObject(ref(files, storagePath))));
-      setSelectedId(null);
-      setShowEdit(false);
-      setDeleteTarget(null);
-      setDeleteConfirmation("");
-      setVisits([]);
-      setPrescriptions([]);
-      setVaccinations([]);
-      setPregnancyRecords([]);
-      setGrowthRecords([]);
-      setReports([]);
-      setInvoices([]);
-      setLabOrders([]);
-      if (lastRegistered?.patient.id === deleteTarget.id) setLastRegistered(null);
-      setMessage(`Patient ${patientNumber} and linked clinical records were deleted. Billing records were retained for audit.`);
+      await patientLifecycleRequest("archive", archiveTarget, archiveReason.trim());
+      clearSelectedPatientData();
+      setArchiveTarget(null);
+      setArchiveConfirmation("");
+      setArchiveReason("");
+      setMessage(`Patient ${patientNumber} was archived safely. Clinical and billing history remain intact and can be restored by an administrator.`);
     } catch (error) {
-      console.error("Admin patient deletion failed", error);
-      setMessage("Patient deletion failed. No billing records were changed. Please try again.");
+      console.error("Admin patient archive failed", error);
+      setMessage(error instanceof Error ? error.message : "Patient archiving failed. Please try again.");
     } finally {
-      setDeleting(false);
+      setLifecycleActionId(null);
+    }
+  }
+
+  async function restorePatient(patient: Patient) {
+    if (profile.role !== "admin") return;
+    setLifecycleActionId(patient.id);
+    setMessage("");
+    try {
+      await patientLifecycleRequest("restore", patient, "Restored from the archived patient register");
+      setPatientView("active");
+      selectPatient(patient.id);
+      setMessage(`Patient ${patient.patientNumber || patient.id} was restored to the active register.`);
+    } catch (error) {
+      console.error("Admin patient restore failed", error);
+      setMessage(error instanceof Error ? error.message : "Patient restoration failed. Please try again.");
+    } finally {
+      setLifecycleActionId(null);
     }
   }
 
   async function saveRecord(event: FormEvent<HTMLFormElement>, collectionName: string, payload: Record<string, unknown>) {
     event.preventDefault();
     if (!selectedPatient) return;
-    if (!canEditClinical) {
-      setMessage("Clinical records are read-only for reception staff.");
+    if (!canModifySelectedPatient) {
+      setMessage(selectedPatient.archived === true ? "Restore this patient before adding clinical records." : "Clinical records are read-only for reception staff.");
       return;
     }
     const recordForm = event.currentTarget;
@@ -602,11 +654,13 @@ function PatientRegister() {
     const safeBaseName = sourceBaseName.replace(/[^a-zA-Z0-9_-]/g, "-") || "report";
     const safeName = `${safeBaseName}.${extension}`;
     const storagePath = "reports/" + selectedPatient.id + "/" + Date.now() + "-" + safeName;
+    let uploaded = false;
     try {
       await uploadBytes(ref(files, storagePath), file, {
         contentType: file.type,
         customMetadata: { patientId: selectedPatient.id, uploadedBy: user.uid },
       });
+      uploaded = true;
       await addDoc(collection(db, "patients", selectedPatient.id, "reports"), {
         fileName: file.name,
         storagePath,
@@ -621,8 +675,13 @@ function PatientRegister() {
       });
       formElement.reset();
       setMessage("Medical report uploaded securely.");
-    } catch {
-      setMessage("Unable to upload this report. Please check access and try again.");
+    } catch (uploadError) {
+      console.error("Unable to attach the medical report.", uploadError);
+      if (uploaded) {
+        setMessage("The confirmation was interrupted after the report upload. The file has been retained securely; refresh this patient record before retrying so the clinic can reconcile it without creating a duplicate.");
+      } else {
+        setMessage("Unable to upload this report. Please check access and try again.");
+      }
     } finally {
       setUploading(false);
     }
@@ -674,61 +733,27 @@ function PatientRegister() {
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-[#233A59]">Patient records</h1>
           <p className="mt-3 text-slate-600">{canEditClinical ? "Private clinical records for registered patients." : "Patient registration, contact, billing and lab coordination."}</p>
         </div>
-        <button onClick={() => { setShowForm((value) => !value); setLastRegistered(null); }} className="inline-flex items-center gap-2 rounded-xl bg-[#233A59] px-5 py-3 text-sm font-bold text-white">
-          <Plus size={18} /> Register patient
-        </button>
+        <Link href="/admin/reception" className="inline-flex items-center gap-2 rounded-xl bg-[#233A59] px-5 py-3 text-sm font-bold text-white">
+          <ClipboardPlus size={18} /> Express registration
+        </Link>
       </div>
 
       {message && <p className="mt-5 rounded-xl bg-blue-50 px-4 py-3 text-sm font-medium text-blue-800">{message}</p>}
-      {lastRegistered && (
-        <ReceptionPayment
-          patient={lastRegistered.patient}
-          invoice={lastRegistered.invoice}
-          consultationLabel={lastRegistered.consultationLabel}
-        />
-      )}
-
-      {showForm && (
-        <form onSubmit={addPatient} className={cardClass + " fixed inset-0 z-[75] grid content-start gap-4 overflow-y-auto rounded-none p-4 pb-28 lg:static lg:mt-6 lg:grid-cols-2 lg:rounded-3xl lg:p-6"}>
-          <div className="flex items-center justify-between sm:col-span-2">
-            <div><p className="text-xs font-bold uppercase tracking-widest text-[#A8864A]">Registration</p><h2 className="mt-1 text-xl font-bold text-[#233A59]">New patient</h2></div>
-            <button type="button" onClick={() => setShowForm(false)} aria-label="Close registration"><X size={20} /></button>
-          </div>
-          <label className={labelClass}>Full name<input name="fullName" required minLength={2} maxLength={100} className={inputClass} /></label>
-          <label className={labelClass}>Mobile number<input name="phone" type="tel" required minLength={10} maxLength={20} className={inputClass} /></label>
-          <label className={labelClass}>Date of birth<input name="dateOfBirth" type="date" required className={inputClass} /></label>
-          <label className={labelClass}>Gender<select name="gender" required defaultValue="" className={inputClass}><option value="" disabled>Select</option><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option></select></label>
-          <label className={labelClass}>Case category<select value={caseType} onChange={(event) => { setCaseType(event.target.value as CaseType); setSpecialty(""); }} className={inputClass}><option value="general">General case · ₹250</option><option value="specialist">Specialist case · ₹500</option></select></label>
-          {caseType === "specialist" ? (
-            <label className={labelClass}>Specialist department<select required value={specialty} onChange={(event) => setSpecialty(event.target.value as Specialty)} className={inputClass}><option value="" disabled>Select department</option><option value="pediatrics">Pediatrics · Dr. Lt Col Shafi Ahamad</option><option value="obg">Obstetrics & Gynaecology · Dr. Shaik Reshma</option></select></label>
-          ) : (
-            <label className={labelClass}>Consulting doctor<select required value={generalDoctor} onChange={(event) => setGeneralDoctor(event.target.value)} className={inputClass}><option value="" disabled>Select doctor</option><option>Dr. Lt Col Shafi Ahamad</option><option>Dr. Shaik Reshma</option></select></label>
-          )}
-          <div className="sm:col-span-2 flex flex-col gap-3 rounded-2xl bg-blue-50 p-4 ring-1 ring-blue-100 sm:flex-row sm:items-center sm:justify-between">
-            <div><p className="text-xs font-bold uppercase tracking-wider text-blue-700">Consultation charge</p><p className="mt-1 text-sm font-semibold text-slate-700">{caseType === "general" ? "General consultation" : specialty === "pediatrics" ? "Pediatric specialist consultation" : specialty === "obg" ? "OBG specialist consultation" : "Select the specialist department"}</p></div>
-            <strong className="text-2xl text-[#233A59]">{caseType === "general" ? "₹250" : "₹500"}</strong>
-          </div>
-          <label className={labelClass + " sm:col-span-2"}>Address<textarea name="address" rows={2} required maxLength={300} className={inputClass} /></label>
-          <label className={labelClass}>Known allergies<textarea name="allergies" rows={3} maxLength={500} className={inputClass} /></label>
-          <label className={labelClass}>Medical history<textarea name="medicalHistory" rows={3} maxLength={1000} className={inputClass} /></label>
-          <div className="flex gap-3 sm:col-span-2"><SaveButton saving={saving} label="Register & continue to payment" /><button type="button" onClick={() => setShowForm(false)} className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold text-slate-700">Cancel</button></div>
-        </form>
-      )}
-
-      {deleteTarget && profile.role === "admin" && (
+      {archiveTarget && profile.role === "admin" && (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/65 p-4 backdrop-blur-sm">
-          <form onSubmit={(event) => { event.preventDefault(); void deletePatientPermanently(); }} role="dialog" aria-modal="true" aria-labelledby="delete-patient-title" className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl sm:p-8">
+          <form onSubmit={(event) => { event.preventDefault(); void archivePatient(); }} role="dialog" aria-modal="true" aria-labelledby="archive-patient-title" className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl sm:p-8">
             <div className="flex items-start justify-between gap-4">
-              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-red-50 text-red-700"><Trash2 size={23} /></div>
-              <button type="button" onClick={() => { setDeleteTarget(null); setDeleteConfirmation(""); }} aria-label="Close patient deletion" className="rounded-xl p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-amber-50 text-amber-800"><Archive size={23} /></div>
+              <button type="button" onClick={() => { setArchiveTarget(null); setArchiveConfirmation(""); setArchiveReason(""); }} aria-label="Close patient archive" className="rounded-xl p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
             </div>
-            <h2 id="delete-patient-title" className="mt-5 text-2xl font-bold text-[#233A59]">Permanently delete patient?</h2>
-            <p className="mt-3 leading-7 text-slate-600">This removes <strong>{deleteTarget.fullName}</strong> and all linked visits, prescriptions, growth measurements, vaccinations, pregnancy records, and uploaded reports. Billing, receipts, and payment audit records are retained.</p>
-            <div className="mt-5 rounded-2xl bg-red-50 p-4 text-sm text-red-900 ring-1 ring-red-100">Only an administrator can complete this action. It cannot be undone.</div>
-            <label className={labelClass + " mt-5 block"}>Type <strong>{deleteTarget.patientNumber || deleteTarget.id}</strong> to confirm<input value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} autoComplete="off" className={inputClass} /></label>
+            <h2 id="archive-patient-title" className="mt-5 text-2xl font-bold text-[#233A59]">Archive this patient?</h2>
+            <p className="mt-3 leading-7 text-slate-600"><strong>{archiveTarget.fullName}</strong> will leave the active register, while all visits, prescriptions, reports, invoices and receipts remain safely retained.</p>
+            <div className="mt-5 rounded-2xl bg-amber-50 p-4 text-sm text-amber-950 ring-1 ring-amber-200">This is recoverable. An administrator can restore the record later, and both actions are recorded in the audit history.</div>
+            <label className={labelClass + " mt-5 block"}>Reason for archiving<textarea value={archiveReason} onChange={(event) => setArchiveReason(event.target.value)} required minLength={8} maxLength={300} rows={3} placeholder="For example: duplicate record created in error" className={inputClass} /></label>
+            <label className={labelClass + " mt-4 block"}>Type <strong>{archiveTarget.patientNumber || archiveTarget.id}</strong> to confirm<input value={archiveConfirmation} onChange={(event) => setArchiveConfirmation(event.target.value)} autoComplete="off" className={inputClass} /></label>
             <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-              <button type="button" onClick={() => { setDeleteTarget(null); setDeleteConfirmation(""); }} disabled={deleting} className="min-h-11 rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold text-slate-700 disabled:opacity-60">Cancel</button>
-              <button type="submit" disabled={deleting || deleteConfirmation.trim() !== (deleteTarget.patientNumber || deleteTarget.id)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-red-700 px-5 py-3 text-sm font-bold text-white hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-50">{deleting ? <LoaderCircle size={18} className="animate-spin" /> : <Trash2 size={18} />}{deleting ? "Deleting…" : "Delete patient permanently"}</button>
+              <button type="button" onClick={() => { setArchiveTarget(null); setArchiveConfirmation(""); setArchiveReason(""); }} disabled={lifecycleActionId === archiveTarget.id} className="min-h-11 rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold text-slate-700 disabled:opacity-60">Cancel</button>
+              <button type="submit" disabled={lifecycleActionId === archiveTarget.id || archiveReason.trim().length < 8 || archiveConfirmation.trim() !== (archiveTarget.patientNumber || archiveTarget.id)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-amber-700 px-5 py-3 text-sm font-bold text-white hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-50">{lifecycleActionId === archiveTarget.id ? <LoaderCircle size={18} className="animate-spin" /> : <Archive size={18} />}{lifecycleActionId === archiveTarget.id ? "Archiving…" : "Archive patient safely"}</button>
             </div>
           </form>
         </div>
@@ -736,12 +761,18 @@ function PatientRegister() {
 
       <div className="mt-7 grid gap-6 xl:grid-cols-[0.72fr_1.28fr]">
         <section className={selectedPatient ? "hidden xl:block" : "block"}>
+          {profile.role === "admin" && (
+            <div className="mb-3 grid grid-cols-2 rounded-2xl bg-slate-200/70 p-1" aria-label="Patient record status">
+              <button type="button" onClick={() => { setPatientView("active"); clearSelectedPatientData(); setVisibleCount(20); }} className={"rounded-xl px-3 py-2.5 text-sm font-bold transition " + (patientView === "active" ? "bg-white text-[#233A59] shadow-sm" : "text-slate-600")}>Active ({activePatients.length})</button>
+              <button type="button" onClick={() => { setPatientView("archived"); clearSelectedPatientData(); setVisibleCount(20); }} className={"rounded-xl px-3 py-2.5 text-sm font-bold transition " + (patientView === "archived" ? "bg-white text-amber-800 shadow-sm" : "text-slate-600")}>Archived ({archivedPatients.length})</button>
+            </div>
+          )}
           <label className="relative block"><Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={19} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, mobile or patient ID" className="w-full rounded-2xl border border-slate-200 bg-white py-3.5 pl-12 pr-4 outline-none focus:border-[#233A59]" /></label>
           <div className="performance-list mt-4 space-y-2 xl:max-h-[calc(100dvh-14rem)] xl:overflow-y-auto xl:pr-2">
             {visiblePatients.map((patient) => {
               const selected = patient.id === selectedId;
               return (
-                <button key={patient.id} type="button" onClick={() => { setSelectedId(patient.id); setActiveTab("overview"); setShowEdit(false); window.scrollTo({ top: 0, behavior: "smooth" }); }} className={"flex w-full items-center gap-3 rounded-2xl p-3.5 text-left shadow-sm ring-1 transition " + (selected ? "bg-[#233A59] text-white ring-[#233A59]" : "bg-white text-slate-700 ring-slate-200 hover:ring-[#A8864A]")}>
+                <button key={patient.id} type="button" onClick={() => { selectPatient(patient.id); window.scrollTo({ top: 0, behavior: "smooth" }); }} className={"flex w-full items-center gap-3 rounded-2xl p-3.5 text-left shadow-sm ring-1 transition " + (selected ? "bg-[#233A59] text-white ring-[#233A59]" : "bg-white text-slate-700 ring-slate-200 hover:ring-[#A8864A]")}>
                   <span className={"flex h-11 w-11 shrink-0 items-center justify-center rounded-xl " + (selected ? "bg-white/10" : "bg-blue-50 text-blue-700")}><UserRound size={20} /></span>
                   <span className="min-w-0 flex-1"><span className="block truncate font-bold">{patient.fullName}</span><span className={"mt-1 block text-xs " + (selected ? "text-slate-200" : "text-slate-500")}>{patient.patientNumber ?? "Patient"} · {patient.phone}</span></span>
                   <ChevronRight size={18} />
@@ -762,31 +793,37 @@ function PatientRegister() {
             <div className="rounded-3xl bg-white shadow-sm ring-1 ring-slate-200">
               <div className="rounded-t-3xl bg-[#233A59] p-5 text-white sm:p-8">
                 <div className="flex flex-wrap justify-between gap-5">
-                  <button type="button" onClick={() => { setSelectedId(null); setShowEdit(false); }} className="inline-flex min-h-10 w-full items-center gap-2 rounded-xl bg-white/10 px-3 text-sm font-bold text-white xl:hidden"><ChevronRight className="rotate-180" size={17} /> All patients</button>
+                  <button type="button" onClick={() => clearSelectedPatientData()} className="inline-flex min-h-10 w-full items-center gap-2 rounded-xl bg-white/10 px-3 text-sm font-bold text-white xl:hidden"><ChevronRight className="rotate-180" size={17} /> All patients</button>
                   <div><p className="text-xs font-bold uppercase tracking-[0.18em] text-[#D4B873]">{selectedPatient.patientNumber ?? "Patient profile"}</p><h2 className="mt-2 text-2xl font-bold">{selectedPatient.fullName}</h2><p className="mt-2 text-sm text-slate-200">{selectedPatient.phone} · DOB {selectedPatient.dateOfBirth}{selectedPatient.doctorName ? " · " + selectedPatient.doctorName : ""}</p></div>
                   <div className="flex items-center gap-3">
-                    {profile.role === "admin" && (
-                      <button type="button" onClick={() => { setDeleteTarget(selectedPatient); setDeleteConfirmation(""); setMessage(""); }} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-red-300/60 bg-red-950/20 px-4 py-2 text-sm font-bold text-red-100 hover:bg-red-950/40">
-                        <Trash2 size={17} /> Delete patient
+                    {profile.role === "admin" && selectedPatient.archived === true ? (
+                      <button type="button" onClick={() => void restorePatient(selectedPatient)} disabled={lifecycleActionId === selectedPatient.id} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-emerald-300/60 bg-emerald-950/20 px-4 py-2 text-sm font-bold text-emerald-100 hover:bg-emerald-950/40 disabled:opacity-60">
+                        {lifecycleActionId === selectedPatient.id ? <LoaderCircle size={17} className="animate-spin" /> : <ArchiveRestore size={17} />} Restore patient
                       </button>
-                    )}
+                    ) : profile.role === "admin" ? (
+                      <button type="button" onClick={() => { setArchiveTarget(selectedPatient); setArchiveConfirmation(""); setArchiveReason(""); setMessage(""); }} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-amber-300/60 bg-amber-950/20 px-4 py-2 text-sm font-bold text-amber-100 hover:bg-amber-950/40">
+                        <Archive size={17} /> Archive patient
+                      </button>
+                    ) : null}
                     <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10"><ShieldCheck size={27} /></div>
                   </div>
                 </div>
               </div>
-              <PatientQuickActions patient={selectedPatient} />
+              {selectedPatient.archived === true ? (
+                <div className="border-b border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-950 sm:px-7"><strong>Archived record.</strong> Daily actions and clinical editing are paused. {selectedPatient.archiveReason ? `Reason: ${selectedPatient.archiveReason}` : "Restore the patient to resume care."}</div>
+              ) : <PatientQuickActions patient={selectedPatient} />}
               <div className="sticky top-[65px] z-20 flex gap-2 overflow-x-auto border-b border-slate-200 bg-white p-2.5 shadow-sm sm:top-[69px]">
                 {tabs.map(({ key, label, icon: Icon, count }) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={"inline-flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-bold " + (activeTab === key ? "bg-[#233A59] text-white" : "text-slate-600 hover:bg-slate-100")}><Icon size={16} />{label}{typeof count === "number" && <span className="rounded-full bg-white/15 px-1.5 text-xs">{count}</span>}</button>)}
               </div>
               <div className="p-5 sm:p-7">
-                {activeTab === "overview" && <Overview canEditClinical={canEditClinical} patient={selectedPatient} showEdit={showEdit} setShowEdit={setShowEdit} editPatient={editPatient} saving={saving} />}
+                {activeTab === "overview" && <Overview canEditDemographics={canEditDemographics && canEditSelectedProfile} canEditClinical={canModifySelectedPatient} canEditProfile={canEditSelectedProfile} canViewClinical={canEditClinical} patient={selectedPatient} showEdit={showEdit} setShowEdit={setShowEdit} editPatient={editPatient} saving={saving} />}
                 {activeTab === "timeline" && <TimelinePanel items={timeline} vaccinations={vaccinations} pregnancyRecords={pregnancyRecords} />}
-                {activeTab === "visits" && <VisitsPanel canEdit={canEditClinical} records={visits} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "visits", { visitDate: text(form, "visitDate"), doctorName: text(form, "doctorName"), chiefComplaint: text(form, "chiefComplaint"), vitals: text(form, "vitals"), diagnosis: text(form, "diagnosis"), treatment: text(form, "treatment"), followUpDate: text(form, "followUpDate"), notes: text(form, "notes") }); }} />}
-                {activeTab === "prescriptions" && <PrescriptionsPanel canEdit={canEditClinical} patient={selectedPatient} records={prescriptions} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "prescriptions", { prescribedDate: text(form, "prescribedDate"), doctorName: text(form, "doctorName"), medicines: [{ name: text(form, "medicineName"), dose: text(form, "dose"), frequency: text(form, "frequency"), duration: text(form, "duration"), instructions: text(form, "instructions") }], advice: text(form, "advice") }); }} />}
-                {activeTab === "growth" && <GrowthPanel canEdit={canEditClinical} records={growthRecords} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); const weightKg = numericValue(form, "weightKg"); const heightCm = numericValue(form, "heightCm"); const headCircumferenceCm = numericValue(form, "headCircumferenceCm"); if (!weightKg && !heightCm && !headCircumferenceCm) { event.preventDefault(); setMessage("Add at least one growth measurement before saving."); return Promise.resolve(); } const bmi = weightKg && heightCm ? Number((weightKg / ((heightCm / 100) ** 2)).toFixed(1)) : null; return saveRecord(event, "growthRecords", { measuredDate: text(form, "measuredDate"), weightKg, heightCm, headCircumferenceCm, bmi, milestone: text(form, "milestone"), nutritionNotes: text(form, "nutritionNotes"), clinician: text(form, "clinician") }); }} />}
-                {activeTab === "vaccinations" && <VaccinationsPanel canEdit={canEditClinical} records={vaccinations} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "vaccinations", { vaccineName: text(form, "vaccineName"), doseNumber: text(form, "doseNumber"), administeredDate: text(form, "administeredDate"), nextDueDate: text(form, "nextDueDate"), batchNumber: text(form, "batchNumber"), manufacturer: text(form, "manufacturer"), expiryDate: text(form, "expiryDate"), route: text(form, "route"), site: text(form, "site"), administeredBy: text(form, "administeredBy"), adverseEvents: text(form, "adverseEvents"), notes: text(form, "notes") }); }} />}
-                {activeTab === "pregnancy" && <PregnancyPanel canEdit={canEditClinical} records={pregnancyRecords} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "pregnancyRecords", { recordedDate: text(form, "recordedDate"), lmpDate: text(form, "lmpDate"), eddDate: text(form, "eddDate"), gestationalWeeks: text(form, "gestationalWeeks"), bloodPressure: text(form, "bloodPressure"), weight: text(form, "weight"), fetalHeartRate: text(form, "fetalHeartRate"), nextVisitDate: text(form, "nextVisitDate"), gravida: text(form, "gravida"), para: text(form, "para"), riskLevel: text(form, "riskLevel"), riskFactors: text(form, "riskFactors"), symptoms: text(form, "symptoms"), fundalHeight: text(form, "fundalHeight"), fetalMovement: text(form, "fetalMovement"), investigations: text(form, "investigations"), carePlan: text(form, "carePlan"), notes: text(form, "notes") }); }} />}
-                {activeTab === "reports" && <ReportsPanel records={reports} uploading={uploading} actionId={reportActionId} onUpload={uploadReport} onAccess={accessReport} />}
+                {activeTab === "visits" && <VisitsPanel canEdit={canModifySelectedPatient} records={visits} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "visits", { visitDate: text(form, "visitDate"), doctorName: text(form, "doctorName"), chiefComplaint: text(form, "chiefComplaint"), vitals: text(form, "vitals"), diagnosis: text(form, "diagnosis"), treatment: text(form, "treatment"), followUpDate: text(form, "followUpDate"), notes: text(form, "notes") }); }} />}
+                {activeTab === "prescriptions" && <PrescriptionsPanel canEdit={canModifySelectedPatient} patient={selectedPatient} records={prescriptions} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "prescriptions", { prescribedDate: text(form, "prescribedDate"), doctorName: text(form, "doctorName"), medicines: [{ name: text(form, "medicineName"), dose: text(form, "dose"), frequency: text(form, "frequency"), duration: text(form, "duration"), instructions: text(form, "instructions") }], advice: text(form, "advice") }); }} />}
+                {activeTab === "growth" && <GrowthPanel canEdit={canModifySelectedPatient} records={growthRecords} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); const weightKg = numericValue(form, "weightKg"); const heightCm = numericValue(form, "heightCm"); const headCircumferenceCm = numericValue(form, "headCircumferenceCm"); if (!weightKg && !heightCm && !headCircumferenceCm) { event.preventDefault(); setMessage("Add at least one growth measurement before saving."); return Promise.resolve(); } const bmi = weightKg && heightCm ? Number((weightKg / ((heightCm / 100) ** 2)).toFixed(1)) : null; return saveRecord(event, "growthRecords", { measuredDate: text(form, "measuredDate"), weightKg, heightCm, headCircumferenceCm, bmi, milestone: text(form, "milestone"), nutritionNotes: text(form, "nutritionNotes"), clinician: text(form, "clinician") }); }} />}
+                {activeTab === "vaccinations" && <VaccinationsPanel canEdit={canModifySelectedPatient} records={vaccinations} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "vaccinations", { vaccineName: text(form, "vaccineName"), doseNumber: text(form, "doseNumber"), administeredDate: text(form, "administeredDate"), nextDueDate: text(form, "nextDueDate"), batchNumber: text(form, "batchNumber"), manufacturer: text(form, "manufacturer"), expiryDate: text(form, "expiryDate"), route: text(form, "route"), site: text(form, "site"), administeredBy: text(form, "administeredBy"), adverseEvents: text(form, "adverseEvents"), notes: text(form, "notes") }); }} />}
+                {activeTab === "pregnancy" && <PregnancyPanel canEdit={canModifySelectedPatient} records={pregnancyRecords} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "pregnancyRecords", { recordedDate: text(form, "recordedDate"), lmpDate: text(form, "lmpDate"), eddDate: text(form, "eddDate"), gestationalWeeks: text(form, "gestationalWeeks"), bloodPressure: text(form, "bloodPressure"), weight: text(form, "weight"), fetalHeartRate: text(form, "fetalHeartRate"), nextVisitDate: text(form, "nextVisitDate"), gravida: text(form, "gravida"), para: text(form, "para"), riskLevel: text(form, "riskLevel"), riskFactors: text(form, "riskFactors"), symptoms: text(form, "symptoms"), fundalHeight: text(form, "fundalHeight"), fetalMovement: text(form, "fetalMovement"), investigations: text(form, "investigations"), carePlan: text(form, "carePlan"), notes: text(form, "notes") }); }} />}
+                {activeTab === "reports" && <ReportsPanel records={reports} uploading={uploading} actionId={reportActionId} onUpload={canModifySelectedPatient ? uploadReport : undefined} onAccess={accessReport} />}
               </div>
             </div>
           )}
@@ -894,19 +931,19 @@ function BlankPrescriptionAction({ patient }: { patient: Patient }) {
   );
 }
 
-function Overview({ canEditClinical, patient, showEdit, setShowEdit, editPatient, saving }: { canEditClinical: boolean; patient: Patient; showEdit: boolean; setShowEdit: (value: boolean) => void; editPatient: (event: FormEvent<HTMLFormElement>) => Promise<void>; saving: boolean }) {
+function Overview({ canEditDemographics, canEditClinical, canEditProfile, canViewClinical, patient, showEdit, setShowEdit, editPatient, saving }: { canEditDemographics: boolean; canEditClinical: boolean; canEditProfile: boolean; canViewClinical: boolean; patient: Patient; showEdit: boolean; setShowEdit: (value: boolean) => void; editPatient: (event: FormEvent<HTMLFormElement>) => Promise<void>; saving: boolean }) {
   if (showEdit) {
     return (
       <form key={patient.id} onSubmit={editPatient} className="grid gap-4 sm:grid-cols-2">
-        <SectionHeading icon={UserRound} title="Edit patient profile" action="Keep identity and clinical background current" />
+        <SectionHeading icon={UserRound} title="Edit patient profile" action={canEditDemographics && canEditClinical ? "Keep identity and clinical background current" : canEditDemographics ? "Keep identity, contact and doctor assignment current" : "Update the assigned patient\u2019s clinical background"} />
         <span className="hidden sm:block" />
-        <label className={labelClass}>Full name<input name="fullName" required defaultValue={patient.fullName} className={inputClass} /></label>
-        <label className={labelClass}>Mobile number<input name="phone" required defaultValue={patient.phone} className={inputClass} /></label>
-        <label className={labelClass}>Date of birth<input name="dateOfBirth" type="date" required defaultValue={patient.dateOfBirth} className={inputClass} /></label>
-        <label className={labelClass}>Gender<select name="gender" defaultValue={patient.gender} className={inputClass}><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option></select></label>
-        <label className={labelClass + " sm:col-span-2"}>Consulting doctor<select name="doctorName" required defaultValue={patient.doctorName ?? ""} className={inputClass}><option value="" disabled>Select doctor</option><option>Dr. Lt Col Shafi Ahamad</option><option>Dr. Shaik Reshma</option></select></label>
-        <label className={labelClass + " sm:col-span-2"}>Address<textarea name="address" defaultValue={patient.address} rows={2} className={inputClass} /></label>
-        {canEditClinical ? <><label className={labelClass}>Known allergies<textarea name="allergies" defaultValue={patient.allergies} rows={3} className={inputClass} /></label><label className={labelClass}>Medical history<textarea name="medicalHistory" defaultValue={patient.medicalHistory} rows={3} className={inputClass} /></label></> : <div className="sm:col-span-2"><ClinicalReadOnlyNotice /></div>}
+        <label className={labelClass}>Full name<input name="fullName" required={canEditDemographics} disabled={!canEditDemographics} defaultValue={patient.fullName} className={inputClass + " disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"} /></label>
+        <label className={labelClass}>Mobile number<input name="phone" required={canEditDemographics} disabled={!canEditDemographics} defaultValue={patient.phone} className={inputClass + " disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"} /></label>
+        <label className={labelClass}>Date of birth<input name="dateOfBirth" type="date" required={canEditDemographics} disabled={!canEditDemographics} defaultValue={patient.dateOfBirth} className={inputClass + " disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"} /></label>
+        <label className={labelClass}>Gender<select name="gender" disabled={!canEditDemographics} defaultValue={patient.gender} className={inputClass + " disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"}><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option></select></label>
+        <label className={labelClass + " sm:col-span-2"}>Consulting doctor<select name="doctorName" required={canEditDemographics} disabled={!canEditDemographics} defaultValue={patient.doctorName ?? ""} className={inputClass + " disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"}><option value="" disabled>Select doctor</option><option>Dr. Lt Col Shafi Ahamad</option><option>Dr. Shaik Reshma</option></select></label>
+        <label className={labelClass + " sm:col-span-2"}>Address<textarea name="address" disabled={!canEditDemographics} defaultValue={patient.address} rows={2} className={inputClass + " disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"} /></label>
+        {canEditClinical ? <><label className={labelClass}>Known allergies<textarea name="allergies" defaultValue={patient.allergies} rows={3} className={inputClass} /></label><label className={labelClass}>Medical history<textarea name="medicalHistory" defaultValue={patient.medicalHistory} rows={3} className={inputClass} /></label></> : null}
         <div className="flex gap-3 sm:col-span-2"><SaveButton saving={saving} label="Update profile" /><button type="button" onClick={() => setShowEdit(false)} className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold">Cancel</button></div>
       </form>
     );
@@ -915,10 +952,10 @@ function Overview({ canEditClinical, patient, showEdit, setShowEdit, editPatient
   return (
     <div>
       <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <SectionHeading icon={ClipboardPlus} title="Clinical overview" action="Identity, allergies and medical background" />
+        <SectionHeading icon={ClipboardPlus} title={canViewClinical ? "Clinical overview" : "Patient overview"} action={canViewClinical ? "Identity, allergies and medical background" : "Identity and reception details"} />
         <div className="flex flex-col gap-2">
           <BlankPrescriptionAction key={patient.id + ":" + (patient.doctorName ?? "")} patient={patient} />
-          <button type="button" onClick={() => setShowEdit(true)} className="self-end rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-[#233A59]">Edit profile</button>
+          {canEditProfile && <button type="button" onClick={() => setShowEdit(true)} className="self-end rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-[#233A59]">Edit profile</button>}
         </div>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
@@ -933,8 +970,8 @@ function Overview({ canEditClinical, patient, showEdit, setShowEdit, editPatient
         />
         <Info label="Gender" value={patient.gender} />
         <Info label="Address" value={patient.address} />
-        <Info label="Known allergies" value={patient.allergies || "None recorded"} alert={Boolean(patient.allergies)} />
-        <Info label="Medical history" value={patient.medicalHistory || "No history recorded"} />
+        {canViewClinical ? <Info label="Known allergies" value={patient.allergies || "None recorded"} alert={Boolean(patient.allergies)} /> : null}
+        {canViewClinical ? <Info label="Medical history" value={patient.medicalHistory || "No history recorded"} /> : null}
       </div>
     </div>
   );
@@ -1148,17 +1185,17 @@ function PregnancyPanel({ canEdit, records, saving, onSave }: { canEdit: boolean
   );
 }
 
-function ReportsPanel({ records, uploading, actionId, onUpload, onAccess }: { records: ReportRecord[]; uploading: boolean; actionId: string | null; onUpload: (event: FormEvent<HTMLFormElement>) => Promise<void>; onAccess: (record: ReportRecord, mode: "view" | "download") => Promise<void> }) {
+function ReportsPanel({ records, uploading, actionId, onUpload, onAccess }: { records: ReportRecord[]; uploading: boolean; actionId: string | null; onUpload?: (event: FormEvent<HTMLFormElement>) => Promise<void>; onAccess: (record: ReportRecord, mode: "view" | "download") => Promise<void> }) {
   return (
     <div>
       <SectionHeading icon={FileUp} title="Medical reports" action="PDFs and images protected by staff-only Firebase access" />
-      <form onSubmit={onUpload} className="grid gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2">
+      {onUpload ? <form onSubmit={onUpload} className="grid gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2">
         <label className={labelClass}>Report category<select name="category" required defaultValue="" className={inputClass}><option value="" disabled>Select category</option><option>Lab report</option><option>Ultrasound / Imaging</option><option>Prescription / Referral</option><option>Vaccination document</option><option>Other</option></select></label>
         <label className={labelClass}>Report date<input name="reportDate" type="date" required className={inputClass} /></label>
         <label className={labelClass + " sm:col-span-2"}>Choose PDF or image<input name="reportFile" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp" required className={inputClass + " file:mr-4 file:rounded-lg file:border-0 file:bg-[#233A59] file:px-3 file:py-2 file:text-sm file:font-bold file:text-white"} /><span className="mt-2 block text-xs font-normal text-slate-500">PDF, JPEG, PNG or WebP only. Maximum 10 MB. Access is restricted to approved clinic staff.</span></label>
         <label className={labelClass + " sm:col-span-2"}>Notes<textarea name="notes" rows={2} className={inputClass} placeholder="Optional context for this report" /></label>
         <div className="sm:col-span-2"><SaveButton saving={uploading} label="Upload report securely" /></div>
-      </form>
+      </form> : <div className="rounded-2xl bg-amber-50 p-4 text-sm font-semibold text-amber-950 ring-1 ring-amber-200">Restore this patient before uploading another medical report.</div>}
       <div className="mt-5 space-y-3">
         {records.map((record) => (
           <article key={record.id} className="rounded-2xl border border-slate-200 p-4">

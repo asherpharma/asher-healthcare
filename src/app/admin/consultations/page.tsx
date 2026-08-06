@@ -2,6 +2,7 @@
 
 import { type StaffProfile, useStaff } from "@/components/admin/StaffGuard";
 import { firestore } from "@/firebase/config";
+import { fetchPatientDirectory } from "@/lib/patient-directory";
 import type { PrescriptionPdfRecord } from "@/lib/prescription-pdf";
 import {
   appointmentStatusLabel,
@@ -67,10 +68,12 @@ type Patient = {
   phone: string;
   dateOfBirth: string;
   gender: string;
+  doctorId?: string;
   doctorName?: string;
   caseType?: string;
   allergies?: string;
   medicalHistory?: string;
+  archived?: boolean;
   createdAt?: Timestamp;
 };
 
@@ -208,9 +211,14 @@ function normaliseName(value: string) {
     .replace(/\s+/g, " ");
 }
 
+function isActivePatient(patient: Patient | null | undefined): patient is Patient {
+  return Boolean(patient && patient.archived !== true);
+}
+
 function resolveAppointmentPatient(appointment: Appointment, patients: Patient[]): AppointmentPatientResolution {
+  const activePatients = patients.filter(isActivePatient);
   if (appointment.patientId) {
-    const patient = patients.find((candidate) => candidate.id === appointment.patientId);
+    const patient = activePatients.find((candidate) => candidate.id === appointment.patientId);
     return {
       patient,
       candidates: patient ? [patient] : [],
@@ -220,7 +228,7 @@ function resolveAppointmentPatient(appointment: Appointment, patients: Patient[]
 
   const appointmentPhone = normalisePhone(appointment.phone);
   const candidates = appointmentPhone
-    ? patients.filter((patient) => normalisePhone(patient.phone) === appointmentPhone)
+    ? activePatients.filter((patient) => normalisePhone(patient.phone) === appointmentPhone)
     : [];
   if (candidates.length > 1) return { candidates, status: "ambiguous" };
   if (candidates.length === 0) return { candidates, status: "missing" };
@@ -259,6 +267,20 @@ function doctorForProfile(profile: StaffProfile): DoctorName | "" {
     return profile.doctorName as DoctorName;
   }
   return "";
+}
+
+function doctorIdForName(doctorName: DoctorName | "") {
+  if (doctorName === DOCTORS[0]) return "pediatrics";
+  if (doctorName === DOCTORS[1]) return "obg";
+  return "";
+}
+
+function patientIsAssignedToDoctor(patient: Patient, doctorName: DoctorName | "") {
+  if (!doctorName) return true;
+  const assignedName = String(patient.doctorName || "").trim();
+  if (assignedName) return assignedName === doctorName;
+  const canonicalDoctorId = doctorIdForName(doctorName);
+  return Boolean(canonicalDoctorId && patient.doctorId === canonicalDoctorId);
 }
 
 function emptyMedicine(): Medicine {
@@ -313,6 +335,7 @@ function UnlinkedDoctorProfile({ profile }: { profile: StaffProfile }) {
 }
 
 function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfile; profileDoctor: DoctorName | "" }) {
+  const { user } = useStaff();
   const db = firestore!;
   const today = clinicDate();
   const [patients, setPatients] = useState<Patient[]>([]);
@@ -344,10 +367,33 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   const requestedPatientRecords = useRef(new Set<string>());
 
   useEffect(() => {
+    if (profile.role !== "admin") {
+      let active = true;
+      void fetchPatientDirectory(user)
+        .then((directory) => {
+          if (!active) return;
+          setPatients(directory as Patient[]);
+          setPatientsLoaded(true);
+        })
+        .catch((loadError) => {
+          console.error("Patient directory could not be loaded", loadError);
+          if (!active) return;
+          setError(loadError instanceof Error ? loadError.message : "Patient records could not be loaded.");
+          setPatientsLoaded(true);
+        });
+      return () => {
+        active = false;
+      };
+    }
+
     const stopPatients = onSnapshot(
       query(collection(db, "patients"), orderBy("createdAt", "desc"), limit(300)),
       (snapshot) => {
-        setPatients(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Patient));
+        setPatients(
+          snapshot.docs
+            .map((item) => ({ id: item.id, ...item.data() }) as Patient)
+            .filter(isActivePatient),
+        );
         setPatientsLoaded(true);
       },
       (loadError) => {
@@ -357,15 +403,24 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       },
     );
     return stopPatients;
-  }, [db]);
+  }, [db, profile.role, user]);
 
   useEffect(() => {
+    const canonicalDoctorId = doctorIdForName(profileDoctor);
+    const appointmentsQuery = profile.role === "doctor"
+      ? query(
+          collection(db, "appointments"),
+          where("doctorId", "==", canonicalDoctorId),
+          where("preferredDate", "==", selectedDate),
+          limit(500),
+        )
+      : query(
+          collection(db, "appointments"),
+          where("preferredDate", "==", selectedDate),
+          limit(500),
+        );
     const stopAppointments = onSnapshot(
-      query(
-        collection(db, "appointments"),
-        where("preferredDate", "==", selectedDate),
-        limit(500),
-      ),
+      appointmentsQuery,
       (snapshot) => {
         setAppointments(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Appointment));
         setAppointmentsLoaded(true);
@@ -377,9 +432,10 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       },
     );
     return stopAppointments;
-  }, [db, selectedDate]);
+  }, [db, profile.role, profileDoctor, selectedDate]);
 
   useEffect(() => {
+    if (profile.role !== "admin") return;
     const loadedIds = new Set(patients.map((patient) => patient.id));
     const missingIds = Array.from(new Set(
       appointments.map((appointment) => appointment.patientId).filter((value): value is string => Boolean(value)),
@@ -390,7 +446,9 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
     let active = true;
     void Promise.all(missingIds.map(async (patientId) => {
       const snapshot = await getDoc(doc(db, "patients", patientId));
-      return snapshot.exists() ? ({ id: snapshot.id, ...snapshot.data() } as Patient) : null;
+      if (!snapshot.exists()) return null;
+      const patient = { id: snapshot.id, ...snapshot.data() } as Patient;
+      return isActivePatient(patient) ? patient : null;
     }))
       .then((records) => {
         if (!active) return;
@@ -409,7 +467,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
     return () => {
       active = false;
     };
-  }, [appointments, db, patients]);
+  }, [appointments, db, patients, profile.role]);
 
   useEffect(() => {
     if (!patientsLoaded || !appointmentsLoaded || deepLinkedPatientHandled.current) return;
@@ -421,7 +479,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       ? appointments.find((appointment) => appointment.id === requestedAppointmentId)
       : undefined;
     const requestedPatient = requestedPatientId
-      ? patients.find((patient) => patient.id === requestedPatientId)
+      ? patients.find((patient) => patient.id === requestedPatientId && isActivePatient(patient))
       : undefined;
     const resolution = deepLinkedAppointment
       ? resolveAppointmentPatient(deepLinkedAppointment, patients)
@@ -448,6 +506,8 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
                 ? "The appointment name does not match the chart using this phone number. Confirm the correct chart before starting."
                 : "No patient chart could be safely linked to this appointment. Choose the correct chart or register the patient first.",
           );
+        } else if (requestedPatientId) {
+          setError("This patient chart is archived or unavailable. Restore it from the patient register before starting a consultation.");
         }
         return;
       }
@@ -475,36 +535,107 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   useEffect(() => {
     if (!selectedPatientId) return;
     const patientRef = doc(db, "patients", selectedPatientId);
+    let accessRevoked = false;
+    const clearSelectedChart = (message: string) => {
+      if (accessRevoked) return;
+      accessRevoked = true;
+      setSelectedPatientId("");
+      setSelectedAppointmentId("");
+      setConfirmedAppointmentPatient(null);
+      setVisits([]);
+      setPrescriptions([]);
+      setReports([]);
+      setHistoryLoading(false);
+      setMedicines([emptyMedicine()]);
+      setLabTests([]);
+      setCustomTest("");
+      setSavedPrescription(null);
+      setDocumentAction(null);
+      setNotice("");
+      setError(message);
+    };
+    const stopPatient = profile.role === "doctor"
+      ? onSnapshot(
+          patientRef,
+          (snapshot) => {
+            if (!snapshot.exists()) {
+              clearSelectedChart("This patient chart is no longer available. Clinical details have been cleared.");
+              return;
+            }
+            const patient = { id: snapshot.id, ...snapshot.data() } as Patient;
+            if (patient.archived === true || !patientIsAssignedToDoctor(patient, profileDoctor)) {
+              clearSelectedChart("This patient chart was archived or reassigned. Clinical details have been cleared immediately.");
+              return;
+            }
+            setPatients((current) => current.map((entry) => entry.id === patient.id ? patient : entry));
+          },
+          (loadError) => {
+            console.error("Assigned patient clinical profile could not be loaded", loadError);
+            clearSelectedChart("Access to this patient chart changed. Clinical details have been cleared immediately.");
+          },
+        )
+      : () => undefined;
     const stopVisits = onSnapshot(
       query(collection(patientRef, "visits"), orderBy("createdAt", "desc"), limit(20)),
       (snapshot) => {
         setVisits(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Visit));
         setHistoryLoading(false);
       },
-      () => {
-        setError("Previous visit history could not be loaded.");
-        setHistoryLoading(false);
+      (loadError) => {
+        console.error("Previous visit history could not be loaded", loadError);
+        if (profile.role === "doctor") {
+          clearSelectedChart("Access to this patient chart changed. Clinical details have been cleared immediately.");
+        } else {
+          setError("Previous visit history could not be loaded.");
+          setHistoryLoading(false);
+        }
       },
     );
     const stopPrescriptions = onSnapshot(
       query(collection(patientRef, "prescriptions"), orderBy("createdAt", "desc"), limit(20)),
       (snapshot) => setPrescriptions(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Prescription)),
+      (loadError) => {
+        console.error("Prescription history could not be loaded", loadError);
+        if (profile.role === "doctor") clearSelectedChart("Access to this patient chart changed. Clinical details have been cleared immediately.");
+      },
     );
     const stopReports = onSnapshot(
       query(collection(patientRef, "reports"), orderBy("createdAt", "desc"), limit(20)),
       (snapshot) => setReports(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Report)),
+      (loadError) => {
+        console.error("Report history could not be loaded", loadError);
+        if (profile.role === "doctor") clearSelectedChart("Access to this patient chart changed. Clinical details have been cleared immediately.");
+      },
     );
     return () => {
+      stopPatient();
       stopVisits();
       stopPrescriptions();
       stopReports();
     };
-  }, [db, selectedPatientId]);
+  }, [db, profile.role, profileDoctor, selectedPatientId]);
 
   const selectedPatient = useMemo(
-    () => patients.find((patient) => patient.id === selectedPatientId) ?? null,
+    () => patients.find((patient) => patient.id === selectedPatientId && isActivePatient(patient)) ?? null,
     [patients, selectedPatientId],
   );
+
+  useEffect(() => {
+    if (!selectedPatientId || !patientsLoaded) return;
+    if (patients.some((patient) => patient.id === selectedPatientId && isActivePatient(patient))) return;
+    const timer = window.setTimeout(() => {
+      setSelectedPatientId("");
+      setSelectedAppointmentId("");
+      setConfirmedAppointmentPatient(null);
+      setVisits([]);
+      setPrescriptions([]);
+      setReports([]);
+      setHistoryLoading(false);
+      setError("This patient chart is archived or unavailable. Restore it from the patient register before continuing.");
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [patients, patientsLoaded, selectedPatientId]);
+
   const selectedAppointment = useMemo(
     () => appointments.find((appointment) => appointment.id === selectedAppointmentId) ?? null,
     [appointments, selectedAppointmentId],
@@ -513,7 +644,8 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   const visiblePatients = useMemo(() => {
     const term = search.trim().toLowerCase();
     return patients
-      .filter((patient) => !profileDoctor || patient.doctorName === profileDoctor)
+      .filter(isActivePatient)
+      .filter((patient) => patientIsAssignedToDoctor(patient, profileDoctor))
       .filter((patient) => doctorFilter === "all" || patient.doctorName === doctorFilter)
       .filter((patient) => !term || [patient.fullName, patient.phone, patient.patientNumber].some((value) => String(value || "").toLowerCase().includes(term)))
       .slice(0, 12);
@@ -543,24 +675,26 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
         };
       });
 
-    const queuedPatientIds = new Set(entries.map((entry) => entry.patientId).filter(Boolean));
-    patients
-      .filter((patient) => timestampDate(patient.createdAt) === selectedDate)
-      .filter((patient) => !profileDoctor || patient.doctorName === profileDoctor)
-      .filter((patient) => doctorFilter === "all" || patient.doctorName === doctorFilter)
-      .filter((patient) => !queuedPatientIds.has(patient.id))
-      .forEach((patient) => entries.push({
-        id: `patient-${patient.id}`,
-        patientId: patient.id,
-        patientName: patient.fullName,
-        phone: patient.phone,
-        doctorName: patient.doctorName || "Doctor not assigned",
-        time: "Walk-in",
-        reason: patient.caseType === "general" ? "General consultation" : "Specialist consultation",
-        status: "registered",
-        source: "reception",
-        patientLinkStatus: "explicit",
-      }));
+    if (profile.role === "admin") {
+      const queuedPatientIds = new Set(entries.map((entry) => entry.patientId).filter(Boolean));
+      patients
+        .filter(isActivePatient)
+        .filter((patient) => timestampDate(patient.createdAt) === selectedDate)
+        .filter((patient) => doctorFilter === "all" || patient.doctorName === doctorFilter)
+        .filter((patient) => !queuedPatientIds.has(patient.id))
+        .forEach((patient) => entries.push({
+          id: `patient-${patient.id}`,
+          patientId: patient.id,
+          patientName: patient.fullName,
+          phone: patient.phone,
+          doctorName: patient.doctorName || "Doctor not assigned",
+          time: "Walk-in",
+          reason: patient.caseType === "general" ? "General consultation" : "Specialist consultation",
+          status: "registered",
+          source: "reception",
+          patientLinkStatus: "explicit",
+        }));
+    }
 
     return entries.sort((left, right) => {
       const stageDifference = queueStage(left.status) - queueStage(right.status);
@@ -570,7 +704,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       if (right.queueToken) return 1;
       return String(left.time || "Walk-in").localeCompare(String(right.time || "Walk-in"));
     });
-  }, [appointments, doctorFilter, patients, profileDoctor, selectedDate]);
+  }, [appointments, doctorFilter, patients, profile.role, profileDoctor, selectedDate]);
 
   const linkingEntry = useMemo(
     () => queue.find((entry) => entry.appointmentId === linkingAppointmentId) ?? null,
@@ -581,11 +715,11 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
     if (!linkingEntry) return [];
     const appointmentPhone = normalisePhone(linkingEntry.phone);
     const exactPhoneMatches = appointmentPhone
-      ? patients.filter((patient) => normalisePhone(patient.phone) === appointmentPhone)
+      ? patients.filter((patient) => isActivePatient(patient) && normalisePhone(patient.phone) === appointmentPhone)
       : [];
     const term = linkSearch.trim().toLowerCase();
     const matches = term
-      ? patients.filter((patient) => [patient.fullName, patient.phone, patient.patientNumber]
+      ? patients.filter((patient) => isActivePatient(patient) && [patient.fullName, patient.phone, patient.patientNumber]
         .some((value) => String(value || "").toLowerCase().includes(term)))
       : exactPhoneMatches;
     const exactIds = new Set(exactPhoneMatches.map((patient) => patient.id));
@@ -607,6 +741,9 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
     }
     if (appointment.patientId && appointment.patientId !== patientId) {
       return "This appointment is already linked to a different patient chart. Refresh the queue before continuing.";
+    }
+    if (!patients.some((patient) => patient.id === patientId && isActivePatient(patient))) {
+      return "This patient chart is archived or unavailable. Restore it before starting a consultation.";
     }
     const resolution = resolveAppointmentPatient(appointment, patients);
     if (!explicitlyConfirmed && resolution.patient?.id !== patientId) {
@@ -667,6 +804,10 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   }
 
   function choosePatient(patientId: string, appointmentId = "", explicitlyConfirmed = false) {
+    if (!patients.some((patient) => patient.id === patientId && isActivePatient(patient))) {
+      setError("This patient chart is archived or unavailable. Restore it from the patient register before starting a consultation.");
+      return;
+    }
     if (appointmentId) {
       const appointment = appointments.find((candidate) => candidate.id === appointmentId);
       if (!appointment) {
@@ -714,6 +855,10 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   async function completeConsultation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedPatient) return;
+    if (!isActivePatient(selectedPatient)) {
+      setError("This patient chart has been archived. Restore it before recording clinical care.");
+      return;
+    }
     if (selectedAppointment) {
       if (!doctorCanOpenAppointment(profileDoctor, selectedAppointment)) {
         setError(`This appointment belongs to ${doctorFromAppointment(selectedAppointment.doctorId)} and cannot be completed from this doctor's workspace.`);
@@ -840,8 +985,8 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
 
       if (followUpRef) {
         batch.set(followUpRef, {
-          title: `Clinical follow-up: ${selectedPatient.fullName}`.slice(0, 120),
-          details: `Follow-up after consultation with ${doctorName}. Diagnosis: ${diagnosis}`.slice(0, 1000),
+          title: `Patient follow-up: ${selectedPatient.fullName}`.slice(0, 120),
+          details: `Contact the patient to confirm their clinic follow-up with ${doctorName} on ${followUpDate}${value("followUpTime") ? ` at ${value("followUpTime")}` : ""}.`.slice(0, 1000),
           type: "follow_up",
           priority: value("followUpPriority") || "medium",
           status: "open",

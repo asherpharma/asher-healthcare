@@ -8,12 +8,16 @@ import {
 } from "@firebase/rules-unit-testing";
 import {
   Timestamp,
+  collection,
   deleteDoc,
   doc,
   getDoc,
+  getDocs,
+  query,
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
   writeBatch,
 } from "firebase/firestore";
 
@@ -74,6 +78,29 @@ function appointment({ doctorId = "pediatrics", status = "confirmed" } = {}) {
     patientPhone: "9000000000",
     status,
     updatedAt: Timestamp.fromMillis(1_750_000_000_000),
+  };
+}
+
+function invoice({ patientId = "patient-1", invoiceNumber = "ASH-20260807-TEST01" } = {}) {
+  return {
+    invoiceNumber,
+    patientId,
+    patientName: "Rules Test Patient",
+    patientPhone: "9000000000",
+    items: [{ description: "Consultation", quantity: 1, unitPrice: 500, amount: 500 }],
+    subtotal: 500,
+    discount: 0,
+    total: 500,
+    amountPaid: 0,
+    balance: 500,
+    paymentStatus: "unpaid",
+    paymentMethod: "not_recorded",
+    paymentReference: "",
+    notes: "",
+    createdBy: staff.reception.uid,
+    createdAt: Timestamp.fromMillis(1_750_000_000_000),
+    updatedAt: Timestamp.fromMillis(1_750_000_000_000),
+    paidAt: null,
   };
 }
 
@@ -197,6 +224,25 @@ test("another doctor cannot start an appointment they do not own", async () => {
   );
 });
 
+test("doctors can read only a doctorId-constrained appointment query for their own desk", async () => {
+  await seedDocuments([
+    ["appointments/pediatrics-read", appointment({ doctorId: "pediatrics" })],
+    ["appointments/obg-read", appointment({ doctorId: "obg" })],
+  ]);
+  const database = staffDb("pediatrics");
+  await assertSucceeds(getDoc(doc(database, "appointments/pediatrics-read")));
+  await assertFails(getDoc(doc(database, "appointments/obg-read")));
+  await assertSucceeds(
+    getDocs(query(
+      collection(database, "appointments"),
+      where("doctorId", "==", "pediatrics"),
+    )),
+  );
+  await assertFails(getDocs(collection(database, "appointments")));
+  await assertSucceeds(getDocs(collection(staffDb("reception"), "appointments")));
+  await assertSucceeds(getDocs(collection(staffDb("admin"), "appointments")));
+});
+
 test("admin can manage appointments across doctors", async () => {
   await seedDocuments([
     [
@@ -239,6 +285,545 @@ test("reception cannot read a patient's clinical report", async () => {
   );
 });
 
+test("reception receives no direct patient document access and doctors see only assigned charts", async () => {
+  await seedDocuments([
+    ["patients/pediatrics-chart", { fullName: "Pediatric Patient", doctorName: "Dr. Lt Col Shafi Ahamad", archived: false }],
+    ["patients/obg-chart", { fullName: "OBG Patient", doctorName: "Dr. Shaik Reshma", archived: false }],
+  ]);
+  await assertFails(getDoc(doc(staffDb("reception"), "patients/pediatrics-chart")));
+  await assertSucceeds(getDoc(doc(staffDb("pediatrics"), "patients/pediatrics-chart")));
+  await assertFails(getDoc(doc(staffDb("pediatrics"), "patients/obg-chart")));
+  await assertSucceeds(getDoc(doc(staffDb("admin"), "patients/obg-chart")));
+
+  const assignedVisit = {
+    doctorName: "Dr. Lt Col Shafi Ahamad",
+    createdBy: staff.pediatrics.uid,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  await assertSucceeds(
+    setDoc(doc(staffDb("pediatrics"), "patients/pediatrics-chart/visits/visit-1"), assignedVisit),
+  );
+  await assertFails(
+    setDoc(doc(staffDb("pediatrics"), "patients/obg-chart/visits/visit-2"), assignedVisit),
+  );
+});
+
+test("legacy doctorId assignment is used only when canonical doctorName is empty", async () => {
+  await seedDocuments([
+    ["patients/legacy-pediatrics", { fullName: "Legacy Pediatrics", doctorId: "pediatrics", archived: false }],
+    ["patients/legacy-obg", { fullName: "Legacy OBG", doctorId: "obg", archived: false }],
+    ["patients/conflicting-assignment", {
+      fullName: "Conflicting Assignment",
+      doctorId: "pediatrics",
+      doctorName: "Dr. Shaik Reshma",
+      archived: false,
+    }],
+    ["patients/invalid-name-assignment", {
+      fullName: "Invalid Assignment",
+      doctorId: "pediatrics",
+      doctorName: 7,
+      archived: false,
+    }],
+  ]);
+  const database = staffDb("pediatrics");
+  await assertSucceeds(getDoc(doc(database, "patients/legacy-pediatrics")));
+  await assertFails(getDoc(doc(database, "patients/legacy-obg")));
+  await assertFails(getDoc(doc(database, "patients/conflicting-assignment")));
+  await assertFails(getDoc(doc(database, "patients/invalid-name-assignment")));
+});
+
+test("legacy clients cannot create patient roots directly", async () => {
+  await assertFails(
+    setDoc(doc(staffDb("reception"), "patients/legacy-client-create"), {
+      fullName: "Legacy Direct Patient",
+      createdBy: staff.reception.uid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }),
+  );
+});
+
+test("patient profile and identity reservations are writable only by protected services", async () => {
+  await seedDocuments([
+    ["patients/protected-profile", {
+      fullName: "Protected Patient",
+      phone: "+919000000000",
+      dateOfBirth: "1990-01-01",
+      gender: "female",
+      doctorId: "pediatrics",
+      doctorName: "Dr. Lt Col Shafi Ahamad",
+      address: "Bengaluru",
+      allergies: "",
+      medicalHistory: "",
+      archived: false,
+    }],
+    ["patientIdentityKeys/identity-key", {
+      patientId: "protected-profile",
+      version: 2,
+    }],
+  ]);
+
+  await assertFails(updateDoc(doc(staffDb("admin"), "patients/protected-profile"), {
+    fullName: "Changed by client",
+    updatedAt: serverTimestamp(),
+  }));
+  await assertFails(updateDoc(doc(staffDb("reception"), "patients/protected-profile"), {
+    phone: "+919111111111",
+    updatedAt: serverTimestamp(),
+  }));
+  await assertFails(updateDoc(doc(staffDb("pediatrics"), "patients/protected-profile"), {
+    allergies: "Changed by client",
+    updatedAt: serverTimestamp(),
+  }));
+  await assertFails(getDoc(doc(staffDb("admin"), "patientIdentityKeys/identity-key")));
+  await assertFails(setDoc(doc(staffDb("admin"), "patientIdentityKeys/another-key"), {
+    patientId: "protected-profile",
+    version: 2,
+  }));
+});
+
+test("reception can attach validated lab metadata but cannot attach an unrelated order", async () => {
+  await seedDocuments([
+    ["patients/lab-patient", { fullName: "Lab Patient", archived: false }],
+    ["patients/other-patient", { fullName: "Other Patient", archived: false }],
+    ["labOrders/lab-order-1", { patientId: "lab-patient", status: "processing" }],
+  ]);
+  const database = staffDb("reception");
+  const report = {
+    fileName: "Blood Report.JPG",
+    storagePath: "reports/lab-patient/1750000000000-blood-report.jpg",
+    contentType: "image/jpeg",
+    size: 2048,
+    category: "Lab report",
+    reportDate: "2026-08-06",
+    notes: "Lab order ASH-LAB-0001",
+    labOrderId: "lab-order-1",
+    createdBy: staff.reception.uid,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  await assertSucceeds(
+    setDoc(doc(database, "patients/lab-patient/reports/report-1"), report),
+  );
+  await assertFails(
+    setDoc(doc(database, "patients/other-patient/reports/report-2"), {
+      ...report,
+      storagePath: "reports/other-patient/1750000000001-blood-report.jpg",
+    }),
+  );
+});
+
+test("reception can attach the first report to a completed order but cannot replace it", async () => {
+  await seedDocuments([
+    ["patients/completed-lab-patient", { fullName: "Completed Lab Patient", archived: false }],
+    ["labOrders/completed-without-file", { patientId: "completed-lab-patient", status: "completed" }],
+    ["labOrders/completed-with-file", { patientId: "completed-lab-patient", status: "completed", reportStoragePath: "reports/completed-lab-patient/existing.pdf" }],
+  ]);
+  const report = (labOrderId, suffix) => ({
+    fileName: `result-${suffix}.pdf`,
+    storagePath: `reports/completed-lab-patient/17500000000${suffix}-result.pdf`,
+    contentType: "application/pdf",
+    size: 2048,
+    category: "Lab report",
+    reportDate: "2026-08-06",
+    notes: `Lab order ${labOrderId}`,
+    labOrderId,
+    createdBy: staff.reception.uid,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  const database = staffDb("reception");
+  const firstBatch = writeBatch(database);
+  firstBatch.set(
+    doc(database, "patients/completed-lab-patient/reports/first-report"),
+    report("completed-without-file", "02"),
+  );
+  firstBatch.update(doc(database, "labOrders/completed-without-file"), {
+    reportFileName: "result-02.pdf",
+    reportStoragePath: "reports/completed-lab-patient/1750000000002-result.pdf",
+    reportContentType: "application/pdf",
+    reportSize: 2048,
+    updatedAt: serverTimestamp(),
+  });
+  await assertSucceeds(firstBatch.commit());
+  await assertFails(
+    setDoc(
+      doc(database, "patients/completed-lab-patient/reports/replacement-report"),
+      report("completed-with-file", "03"),
+    ),
+  );
+});
+
+test("archived patients reject new clinical records for every staff role", async () => {
+  await seedDocuments([
+    ["patients/archived-clinical", { fullName: "Archived Patient", archived: true }],
+  ]);
+  const clinicalRecord = {
+    createdBy: staff.pediatrics.uid,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  await assertFails(
+    setDoc(doc(staffDb("pediatrics"), "patients/archived-clinical/visits/visit-1"), clinicalRecord),
+  );
+  await assertFails(
+    setDoc(doc(staffDb("admin"), "patients/archived-clinical/visits/visit-2"), {
+      ...clinicalRecord,
+      createdBy: staff.admin.uid,
+    }),
+  );
+});
+
+test("an appointment linked to an archived chart cannot advance", async () => {
+  await seedDocuments([
+    ["patients/archived-appointment-patient", { fullName: "Archived Appointment", archived: true }],
+    ["appointments/archived-appointment", {
+      ...appointment({ status: "checked_in" }),
+      patientId: "archived-appointment-patient",
+      queueToken: 1,
+      checkedInAt: Timestamp.fromMillis(1_750_000_100_000),
+    }],
+  ]);
+  await assertFails(
+    updateDoc(doc(staffDb("admin"), "appointments/archived-appointment"), {
+      status: "in_consultation",
+      consultationStartedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }),
+  );
+});
+
+test("new lab orders cannot be attached to an archived patient", async () => {
+  await seedDocuments([
+    ["patients/active-lab-order", { fullName: "Active Patient", archived: false }],
+    ["patients/archived-lab-order", { fullName: "Archived Patient", archived: true }],
+  ]);
+  const order = (patientId) => ({
+    orderNumber: `LAB-20260806-${patientId.slice(0, 4).toUpperCase()}`,
+    patientId,
+    patientName: "Rules Test Patient",
+    patientPhone: "9000000000",
+    tests: ["Complete Blood Count (CBC)"],
+    priority: "routine",
+    clinician: "Dr. Lt Col Shafi Ahamad",
+    notes: "",
+    status: "ordered",
+    createdBy: staff.reception.uid,
+    orderedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  const database = staffDb("reception");
+  await assertSucceeds(setDoc(doc(database, "labOrders/active-order"), order("active-lab-order")));
+  await assertFails(setDoc(doc(database, "labOrders/archived-order"), order("archived-lab-order")));
+});
+
+test("lab order history is clinician-scoped for doctors and retained for the front desk", async () => {
+  await seedDocuments([
+    ["patients/lab-pediatrics", {
+      fullName: "Pediatrics Lab Patient",
+      doctorName: "Dr. Lt Col Shafi Ahamad",
+      archived: false,
+    }],
+    ["patients/lab-pediatrics-legacy", {
+      fullName: "Legacy Pediatrics Lab Patient",
+      doctorId: "pediatrics",
+      archived: false,
+    }],
+    ["patients/lab-obg", {
+      fullName: "OBG Lab Patient",
+      doctorName: "Dr. Shaik Reshma",
+      archived: false,
+    }],
+    ["patients/lab-archived", {
+      fullName: "Archived Lab Patient",
+      doctorName: "Dr. Lt Col Shafi Ahamad",
+      archived: true,
+    }],
+    ["labOrders/pediatrics-canonical", {
+      patientId: "lab-pediatrics",
+      clinician: "Dr. Lt Col Shafi Ahamad",
+      status: "ordered",
+    }],
+    ["labOrders/pediatrics-wrong-clinician", {
+      patientId: "lab-pediatrics",
+      clinician: "Dr. Shaik Reshma",
+      status: "ordered",
+    }],
+    ["labOrders/pediatrics-legacy", {
+      patientId: "lab-pediatrics-legacy",
+      clinician: "Dr. Lt Col Shafi Ahamad",
+      status: "ordered",
+    }],
+    ["labOrders/obg-canonical", {
+      patientId: "lab-obg",
+      clinician: "Dr. Shaik Reshma",
+      status: "ordered",
+    }],
+    ["labOrders/archived-order", {
+      patientId: "lab-archived",
+      clinician: "Dr. Lt Col Shafi Ahamad",
+      status: "ordered",
+    }],
+  ]);
+
+  const pediatrics = staffDb("pediatrics");
+  await assertSucceeds(getDoc(doc(pediatrics, "labOrders/pediatrics-canonical")));
+  await assertSucceeds(getDoc(doc(pediatrics, "labOrders/pediatrics-legacy")));
+  await assertFails(getDoc(doc(pediatrics, "labOrders/pediatrics-wrong-clinician")));
+  await assertFails(getDoc(doc(pediatrics, "labOrders/obg-canonical")));
+  await assertSucceeds(getDoc(doc(pediatrics, "labOrders/archived-order")));
+  await assertSucceeds(getDocs(query(
+    collection(pediatrics, "labOrders"),
+    where("clinician", "==", "Dr. Lt Col Shafi Ahamad"),
+  )));
+  await assertFails(getDocs(collection(pediatrics, "labOrders")));
+  await assertSucceeds(getDoc(doc(staffDb("reception"), "labOrders/pediatrics-canonical")));
+  await assertSucceeds(getDoc(doc(staffDb("reception"), "labOrders/archived-order")));
+  await assertSucceeds(getDoc(doc(staffDb("admin"), "labOrders/obg-canonical")));
+  await assertSucceeds(getDoc(doc(staffDb("admin"), "labOrders/archived-order")));
+});
+
+test("doctor lab writes require an active assigned patient and canonical clinician", async () => {
+  await seedDocuments([
+    ["patients/doctor-lab-pediatrics", {
+      fullName: "Assigned Pediatrics",
+      doctorName: "Dr. Lt Col Shafi Ahamad",
+      archived: false,
+    }],
+    ["patients/doctor-lab-obg", {
+      fullName: "Assigned OBG",
+      doctorName: "Dr. Shaik Reshma",
+      archived: false,
+    }],
+    ["patients/doctor-lab-archived", {
+      fullName: "Archived Pediatrics",
+      doctorName: "Dr. Lt Col Shafi Ahamad",
+      archived: true,
+    }],
+  ]);
+  const order = (patientId, clinician) => ({
+    orderNumber: `LAB-20260807-${patientId.slice(-4).toUpperCase()}`,
+    patientId,
+    patientName: "Rules Test Patient",
+    patientPhone: "9000000000",
+    tests: ["Complete Blood Count (CBC)"],
+    priority: "routine",
+    clinician,
+    notes: "",
+    status: "ordered",
+    createdBy: staff.pediatrics.uid,
+    orderedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  const database = staffDb("pediatrics");
+  await assertSucceeds(setDoc(
+    doc(database, "labOrders/doctor-assigned-order"),
+    order("doctor-lab-pediatrics", "Dr. Lt Col Shafi Ahamad"),
+  ));
+  await assertFails(setDoc(
+    doc(database, "labOrders/doctor-wrong-patient"),
+    order("doctor-lab-obg", "Dr. Lt Col Shafi Ahamad"),
+  ));
+  await assertFails(setDoc(
+    doc(database, "labOrders/doctor-wrong-clinician"),
+    order("doctor-lab-pediatrics", "Dr. Shaik Reshma"),
+  ));
+  await assertFails(setDoc(
+    doc(database, "labOrders/doctor-archived-patient"),
+    order("doctor-lab-archived", "Dr. Lt Col Shafi Ahamad"),
+  ));
+});
+
+test("invoice creation is restricted to the protected billing service", async () => {
+  await seedDocuments([
+    ["patients/active-invoice-patient", { fullName: "Active Patient", archived: false }],
+    ["patients/archived-invoice-patient", { fullName: "Archived Patient", archived: true }],
+  ]);
+  const invoice = (patientId) => ({
+    invoiceNumber: `ASH-20260806-${patientId.slice(0, 4).toUpperCase()}`,
+    patientId,
+    patientName: "Rules Test Patient",
+    patientPhone: "9000000000",
+    items: [{ description: "Consultation", quantity: 1, unitPrice: 500, amount: 500 }],
+    subtotal: 500,
+    discount: 0,
+    total: 500,
+    amountPaid: 0,
+    balance: 500,
+    paymentStatus: "unpaid",
+    paymentMethod: "not_recorded",
+    paymentReference: "",
+    notes: "",
+    createdBy: staff.reception.uid,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    paidAt: null,
+  });
+  const database = staffDb("reception");
+  await assertFails(setDoc(doc(database, "invoices/active-invoice"), invoice("active-invoice-patient")));
+  await assertFails(setDoc(doc(database, "invoices/archived-invoice"), invoice("archived-invoice-patient")));
+  await assertFails(setDoc(doc(database, "invoices/paid-at-creation"), {
+    ...invoice("active-invoice-patient"),
+    invoiceNumber: "ASH-20260807-PAID01",
+    amountPaid: 250,
+    balance: 250,
+    paymentStatus: "partial",
+    paymentMethod: "cash",
+  }));
+});
+
+test("billing records are unavailable to doctors but remain available to admin and reception", async () => {
+  await seedDocuments([
+    ["patients/billing-patient", { fullName: "Billing Patient", archived: false }],
+    ["invoices/billing-invoice", invoice({ patientId: "billing-patient" })],
+    ["invoices/billing-invoice/payments/payment-1", {
+      invoiceId: "billing-invoice",
+      invoiceNumber: "ASH-20260807-TEST01",
+      patientId: "billing-patient",
+      patientName: "Billing Patient",
+      amount: 500,
+      method: "cash",
+      source: "manual",
+      status: "received",
+      createdBy: staff.reception.uid,
+      createdAt: Timestamp.fromMillis(1_750_000_000_000),
+    }],
+  ]);
+
+  await assertFails(getDoc(doc(staffDb("pediatrics"), "invoices/billing-invoice")));
+  await assertFails(getDoc(doc(staffDb("pediatrics"), "invoices/billing-invoice/payments/payment-1")));
+  await assertSucceeds(getDoc(doc(staffDb("reception"), "invoices/billing-invoice")));
+  await assertSucceeds(getDoc(doc(staffDb("admin"), "invoices/billing-invoice/payments/payment-1")));
+});
+
+test("client payment increases and direct ledger entries are always denied", async () => {
+  await seedDocuments([
+    ["patients/active-payment-patient", { fullName: "Active Payment", archived: false }],
+    ["patients/archived-payment-patient", { fullName: "Archived Payment", archived: true }],
+    ["invoices/active-payment-invoice", invoice({
+      patientId: "active-payment-patient",
+      invoiceNumber: "ASH-20260807-ACTIVE",
+    })],
+    ["invoices/archived-payment-invoice", invoice({
+      patientId: "archived-payment-patient",
+      invoiceNumber: "ASH-20260807-ARCHIV",
+    })],
+  ]);
+  const database = staffDb("reception");
+  const payment = (invoiceId, invoiceNumber, patientId) => ({
+    invoiceId,
+    invoiceNumber,
+    patientId,
+    patientName: "Rules Test Patient",
+    amount: 250,
+    method: "cash",
+    reference: "",
+    source: "manual",
+    status: "received",
+    createdBy: staff.reception.uid,
+    createdAt: serverTimestamp(),
+  });
+
+  const activeBatch = writeBatch(database);
+  activeBatch.update(doc(database, "invoices/active-payment-invoice"), {
+    amountPaid: 250,
+    balance: 250,
+    paymentStatus: "partial",
+    paymentMethod: "cash",
+    paymentReference: "",
+    updatedAt: serverTimestamp(),
+    paidAt: null,
+  });
+  activeBatch.set(
+    doc(database, "invoices/active-payment-invoice/payments/payment-1"),
+    payment("active-payment-invoice", "ASH-20260807-ACTIVE", "active-payment-patient"),
+  );
+  await assertFails(activeBatch.commit());
+
+  const archivedBatch = writeBatch(database);
+  archivedBatch.update(doc(database, "invoices/archived-payment-invoice"), {
+    amountPaid: 250,
+    balance: 250,
+    paymentStatus: "partial",
+    paymentMethod: "cash",
+    paymentReference: "",
+    updatedAt: serverTimestamp(),
+    paidAt: null,
+  });
+  archivedBatch.set(
+    doc(database, "invoices/archived-payment-invoice/payments/payment-1"),
+    payment("archived-payment-invoice", "ASH-20260807-ARCHIV", "archived-payment-patient"),
+  );
+  await assertFails(archivedBatch.commit());
+});
+
+test("invoice reductions, payment reversals, and billing audits require protected workflows", async () => {
+  await seedDocuments([
+    ["patients/reversal-patient", { fullName: "Reversal Patient", archived: false }],
+    ["invoices/reversal-invoice", {
+      ...invoice({ patientId: "reversal-patient", invoiceNumber: "ASH-20260807-REVERS" }),
+      amountPaid: 250,
+      balance: 250,
+      paymentStatus: "partial",
+      paymentMethod: "cash",
+    }],
+    ["invoices/reversal-invoice/payments/payment-1", {
+      invoiceId: "reversal-invoice",
+      invoiceNumber: "ASH-20260807-REVERS",
+      patientId: "reversal-patient",
+      patientName: "Reversal Patient",
+      amount: 250,
+      method: "cash",
+      reference: "",
+      source: "manual",
+      status: "received",
+      createdBy: staff.reception.uid,
+      createdAt: Timestamp.fromMillis(1_750_000_000_000),
+    }],
+  ]);
+  await assertFails(updateDoc(doc(staffDb("admin"), "invoices/reversal-invoice"), {
+    amountPaid: 0,
+    balance: 500,
+    paymentStatus: "unpaid",
+    paymentMethod: "not_recorded",
+    paymentReference: "",
+    updatedAt: serverTimestamp(),
+    paidAt: null,
+  }));
+  await assertFails(updateDoc(doc(staffDb("reception"), "invoices/reversal-invoice"), {
+    amountPaid: 0,
+    balance: 500,
+    paymentStatus: "unpaid",
+    paymentMethod: "not_recorded",
+    paymentReference: "",
+    updatedAt: serverTimestamp(),
+    paidAt: null,
+  }));
+  await assertFails(updateDoc(doc(staffDb("admin"), "invoices/reversal-invoice/payments/payment-1"), {
+    status: "reversed",
+    reversedAt: serverTimestamp(),
+    reversedBy: staff.admin.uid,
+    reversalReason: "Direct browser reversal",
+    auditLogId: "direct-audit",
+  }));
+  await assertFails(setDoc(doc(staffDb("admin"), "billingAuditLogs/direct-audit"), {
+    eventType: "payment.reversed",
+    invoiceId: "reversal-invoice",
+    invoiceNumber: "ASH-20260807-REVERS",
+    paymentId: "payment-1",
+    patientId: "reversal-patient",
+    patientName: "Reversal Patient",
+    amount: 250,
+    method: "cash",
+    source: "manual",
+    reason: "Direct browser reversal",
+    actorUid: staff.admin.uid,
+    actorName: "Administrator",
+    createdAt: serverTimestamp(),
+  }));
+});
+
 test("payments cannot be deleted, including by admin", async () => {
   await seedDocuments([
     ["invoices/invoice-1", { patientId: "patient-1" }],
@@ -250,6 +835,27 @@ test("payments cannot be deleted, including by admin", async () => {
   await assertFails(
     deleteDoc(doc(staffDb("admin"), "invoices/invoice-1/payments/payment-1")),
   );
+});
+
+test("invoices cannot be deleted, including by admin", async () => {
+  await seedDocuments([
+    ["patients/invoice-history-patient", { fullName: "Invoice History", archived: false }],
+    ["invoices/invoice-history", invoice({ patientId: "invoice-history-patient" })],
+  ]);
+  await assertFails(deleteDoc(doc(staffDb("admin"), "invoices/invoice-history")));
+});
+
+test("patient records and clinical history cannot be hard-deleted by admin", async () => {
+  await seedDocuments([
+    ["patients/archive-only", { fullName: "Archive Only Patient" }],
+    [
+      "patients/archive-only/visits/visit-1",
+      { diagnosis: "Private history", createdAt: Timestamp.fromMillis(1_750_000_000_000) },
+    ],
+  ]);
+  const database = staffDb("admin");
+  await assertFails(deleteDoc(doc(database, "patients/archive-only")));
+  await assertFails(deleteDoc(doc(database, "patients/archive-only/visits/visit-1")));
 });
 
 test("a slot is released only with an atomic linked cancellation", async () => {
