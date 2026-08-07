@@ -444,6 +444,7 @@ test("reception can attach the first report to a completed order but cannot repl
     reportStoragePath: "reports/completed-lab-patient/1750000000002-result.pdf",
     reportContentType: "application/pdf",
     reportSize: 2048,
+    completedAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
   await assertSucceeds(firstBatch.commit());
