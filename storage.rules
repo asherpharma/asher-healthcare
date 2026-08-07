@@ -106,6 +106,7 @@ service firebase.storage {
       // doctor assigned on the patient's Firestore profile can open it.
       allow read: if isAdmin() || isAssignedDoctor(patientId);
       allow create: if (isAdmin() || isReception() || isAssignedDoctor(patientId))
+        && resource == null
         && validReportCreate(patientId, fileName)
         && (
           !isReception()
