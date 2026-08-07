@@ -20,10 +20,6 @@ service cloud.firestore {
       return isStaff() && staffProfile().data.role == 'admin';
     }
 
-    function isClinicalStaff() {
-      return isStaff() && staffProfile().data.role in ['admin', 'doctor'];
-    }
-
     function isReception() {
       return isStaff() && staffProfile().data.role == 'reception';
     }
@@ -249,18 +245,81 @@ service cloud.firestore {
         );
     }
 
-    function validStaffRecordCreate() {
-      return isStaff()
-        && request.resource.data.createdBy == request.auth.uid
-        && request.resource.data.createdAt == request.time
-        && request.resource.data.updatedAt == request.time;
+    function validLabReportAttachment() {
+      let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+      let reportKeys = [
+        'reportFileName', 'reportStoragePath', 'reportContentType', 'reportSize'
+      ];
+      return !changedKeys.hasAny(reportKeys)
+        || (
+          !resource.data.keys().hasAny(reportKeys)
+          && changedKeys.hasAll(reportKeys)
+          && request.resource.data.keys().hasAll(reportKeys)
+          && request.resource.data.reportFileName is string
+          && request.resource.data.reportFileName.matches(
+            '^[A-Za-z0-9_-]{1,100}[.](pdf|jpg|jpeg|png|webp)$'
+          )
+          && request.resource.data.reportStoragePath is string
+          && request.resource.data.reportStoragePath.matches(
+            '^reports/' + resource.data.patientId + '/[0-9]{13}-[A-Za-z0-9._-]+[.](pdf|jpg|jpeg|png|webp)$'
+          )
+          && request.resource.data.reportContentType in [
+            'application/pdf', 'image/jpeg', 'image/png', 'image/webp'
+          ]
+          && request.resource.data.reportSize is number
+          && request.resource.data.reportSize > 0
+          && request.resource.data.reportSize < 10 * 1024 * 1024
+        );
     }
 
-    function validStaffRecordUpdate() {
-      return isStaff()
-        && request.resource.data.createdBy == resource.data.createdBy
-        && request.resource.data.createdAt == resource.data.createdAt
-        && request.resource.data.updatedAt == request.time;
+    function validClinicalReportCreate(patientId) {
+      let reportKeys = request.resource.data.keys();
+      return validClinicalCreate(patientId)
+        && reportKeys.hasAll([
+          'fileName', 'storagePath', 'contentType', 'size', 'category',
+          'reportDate', 'notes', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && reportKeys.hasOnly([
+          'fileName', 'storagePath', 'contentType', 'size', 'category',
+          'reportDate', 'notes', 'labOrderId', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.fileName is string
+        && request.resource.data.fileName.matches(
+          '^[A-Za-z0-9_-]{1,100}[.](pdf|jpg|jpeg|png|webp)$'
+        )
+        && request.resource.data.storagePath is string
+        && request.resource.data.storagePath.matches(
+          '^reports/' + patientId + '/[0-9]{13}-[A-Za-z0-9._-]+[.](pdf|jpg|jpeg|png|webp)$'
+        )
+        && request.resource.data.contentType in [
+          'application/pdf', 'image/jpeg', 'image/png', 'image/webp'
+        ]
+        && request.resource.data.size is number
+        && request.resource.data.size > 0
+        && request.resource.data.size < 10 * 1024 * 1024
+        && request.resource.data.category is string
+        && request.resource.data.category.size() > 0
+        && request.resource.data.category.size() <= 100
+        && request.resource.data.reportDate is string
+        && request.resource.data.reportDate.size() == 10
+        && request.resource.data.notes is string
+        && request.resource.data.notes.size() <= 1000
+        && (
+          !reportKeys.hasAny(['labOrderId'])
+          || (
+            request.resource.data.labOrderId is string
+            && request.resource.data.labOrderId.matches('^[A-Za-z0-9_-]{1,128}$')
+          )
+        );
+    }
+
+    function validLabCompletionTimestamp() {
+      let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+      return !changedKeys.hasAny(['completedAt'])
+        || (
+          !resource.data.keys().hasAny(['completedAt'])
+          && request.resource.data.completedAt == request.time
+        );
     }
 
     match /appointments/{appointmentId} {
@@ -479,6 +538,22 @@ service cloud.firestore {
             'reportContentType', 'reportSize', 'completedAt'
           ])
           || request.resource.data.status == 'completed'
+        )
+        && validLabReportAttachment()
+        && validLabCompletionTimestamp()
+        && (
+          !request.resource.data.keys().hasAny(['resultSummary'])
+          || (
+            request.resource.data.resultSummary is string
+            && request.resource.data.resultSummary.size() <= 5000
+          )
+        )
+        && (
+          request.resource.data.status != 'completed'
+          || (
+            request.resource.data.keys().hasAll(['completedAt'])
+            && request.resource.data.completedAt is timestamp
+          )
         )
         && request.resource.data.updatedAt == request.time;
       allow delete: if isAdmin() && patientIsActive(resource.data.patientId);
@@ -764,10 +839,11 @@ service cloud.firestore {
 
       match /reports/{reportId} {
         allow read: if canAccessPatientClinical(patientId);
-        allow create: if validClinicalCreate(patientId)
+        allow create: if validClinicalReportCreate(patientId)
           || validReceptionLabReportCreate(patientId);
-        allow update: if validClinicalUpdate(patientId);
-        allow delete: if false;
+        // The Firestore pointer and the underlying Storage object are one
+        // immutable clinical artifact. Corrections create a new version.
+        allow update, delete: if false;
       }
     }
 

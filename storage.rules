@@ -86,6 +86,24 @@ service firebase.storage {
         );
     }
 
+    function validReceptionLabOrder(patientId) {
+      let metadataKeys = request.resource.metadata.keys();
+      let labOrderId = request.resource.metadata.labOrderId;
+      let orderPath = /databases/(default)/documents/labOrders/$(labOrderId);
+      return metadataKeys.hasAll(['labOrderId'])
+        && labOrderId is string
+        && labOrderId.matches('^[A-Za-z0-9_-]{1,128}$')
+        && firestore.exists(orderPath)
+        && firestore.get(orderPath).data.patientId == patientId
+        && (
+          firestore.get(orderPath).data.status in ['ordered', 'collected', 'processing']
+          || (
+            firestore.get(orderPath).data.status == 'completed'
+            && !firestore.get(orderPath).data.keys().hasAny(['reportStoragePath'])
+          )
+        );
+    }
+
     function validReportCreate(patientId, fileName) {
       let metadataKeys = request.resource.metadata.keys();
       return patientId.matches('^[A-Za-z0-9_-]{1,128}$')
@@ -110,7 +128,7 @@ service firebase.storage {
         && validReportCreate(patientId, fileName)
         && (
           !isReception()
-          || request.resource.metadata.keys().hasAll(['labOrderId'])
+          || validReceptionLabOrder(patientId)
         );
 
       // Reports use unique object names. Prevent any role from silently

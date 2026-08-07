@@ -447,12 +447,91 @@ test("reception can attach the first report to a completed order but cannot repl
     updatedAt: serverTimestamp(),
   });
   await assertSucceeds(firstBatch.commit());
+  await assertFails(updateDoc(doc(database, "labOrders/completed-without-file"), {
+    reportStoragePath: "reports/completed-lab-patient/1750000000099-replacement.pdf",
+    updatedAt: serverTimestamp(),
+  }));
+  await assertFails(updateDoc(doc(database, "labOrders/completed-without-file"), {
+    completedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }));
   await assertFails(
     setDoc(
       doc(database, "patients/completed-lab-patient/reports/replacement-report"),
       report("completed-with-file", "03"),
     ),
   );
+});
+
+test("clinical report metadata is patient-bound and immutable", async () => {
+  await seedDocuments([
+    ["patients/report-patient", {
+      fullName: "Report Patient",
+      doctorName: "Dr. Lt Col Shafi Ahamad",
+      archived: false,
+    }],
+  ]);
+  const database = staffDb("pediatrics");
+  const report = {
+    fileName: "scan-result.pdf",
+    storagePath: "reports/report-patient/1750000000023-a1b2c3d4-scan-result.pdf",
+    contentType: "application/pdf",
+    size: 4096,
+    category: "Ultrasound / Imaging",
+    reportDate: "2026-08-07",
+    notes: "Reviewed scan",
+    createdBy: staff.pediatrics.uid,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  const reportRef = doc(database, "patients/report-patient/reports/report-secure");
+  await assertSucceeds(setDoc(reportRef, report));
+  await assertFails(setDoc(
+    doc(database, "patients/report-patient/reports/report-cross-linked"),
+    {
+      ...report,
+      storagePath: "reports/another-patient/1750000000024-a1b2c3d4-scan-result.pdf",
+    },
+  ));
+  await assertFails(updateDoc(reportRef, {
+    storagePath: "reports/report-patient/1750000000025-a1b2c3d4-replacement.pdf",
+    updatedAt: serverTimestamp(),
+  }));
+});
+
+test("lab order report metadata must be complete and bound to its patient", async () => {
+  await seedDocuments([
+    ["patients/lab-binding-patient", { fullName: "Lab Binding Patient", archived: false }],
+    ["labOrders/lab-binding-order", {
+      patientId: "lab-binding-patient",
+      clinician: "Dr. Lt Col Shafi Ahamad",
+      status: "processing",
+    }],
+  ]);
+  const orderRef = doc(staffDb("reception"), "labOrders/lab-binding-order");
+  await assertFails(updateDoc(orderRef, {
+    status: "completed",
+    reportStoragePath: "reports/another-patient/1750000000020-result.pdf",
+    updatedAt: serverTimestamp(),
+    completedAt: serverTimestamp(),
+  }));
+  await assertFails(updateDoc(orderRef, {
+    status: "completed",
+    reportStoragePath: "reports/lab-binding-patient/1750000000021-result.pdf",
+    reportFileName: "result.pdf",
+    updatedAt: serverTimestamp(),
+    completedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(updateDoc(orderRef, {
+    status: "completed",
+    resultSummary: "Verified result",
+    reportStoragePath: "reports/lab-binding-patient/1750000000022-a1b2c3d4-result.pdf",
+    reportFileName: "result.pdf",
+    reportContentType: "application/pdf",
+    reportSize: 2048,
+    updatedAt: serverTimestamp(),
+    completedAt: serverTimestamp(),
+  }));
 });
 
 test("archived patients reject new clinical records for every staff role", async () => {

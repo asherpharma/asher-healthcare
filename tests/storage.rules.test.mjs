@@ -137,6 +137,13 @@ beforeEach(async () => {
     ["patients/patient-empty-name-doctor-id", { fullName: "Empty Name Pediatric Patient", doctorName: "", doctorId: "pediatrics" }],
     ["patients/patient-name-precedence", { fullName: "Assigned by Name", doctorName: "Dr. Shaik Reshma", doctorId: "pediatrics" }],
     ["patients/patient-archived", { fullName: "Archived Patient", doctorName: "Dr. Lt Col Shafi Ahamad", archived: true }],
+    ["labOrders/lab-pediatrics", { patientId: "patient-pediatrics", status: "processing" }],
+    ["labOrders/lab-rollback", { patientId: "patient-pediatrics", status: "ordered" }],
+    ["labOrders/lab-camera-upload", { patientId: "patient-pediatrics", status: "collected" }],
+    ["labOrders/lab-archived", { patientId: "patient-archived", status: "processing" }],
+    ["labOrders/lab-completed-open", { patientId: "patient-pediatrics", status: "completed" }],
+    ["labOrders/lab-completed-attached", { patientId: "patient-pediatrics", status: "completed", reportStoragePath: "reports/patient-pediatrics/existing.pdf" }],
+    ["labOrders/lab-other-patient", { patientId: "patient-obg", status: "processing" }],
   ]);
 });
 
@@ -187,6 +194,30 @@ test("reception lab uploads accept only a safe lab-order identifier", async () =
       reportMetadata("reception", "patient-pediatrics", { labOrderId: "../other-patient" }),
     ),
   );
+});
+
+test("reception report objects require a real matching order that can accept a file", async () => {
+  const storage = staffStorage("reception");
+  await assertFails(uploadBytes(
+    reportReference(storage, "patient-pediatrics", "1750000000016-missing-order.pdf"),
+    reportBytes,
+    reportMetadata("reception", "patient-pediatrics", { labOrderId: "not-a-real-order" }),
+  ));
+  await assertFails(uploadBytes(
+    reportReference(storage, "patient-pediatrics", "1750000000017-wrong-patient.pdf"),
+    reportBytes,
+    reportMetadata("reception", "patient-pediatrics", { labOrderId: "lab-other-patient" }),
+  ));
+  await assertFails(uploadBytes(
+    reportReference(storage, "patient-pediatrics", "1750000000018-already-attached.pdf"),
+    reportBytes,
+    reportMetadata("reception", "patient-pediatrics", { labOrderId: "lab-completed-attached" }),
+  ));
+  await assertSucceeds(uploadBytes(
+    reportReference(storage, "patient-pediatrics", "1750000000019-completed-open.pdf"),
+    reportBytes,
+    reportMetadata("reception", "patient-pediatrics", { labOrderId: "lab-completed-open" }),
+  ));
 });
 
 test("non-admin staff cannot delete a newly uploaded lab report", async () => {

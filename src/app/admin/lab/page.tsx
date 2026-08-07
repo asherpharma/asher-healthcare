@@ -4,6 +4,15 @@ import { useStaff } from "@/components/admin/StaffGuard";
 import { firestore, storage } from "@/firebase/config";
 import { fetchPatientDirectory } from "@/lib/patient-directory";
 import {
+  MAX_REPORT_FILE_BYTES,
+  REPORT_FILE_ACCEPT,
+  createReportStoragePath,
+  inspectReportFile,
+  openPendingReportWindow,
+  reportStorageErrorMessage,
+  type AcceptedReport,
+} from "@/lib/report-files";
+import {
   addDoc,
   collection,
   doc,
@@ -96,48 +105,6 @@ const cardClass = "rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-
 const fieldClass = "mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-[#A8864A] focus:ring-2 focus:ring-[#A8864A]/15";
 const labelClass = "text-sm font-semibold text-slate-700";
 
-type AcceptedReport = {
-  contentType: "application/pdf" | "image/jpeg" | "image/png" | "image/webp";
-  extension: "pdf" | "jpg" | "png" | "webp";
-};
-
-function bytesStartWith(bytes: Uint8Array, signature: number[]) {
-  return signature.every((value, index) => bytes[index] === value);
-}
-
-async function inspectReportFile(file: File): Promise<AcceptedReport | null> {
-  const bytes = new Uint8Array(await file.slice(0, 12).arrayBuffer());
-  if (bytesStartWith(bytes, [0x25, 0x50, 0x44, 0x46, 0x2d])) {
-    return { contentType: "application/pdf", extension: "pdf" };
-  }
-  if (bytesStartWith(bytes, [0xff, 0xd8, 0xff])) {
-    return { contentType: "image/jpeg", extension: "jpg" };
-  }
-  if (bytesStartWith(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) {
-    return { contentType: "image/png", extension: "png" };
-  }
-  if (
-    bytesStartWith(bytes, [0x52, 0x49, 0x46, 0x46])
-    && bytesStartWith(bytes.slice(8), [0x57, 0x45, 0x42, 0x50])
-  ) {
-    return { contentType: "image/webp", extension: "webp" };
-  }
-  return null;
-}
-
-function normalizedReportName(originalName: string, extension: AcceptedReport["extension"]) {
-  const stem = originalName
-    .replace(/\.[^.]*$/, "")
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9_-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^[-_.]+|[-_.]+$/g, "")
-    .slice(0, 80)
-    .toLowerCase() || "lab-report";
-  return `${stem}.${extension}`;
-}
-
 function dateTime(value?: Timestamp) {
   if (!value?.toDate) return "—";
   return value.toDate().toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" });
@@ -147,6 +114,10 @@ function makeOrderNumber() {
   const date = new Date();
   const stamp = date.getFullYear().toString() + String(date.getMonth() + 1).padStart(2, "0") + String(date.getDate()).padStart(2, "0");
   return "LAB-" + stamp + "-" + crypto.randomUUID().slice(0, 6).toUpperCase();
+}
+
+function localDateValue(date = new Date()) {
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
 }
 
 function LabDesk() {
@@ -163,6 +134,7 @@ function LabDesk() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | LabStatus>("all");
   const [priorityFilter, setPriorityFilter] = useState<"all" | LabOrder["priority"]>("all");
+  const [patientSearch, setPatientSearch] = useState("");
   const [patientsLoaded, setPatientsLoaded] = useState(false);
   const [patientDirectoryScope, setPatientDirectoryScope] = useState("");
   const [patientId, setPatientId] = useState("");
@@ -271,6 +243,20 @@ function LabDesk() {
     return orders.filter((order) => activePatientIds.has(order.patientId));
   }, [orders, patientDirectoryAvailable, patients, patientsLoaded]);
 
+  const selectedOrderPatient = useMemo(
+    () => patients.find((patient) => patient.id === patientId) ?? null,
+    [patientId, patients],
+  );
+
+  const patientMatches = useMemo(() => {
+    const term = patientSearch.trim().toLowerCase();
+    if (!term) return patients.slice(0, 8);
+    return patients.filter((patient) => [patient.fullName, patient.phone, patient.patientNumber ?? ""]
+      .join(" ")
+      .toLowerCase()
+      .includes(term)).slice(0, 12);
+  }, [patientSearch, patients]);
+
   const stats = useMemo(() => ({
     active: accessibleOrders.filter((item) => !["completed", "cancelled"].includes(item.status)).length,
     urgent: accessibleOrders.filter((item) => item.priority === "urgent" && item.status !== "completed" && item.status !== "cancelled").length,
@@ -319,6 +305,7 @@ function LabDesk() {
         updatedAt: serverTimestamp(),
       });
       setPatientId("");
+      setPatientSearch("");
       setSelectedTests([]);
       setShowCreate(false);
       setNotice("Laboratory order created.");
@@ -364,7 +351,7 @@ function LabDesk() {
     }
     let acceptedReport: AcceptedReport | null = null;
     if (reportFile instanceof File && reportFile.size > 0) {
-      if (reportFile.size >= 10 * 1024 * 1024) {
+      if (reportFile.size >= MAX_REPORT_FILE_BYTES) {
         setError("Reports must be smaller than 10 MB.");
         return;
       }
@@ -392,8 +379,11 @@ function LabDesk() {
       if (!resultOrder.completedAt) updateValues.completedAt = serverTimestamp();
       const batch = writeBatch(db);
       if (reportFile instanceof File && reportFile.size > 0 && acceptedReport) {
-        const safeName = normalizedReportName(reportFile.name, acceptedReport.extension);
-        const storagePath = `reports/${resultOrder.patientId}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}-${safeName}`;
+        const { fileName: safeName, storagePath } = createReportStoragePath(
+          resultOrder.patientId,
+          reportFile.name,
+          acceptedReport.extension,
+        );
         await uploadBytes(ref(files, storagePath), reportFile, {
           contentType: acceptedReport.contentType,
           customMetadata: { patientId: resultOrder.patientId, uploadedBy: user.uid, labOrderId: resultOrder.id },
@@ -406,7 +396,7 @@ function LabDesk() {
           contentType: acceptedReport.contentType,
           size: reportFile.size,
           category: "Lab report",
-          reportDate: new Date().toISOString().slice(0, 10),
+          reportDate: localDateValue(),
           notes: "Lab order " + resultOrder.orderNumber,
           labOrderId: resultOrder.id,
           createdBy: user.uid,
@@ -427,7 +417,7 @@ function LabDesk() {
       if (uploadedStoragePath) {
         setError("The confirmation was interrupted after the report upload. The file has been retained securely; refresh the laboratory desk before retrying so it can be reconciled without creating a duplicate.");
       } else {
-        setError("The lab result could not be saved. Please refresh the laboratory desk and check the order before retrying.");
+        setError(reportStorageErrorMessage(resultError, "upload"));
       }
     } finally {
       setUploading(false);
@@ -440,20 +430,20 @@ function LabDesk() {
       setError("This report is no longer linked to an available active patient.");
       return;
     }
+    const preview = openPendingReportWindow();
+    if (!preview) {
+      setError("Your browser blocked the secure preview. Allow pop-ups for Asher Healthcare or use the patient record download option.");
+      return;
+    }
     setError("");
     try {
       const blob = await getBlob(ref(files, order.reportStoragePath));
       const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
+      preview.location.href = url;
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    } catch {
-      setError("Unable to open this report.");
+    } catch (reportError) {
+      preview.close();
+      setError(reportStorageErrorMessage(reportError, "open"));
     }
   }
 
@@ -465,7 +455,7 @@ function LabDesk() {
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-[#233A59] sm:text-4xl">Lab orders & results</h1>
           <p className="mt-3 text-slate-600">Track samples, test status, results, and secure reports from one desk.</p>
         </div>
-        <button type="button" disabled={!patientDirectoryAvailable} onClick={() => setShowCreate(true)} className="inline-flex items-center gap-2 rounded-xl bg-[#233A59] px-5 py-3 text-sm font-bold text-white shadow-lg shadow-[#233A59]/15 disabled:cursor-not-allowed disabled:opacity-50">
+        <button type="button" disabled={!patientDirectoryAvailable} onClick={() => { setError(""); setShowCreate(true); }} className="inline-flex items-center gap-2 rounded-xl bg-[#233A59] px-5 py-3 text-sm font-bold text-white shadow-lg shadow-[#233A59]/15 disabled:cursor-not-allowed disabled:opacity-50">
           <Plus size={18} /> New lab order
         </button>
       </div>
@@ -527,11 +517,28 @@ function LabDesk() {
       </div>
 
       {showCreate && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
-          <form onSubmit={createOrder} className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-[2rem] bg-white p-6 shadow-2xl sm:p-8">
+        <div className="fixed inset-0 z-[80] flex items-end justify-center bg-slate-950/45 p-0 backdrop-blur-sm sm:items-center sm:p-4">
+          <form onSubmit={createOrder} className="max-h-[100dvh] w-full max-w-3xl overflow-y-auto rounded-t-[2rem] bg-white p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] shadow-2xl sm:max-h-[92vh] sm:rounded-[2rem] sm:p-8">
             <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-widest text-[#A8864A]">New request</p><h2 className="mt-1 text-2xl font-bold text-[#233A59]">Create lab order</h2></div><button type="button" onClick={() => setShowCreate(false)} aria-label="Close"><X size={22} /></button></div>
+            {error && <p aria-live="assertive" className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p>}
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
-              <label className={labelClass + " sm:col-span-2"}>Registered patient<select required value={patientId} onChange={(event) => setPatientId(event.target.value)} className={fieldClass}><option value="">Select patient</option>{patients.map((patient) => <option key={patient.id} value={patient.id}>{patient.fullName} · {patient.phone}</option>)}</select></label>
+              <div className="sm:col-span-2">
+                <label className={labelClass} htmlFor="lab-patient-search">Registered patient</label>
+                {selectedOrderPatient ? (
+                  <div className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+                    <div className="min-w-0"><p className="truncate text-sm font-bold text-emerald-950">{selectedOrderPatient.fullName}</p><p className="mt-0.5 text-xs text-emerald-800">{selectedOrderPatient.patientNumber || "Patient"} · {selectedOrderPatient.phone}</p></div>
+                    <button type="button" onClick={() => { setPatientId(""); setPatientSearch(""); }} className="shrink-0 rounded-lg bg-white px-3 py-2 text-xs font-bold text-emerald-900 ring-1 ring-emerald-200">Change</button>
+                  </div>
+                ) : (
+                  <>
+                    <input id="lab-patient-search" value={patientSearch} onChange={(event) => setPatientSearch(event.target.value)} autoComplete="off" placeholder="Search name, phone, or patient ID" className={fieldClass} />
+                    <div className="mt-2 max-h-52 space-y-1 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1">
+                      {patientMatches.map((patient) => <button type="button" key={patient.id} onClick={() => { setPatientId(patient.id); setPatientSearch(""); }} className="flex min-h-12 w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition hover:bg-slate-50 focus:bg-slate-50"><span className="min-w-0"><span className="block truncate text-sm font-bold text-slate-800">{patient.fullName}</span><span className="block text-xs text-slate-500">{patient.patientNumber || "Patient"} · {patient.phone}</span></span><span className="text-xs font-bold text-[#A8864A]">Select</span></button>)}
+                      {patientMatches.length === 0 && <p className="px-3 py-4 text-center text-sm text-slate-500">No active patient found.</p>}
+                    </div>
+                  </>
+                )}
+              </div>
               <label className={labelClass}>Priority<select name="priority" className={fieldClass}><option value="routine">Routine</option><option value="urgent">Urgent</option></select></label>
               <label className={labelClass}>Ordering clinician{profile.role === "doctor" ? <input name="clinician" value={profile.doctorName ?? ""} readOnly required className={fieldClass + " cursor-not-allowed bg-slate-100 text-slate-700"} /> : <input name="clinician" placeholder="Doctor name" className={fieldClass} />}</label>
               <fieldset className="sm:col-span-2"><legend className={labelClass}>Tests</legend><div className="mt-3 grid gap-2 sm:grid-cols-2">{commonTests.map((test) => <label key={test} className="flex cursor-pointer items-center gap-3 rounded-xl border border-slate-200 p-3 text-sm font-medium text-slate-700"><input type="checkbox" checked={selectedTests.includes(test)} onChange={() => toggleTest(test)} className="h-4 w-4 accent-[#233A59]" />{test}</label>)}</div></fieldset>
@@ -539,25 +546,26 @@ function LabDesk() {
               {selectedTests.length > 0 && <div className="flex flex-wrap gap-2 sm:col-span-2">{selectedTests.map((test) => <button type="button" key={test} onClick={() => toggleTest(test)} className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-800">{test} ×</button>)}</div>}
               <label className={labelClass + " sm:col-span-2"}>Clinical notes<textarea name="notes" rows={3} className={fieldClass} /></label>
             </div>
-            <div className="mt-6 flex justify-end gap-3"><button type="button" onClick={() => setShowCreate(false)} className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold">Cancel</button><button disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-[#233A59] px-5 py-3 text-sm font-bold text-white disabled:opacity-60">{saving ? <LoaderCircle className="animate-spin" size={18} /> : <FlaskConical size={18} />} Create order</button></div>
+            <div className="sticky bottom-0 -mx-6 mt-6 flex justify-end gap-3 border-t border-slate-100 bg-white/95 px-6 pb-[env(safe-area-inset-bottom)] pt-4 backdrop-blur sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:px-0 sm:pb-0 sm:pt-0"><button type="button" onClick={() => setShowCreate(false)} className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold">Cancel</button><button disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-[#233A59] px-5 py-3 text-sm font-bold text-white disabled:opacity-60">{saving ? <LoaderCircle className="animate-spin" size={18} /> : <FlaskConical size={18} />} Create order</button></div>
           </form>
         </div>
       )}
 
       {resultOrder && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
-          <form onSubmit={saveResult} className="w-full max-w-xl rounded-[2rem] bg-white p-6 shadow-2xl sm:p-8">
+        <div className="fixed inset-0 z-[80] flex items-end justify-center bg-slate-950/45 p-0 backdrop-blur-sm sm:items-center sm:p-4">
+          <form onSubmit={saveResult} className="max-h-[100dvh] w-full max-w-xl overflow-y-auto rounded-t-[2rem] bg-white p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] shadow-2xl sm:max-h-[92vh] sm:rounded-[2rem] sm:p-8">
             <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-widest text-[#A8864A]">{resultOrder.orderNumber}</p><h2 className="mt-1 text-2xl font-bold text-[#233A59]">Record lab result</h2><p className="mt-1 text-sm text-slate-500">{resultOrder.patientName}</p></div><button type="button" onClick={() => setResultOrder(null)} aria-label="Close"><X size={22} /></button></div>
-            <label className={labelClass + " mt-6 block"}>Result summary<textarea name="resultSummary" defaultValue={resultOrder.resultSummary ?? ""} rows={5} placeholder="Key findings, values, or interpretation" className={fieldClass} /></label>
+            {error && <p aria-live="assertive" className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p>}
+            <label className={labelClass + " mt-6 block"}>Result summary<textarea name="resultSummary" defaultValue={resultOrder.resultSummary ?? ""} rows={5} maxLength={5000} placeholder="Key findings, values, or interpretation" className={fieldClass} /></label>
             {resultOrder.reportStoragePath ? (
               <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm leading-6 text-emerald-900">
                 <p className="font-bold">Secure report already attached</p>
                 <p className="mt-1">The stored file is immutable. You can update the result summary without replacing the original report.</p>
               </div>
             ) : (
-              <label className={labelClass + " mt-4 block"}>Report PDF or image<div className="mt-2 rounded-xl border border-dashed border-slate-300 p-4"><div className="flex items-center gap-3 text-sm text-slate-600"><FileUp size={20} /><input name="reportFile" type="file" accept="application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp" /></div><p className="mt-2 text-xs text-slate-500">PDF, JPEG, PNG, or WebP only. Secure storage, maximum 10 MB.</p></div></label>
+              <label className={labelClass + " mt-4 block"}>Report PDF or image<div className="mt-2 rounded-xl border border-dashed border-slate-300 p-4"><div className="flex items-center gap-3 text-sm text-slate-600"><FileUp size={20} /><input name="reportFile" type="file" accept={REPORT_FILE_ACCEPT} /></div><p className="mt-2 text-xs text-slate-500">PDF, JPEG, PNG, or WebP only. Secure storage, maximum 10 MB.</p></div></label>
             )}
-            <div className="mt-6 flex justify-end gap-3"><button type="button" onClick={() => setResultOrder(null)} className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold">Cancel</button><button disabled={uploading} className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white disabled:opacity-60">{uploading ? <LoaderCircle className="animate-spin" size={18} /> : <CheckCircle2 size={18} />} Save result</button></div>
+            <div className="sticky bottom-0 -mx-6 mt-6 flex justify-end gap-3 border-t border-slate-100 bg-white/95 px-6 pb-[env(safe-area-inset-bottom)] pt-4 backdrop-blur sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:px-0 sm:pb-0 sm:pt-0"><button type="button" onClick={() => setResultOrder(null)} className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold">Cancel</button><button disabled={uploading} className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white disabled:opacity-60">{uploading ? <LoaderCircle className="animate-spin" size={18} /> : <CheckCircle2 size={18} />} Save result</button></div>
           </form>
         </div>
       )}

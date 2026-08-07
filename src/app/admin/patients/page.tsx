@@ -5,6 +5,14 @@ import { useStaff } from "@/components/admin/StaffGuard";
 import { firestore, storage } from "@/firebase/config";
 import { fetchPatientDirectory } from "@/lib/patient-directory";
 import {
+  MAX_REPORT_FILE_BYTES,
+  REPORT_FILE_ACCEPT,
+  createReportStoragePath,
+  inspectReportFile,
+  openPendingReportWindow,
+  reportStorageErrorMessage,
+} from "@/lib/report-files";
+import {
   addDoc,
   collection,
   doc,
@@ -171,13 +179,6 @@ type TabKey = "overview" | "timeline" | "visits" | "prescriptions" | "growth" | 
 const inputClass = "mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 font-normal text-slate-900 outline-none transition focus:border-[#233A59] focus:ring-2 focus:ring-[#233A59]/10";
 const labelClass = "text-sm font-bold text-slate-700";
 const cardClass = "rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200";
-const allowedReportTypes = new Map([
-  ["application/pdf", new Set(["pdf"])],
-  ["image/jpeg", new Set(["jpg", "jpeg"])],
-  ["image/png", new Set(["png"])],
-  ["image/webp", new Set(["webp"])],
-]);
-
 function text(form: FormData, name: string) {
   return String(form.get(name) ?? "").trim();
 }
@@ -237,7 +238,7 @@ function PatientRegister() {
   const [invoices, setInvoices] = useState<InvoiceRecord[]>([]);
   const [labOrders, setLabOrders] = useState<LabRecord[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [reportActionId, setReportActionId] = useState<string | null>(null);
+  const [reportAction, setReportAction] = useState<{ id: string; mode: "view" | "download" } | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<Patient | null>(null);
   const [archiveConfirmation, setArchiveConfirmation] = useState("");
   const [archiveReason, setArchiveReason] = useState("");
@@ -256,7 +257,7 @@ function PatientRegister() {
     setReports([]);
     setInvoices([]);
     setLabOrders([]);
-    setReportActionId(null);
+    setReportAction(null);
   }, []);
 
   const clearSelectedPatientData = useCallback((reason?: string) => {
@@ -637,34 +638,40 @@ function PatientRegister() {
       setMessage("Choose a PDF or image to upload.");
       return;
     }
-    const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
-    const allowedExtensions = allowedReportTypes.get(file.type);
-    if (!allowedExtensions?.has(extension)) {
-      setMessage("Only PDF, JPEG, PNG or WebP reports are allowed.");
+    if (file.size >= MAX_REPORT_FILE_BYTES) {
+      setMessage("Reports must be smaller than 10 MB.");
       return;
     }
-    if (file.size >= 10 * 1024 * 1024) {
-      setMessage("Reports must be smaller than 10 MB.");
+    let acceptedReport;
+    try {
+      acceptedReport = await inspectReportFile(file);
+    } catch {
+      setMessage("The selected report could not be checked. Please choose it again.");
+      return;
+    }
+    if (!acceptedReport) {
+      setMessage("Only genuine PDF, JPEG, PNG or WebP reports are allowed.");
       return;
     }
 
     setUploading(true);
     setMessage("");
-    const sourceBaseName = file.name.replace(/\.[^.]+$/, "");
-    const safeBaseName = sourceBaseName.replace(/[^a-zA-Z0-9_-]/g, "-") || "report";
-    const safeName = `${safeBaseName}.${extension}`;
-    const storagePath = "reports/" + selectedPatient.id + "/" + Date.now() + "-" + safeName;
+    const { fileName: safeName, storagePath } = createReportStoragePath(
+      selectedPatient.id,
+      file.name,
+      acceptedReport.extension,
+    );
     let uploaded = false;
     try {
       await uploadBytes(ref(files, storagePath), file, {
-        contentType: file.type,
+        contentType: acceptedReport.contentType,
         customMetadata: { patientId: selectedPatient.id, uploadedBy: user.uid },
       });
       uploaded = true;
       await addDoc(collection(db, "patients", selectedPatient.id, "reports"), {
-        fileName: file.name,
+        fileName: safeName,
         storagePath,
-        contentType: file.type,
+        contentType: acceptedReport.contentType,
         size: file.size,
         category: text(form, "category"),
         reportDate: text(form, "reportDate"),
@@ -680,7 +687,7 @@ function PatientRegister() {
       if (uploaded) {
         setMessage("The confirmation was interrupted after the report upload. The file has been retained securely; refresh this patient record before retrying so the clinic can reconcile it without creating a duplicate.");
       } else {
-        setMessage("Unable to upload this report. Please check access and try again.");
+        setMessage(reportStorageErrorMessage(uploadError, "upload"));
       }
     } finally {
       setUploading(false);
@@ -688,27 +695,32 @@ function PatientRegister() {
   }
 
   async function accessReport(record: ReportRecord, mode: "view" | "download") {
-    setReportActionId(record.id);
+    const preview = mode === "view" ? openPendingReportWindow() : null;
+    if (mode === "view" && !preview) {
+      setMessage("Your browser blocked the secure preview. Allow pop-ups for Asher Healthcare or use Download.");
+      return;
+    }
+    setReportAction({ id: record.id, mode });
     setMessage("");
     try {
       const blob = await getBlob(ref(files, record.storagePath));
       const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
       if (mode === "view") {
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
+        preview!.location.href = url;
       } else {
+        const link = document.createElement("a");
+        link.href = url;
         link.download = record.fileName;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
       }
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    } catch {
-      setMessage("Unable to open this report. Please check access and try again.");
+    } catch (reportError) {
+      preview?.close();
+      setMessage(reportStorageErrorMessage(reportError, "open"));
     } finally {
-      setReportActionId(null);
+      setReportAction(null);
     }
   }
 
@@ -823,7 +835,7 @@ function PatientRegister() {
                 {activeTab === "growth" && <GrowthPanel canEdit={canModifySelectedPatient} records={growthRecords} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); const weightKg = numericValue(form, "weightKg"); const heightCm = numericValue(form, "heightCm"); const headCircumferenceCm = numericValue(form, "headCircumferenceCm"); if (!weightKg && !heightCm && !headCircumferenceCm) { event.preventDefault(); setMessage("Add at least one growth measurement before saving."); return Promise.resolve(); } const bmi = weightKg && heightCm ? Number((weightKg / ((heightCm / 100) ** 2)).toFixed(1)) : null; return saveRecord(event, "growthRecords", { measuredDate: text(form, "measuredDate"), weightKg, heightCm, headCircumferenceCm, bmi, milestone: text(form, "milestone"), nutritionNotes: text(form, "nutritionNotes"), clinician: text(form, "clinician") }); }} />}
                 {activeTab === "vaccinations" && <VaccinationsPanel canEdit={canModifySelectedPatient} records={vaccinations} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "vaccinations", { vaccineName: text(form, "vaccineName"), doseNumber: text(form, "doseNumber"), administeredDate: text(form, "administeredDate"), nextDueDate: text(form, "nextDueDate"), batchNumber: text(form, "batchNumber"), manufacturer: text(form, "manufacturer"), expiryDate: text(form, "expiryDate"), route: text(form, "route"), site: text(form, "site"), administeredBy: text(form, "administeredBy"), adverseEvents: text(form, "adverseEvents"), notes: text(form, "notes") }); }} />}
                 {activeTab === "pregnancy" && <PregnancyPanel canEdit={canModifySelectedPatient} records={pregnancyRecords} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "pregnancyRecords", { recordedDate: text(form, "recordedDate"), lmpDate: text(form, "lmpDate"), eddDate: text(form, "eddDate"), gestationalWeeks: text(form, "gestationalWeeks"), bloodPressure: text(form, "bloodPressure"), weight: text(form, "weight"), fetalHeartRate: text(form, "fetalHeartRate"), nextVisitDate: text(form, "nextVisitDate"), gravida: text(form, "gravida"), para: text(form, "para"), riskLevel: text(form, "riskLevel"), riskFactors: text(form, "riskFactors"), symptoms: text(form, "symptoms"), fundalHeight: text(form, "fundalHeight"), fetalMovement: text(form, "fetalMovement"), investigations: text(form, "investigations"), carePlan: text(form, "carePlan"), notes: text(form, "notes") }); }} />}
-                {activeTab === "reports" && <ReportsPanel records={reports} uploading={uploading} actionId={reportActionId} onUpload={canModifySelectedPatient ? uploadReport : undefined} onAccess={accessReport} />}
+                {activeTab === "reports" && <ReportsPanel records={reports} uploading={uploading} action={reportAction} onUpload={canModifySelectedPatient ? uploadReport : undefined} onAccess={accessReport} />}
               </div>
             </div>
           )}
@@ -1185,15 +1197,15 @@ function PregnancyPanel({ canEdit, records, saving, onSave }: { canEdit: boolean
   );
 }
 
-function ReportsPanel({ records, uploading, actionId, onUpload, onAccess }: { records: ReportRecord[]; uploading: boolean; actionId: string | null; onUpload?: (event: FormEvent<HTMLFormElement>) => Promise<void>; onAccess: (record: ReportRecord, mode: "view" | "download") => Promise<void> }) {
+function ReportsPanel({ records, uploading, action, onUpload, onAccess }: { records: ReportRecord[]; uploading: boolean; action: { id: string; mode: "view" | "download" } | null; onUpload?: (event: FormEvent<HTMLFormElement>) => Promise<void>; onAccess: (record: ReportRecord, mode: "view" | "download") => Promise<void> }) {
   return (
     <div>
       <SectionHeading icon={FileUp} title="Medical reports" action="PDFs and images protected by staff-only Firebase access" />
       {onUpload ? <form onSubmit={onUpload} className="grid gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2">
         <label className={labelClass}>Report category<select name="category" required defaultValue="" className={inputClass}><option value="" disabled>Select category</option><option>Lab report</option><option>Ultrasound / Imaging</option><option>Prescription / Referral</option><option>Vaccination document</option><option>Other</option></select></label>
         <label className={labelClass}>Report date<input name="reportDate" type="date" required className={inputClass} /></label>
-        <label className={labelClass + " sm:col-span-2"}>Choose PDF or image<input name="reportFile" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp" required className={inputClass + " file:mr-4 file:rounded-lg file:border-0 file:bg-[#233A59] file:px-3 file:py-2 file:text-sm file:font-bold file:text-white"} /><span className="mt-2 block text-xs font-normal text-slate-500">PDF, JPEG, PNG or WebP only. Maximum 10 MB. Access is restricted to approved clinic staff.</span></label>
-        <label className={labelClass + " sm:col-span-2"}>Notes<textarea name="notes" rows={2} className={inputClass} placeholder="Optional context for this report" /></label>
+        <label className={labelClass + " sm:col-span-2"}>Choose PDF or image<input name="reportFile" type="file" accept={REPORT_FILE_ACCEPT} required className={inputClass + " file:mr-4 file:rounded-lg file:border-0 file:bg-[#233A59] file:px-3 file:py-2 file:text-sm file:font-bold file:text-white"} /><span className="mt-2 block text-xs font-normal text-slate-500">PDF, JPEG, PNG or WebP only. Maximum 10 MB. The file contents are verified before upload.</span></label>
+        <label className={labelClass + " sm:col-span-2"}>Notes<textarea name="notes" rows={2} maxLength={1000} className={inputClass} placeholder="Optional context for this report" /></label>
         <div className="sm:col-span-2"><SaveButton saving={uploading} label="Upload report securely" /></div>
       </form> : <div className="rounded-2xl bg-amber-50 p-4 text-sm font-semibold text-amber-950 ring-1 ring-amber-200">Restore this patient before uploading another medical report.</div>}
       <div className="mt-5 space-y-3">
@@ -1205,9 +1217,9 @@ function ReportsPanel({ records, uploading, actionId, onUpload, onAccess }: { re
                 <p className="mt-1 text-sm text-slate-600">{record.category} · {record.reportDate} · {formatFileSize(record.size)}</p>
                 <p className="mt-1 text-xs text-slate-500">Uploaded {formatCreatedAt(record.createdAt)}</p>
               </div>
-              <div className="flex gap-2">
-                <button type="button" disabled={actionId === record.id} onClick={() => void onAccess(record, "view")} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">{actionId === record.id ? <LoaderCircle size={15} className="animate-spin" /> : <ExternalLink size={15} />} View</button>
-                <button type="button" disabled={actionId === record.id} onClick={() => void onAccess(record, "download")} className="inline-flex items-center gap-2 rounded-xl bg-[#233A59] px-3 py-2 text-xs font-bold text-white transition hover:bg-[#1b2d46] disabled:opacity-50"><Download size={15} /> Download</button>
+              <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
+                <button type="button" disabled={action?.id === record.id} onClick={() => void onAccess(record, "view")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">{action?.id === record.id && action.mode === "view" ? <LoaderCircle size={15} className="animate-spin" /> : <ExternalLink size={15} />} View</button>
+                <button type="button" disabled={action?.id === record.id} onClick={() => void onAccess(record, "download")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#233A59] px-3 py-2 text-xs font-bold text-white transition hover:bg-[#1b2d46] disabled:opacity-50">{action?.id === record.id && action.mode === "download" ? <LoaderCircle size={15} className="animate-spin" /> : <Download size={15} />} Download</button>
               </div>
             </div>
             {record.notes && <p className="mt-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">{record.notes}</p>}
