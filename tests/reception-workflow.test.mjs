@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { HttpError } from "../server/razorpay/http.js";
+import { queueAppointmentsForDayQuery } from "../server/reception/firestore-query.js";
 import {
   clinicClock,
   exactReceptionPatientIdentity,
@@ -14,6 +16,30 @@ import {
 } from "../server/reception/workflow.js";
 
 const now = new Date("2026-08-07T04:35:00.000Z");
+
+test("queue lookup uses the deployed descending appointment-date index", () => {
+  const query = queueAppointmentsForDayQuery("2026-08-07");
+  assert.deepEqual(query.orderBy, [{
+    field: { fieldPath: "preferredDate" },
+    direction: "DESCENDING",
+  }]);
+  assert.deepEqual(
+    query.where.fieldFilter.value,
+    { stringValue: "2026-08-07" },
+  );
+  const indexes = JSON.parse(
+    readFileSync(new URL("../firestore.indexes.json", import.meta.url), "utf8"),
+  );
+  const preferredDateOverride = indexes.fieldOverrides.find((override) => (
+    override.collectionGroup === "appointments"
+    && override.fieldPath === "preferredDate"
+  ));
+  assert.ok(preferredDateOverride);
+  assert.ok(preferredDateOverride.indexes.some((index) => (
+    index.queryScope === "COLLECTION"
+    && index.order === query.orderBy[0].direction
+  )));
+});
 
 function valid(overrides = {}) {
   return {

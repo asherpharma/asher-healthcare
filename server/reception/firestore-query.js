@@ -32,7 +32,15 @@ async function runStructuredQuery(env, structuredQuery, errorMessage) {
   );
   const result = await response.json();
   if (!response.ok || !Array.isArray(result)) {
-    console.error("Reception Firestore query failed", response.status, result?.error?.status);
+    const queryError = Array.isArray(result)
+      ? result.find((row) => row?.error)?.error
+      : result?.error;
+    console.error(
+      "Reception Firestore query failed",
+      response.status,
+      queryError?.status,
+      queryError?.message,
+    );
     throw new HttpError(503, errorMessage);
   }
   return result;
@@ -76,26 +84,37 @@ export async function patientsForDateOfBirth(env, dateOfBirth) {
   });
 }
 
+export function queueAppointmentsForDayQuery(date) {
+  return {
+    from: [{ collectionId: "appointments" }],
+    where: {
+      fieldFilter: {
+        field: { fieldPath: "preferredDate" },
+        op: "EQUAL",
+        value: { stringValue: date },
+      },
+    },
+    // The preferredDate field intentionally keeps only its descending
+    // single-field index. An explicit order prevents Firestore from
+    // implicitly requesting the disabled ascending index.
+    orderBy: [{
+      field: { fieldPath: "preferredDate" },
+      direction: "DESCENDING",
+    }],
+    select: {
+      fields: [
+        { fieldPath: "doctorId" },
+        { fieldPath: "queueToken" },
+      ],
+    },
+    limit: 1000,
+  };
+}
+
 export async function maximumQueueTokenForDay(env, doctorId, date) {
   const result = await runStructuredQuery(
     env,
-    {
-      from: [{ collectionId: "appointments" }],
-      where: {
-        fieldFilter: {
-          field: { fieldPath: "preferredDate" },
-          op: "EQUAL",
-          value: { stringValue: date },
-        },
-      },
-      select: {
-        fields: [
-          { fieldPath: "doctorId" },
-          { fieldPath: "queueToken" },
-        ],
-      },
-      limit: 1000,
-    },
+    queueAppointmentsForDayQuery(date),
     "The clinic queue could not be prepared. Please try again.",
   );
 

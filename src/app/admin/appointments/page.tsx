@@ -326,6 +326,7 @@ function AppointmentDesk() {
       : query(
           collection(firestore, "appointments"),
           where("preferredDate", "==", deskDate),
+          orderBy("preferredDate", "desc"),
         );
     return onSnapshot(
       deskQuery,
@@ -488,6 +489,7 @@ function AppointmentDesk() {
             : query(
                 collection(database, "appointments"),
                 where("preferredDate", "==", item.preferredDate),
+                orderBy("preferredDate", "desc"),
               );
           const dateSnapshot = await getDocs(migrationQuery);
           migrationSeed = dateSnapshot.docs.reduce((maximum, snapshot) => {

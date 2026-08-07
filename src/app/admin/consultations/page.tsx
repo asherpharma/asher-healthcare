@@ -417,6 +417,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       : query(
           collection(db, "appointments"),
           where("preferredDate", "==", selectedDate),
+          orderBy("preferredDate", "desc"),
           limit(500),
         );
     const stopAppointments = onSnapshot(
