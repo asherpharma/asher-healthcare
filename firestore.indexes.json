@@ -15,6 +15,14 @@
         { "fieldPath": "doctorId", "order": "ASCENDING" },
         { "fieldPath": "preferredDate", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "labOrders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "clinician", "order": "ASCENDING" },
+        { "fieldPath": "orderedAt", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [

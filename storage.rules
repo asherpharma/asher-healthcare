@@ -77,15 +77,6 @@ service firebase.storage {
         );
     }
 
-    function validOptionalLabOrderMetadata() {
-      let metadataKeys = request.resource.metadata.keys();
-      return !metadataKeys.hasAny(['labOrderId'])
-        || (
-          request.resource.metadata.labOrderId is string
-          && request.resource.metadata.labOrderId.matches('^[A-Za-z0-9_-]{1,128}$')
-        );
-    }
-
     function validReceptionLabOrder(patientId) {
       let metadataKeys = request.resource.metadata.keys();
       let labOrderId = request.resource.metadata.labOrderId;
@@ -95,16 +86,13 @@ service firebase.storage {
         && labOrderId.matches('^[A-Za-z0-9_-]{1,128}$')
         && firestore.exists(orderPath)
         && firestore.get(orderPath).data.patientId == patientId
-        && (
-          firestore.get(orderPath).data.status in ['ordered', 'collected', 'processing']
-          || (
-            firestore.get(orderPath).data.status == 'completed'
-            && !firestore.get(orderPath).data.keys().hasAny(['reportStoragePath'])
-          )
-        );
+        && firestore.get(orderPath).data.status in ['ordered', 'collected', 'processing', 'completed']
+        && !firestore.get(orderPath).data.keys().hasAny([
+          'reportFileName', 'reportStoragePath', 'reportContentType', 'reportSize'
+        ]);
     }
 
-    function validReportCreate(patientId, fileName) {
+    function validClinicalReportCreate(patientId, fileName) {
       let metadataKeys = request.resource.metadata.keys();
       return patientId.matches('^[A-Za-z0-9_-]{1,128}$')
         && patientIsActive(patientId)
@@ -113,30 +101,67 @@ service firebase.storage {
         && fileName.matches('^[0-9]{13}-[A-Za-z0-9._-]+[.](pdf|jpg|jpeg|png|webp)$')
         && request.resource.contentType.matches('^(application/pdf|image/jpeg|image/png|image/webp)$')
         && metadataKeys.hasAll(['patientId', 'uploadedBy'])
+        // Laboratory reports are never promoted by a browser. Any object with
+        // labOrderId metadata must enter pending-reports and pass the trusted
+        // finalizer's byte, linkage, and concurrency checks.
+        && metadataKeys.hasOnly(['patientId', 'uploadedBy'])
+        && request.resource.metadata.patientId == patientId
+        && request.resource.metadata.uploadedBy == request.auth.uid;
+    }
+
+    function validPendingReportCreate(patientId, fileName) {
+      let metadataKeys = request.resource.metadata.keys();
+      return patientId.matches('^[A-Za-z0-9_-]{1,128}$')
+        && patientIsActive(patientId)
+        && request.resource.size > 0
+        && request.resource.size <= 10 * 1024 * 1024
+        && fileName.matches(
+          '^[A-Za-z0-9_-]{8,100}-report[.](pdf|jpg|jpeg|png|webp)$'
+        )
+        && request.resource.contentType.matches(
+          '^(application/pdf|image/jpeg|image/png|image/webp)$'
+        )
+        && metadataKeys.hasAll(['patientId', 'uploadedBy', 'labOrderId'])
         && metadataKeys.hasOnly(['patientId', 'uploadedBy', 'labOrderId'])
         && request.resource.metadata.patientId == patientId
         && request.resource.metadata.uploadedBy == request.auth.uid
-        && validOptionalLabOrderMetadata();
+        && validReceptionLabOrder(patientId);
+    }
+
+    match /pending-reports/{patientId}/{fileName} {
+      // Temporary intake is create-only. The trusted finalizer reads, verifies,
+      // promotes, and removes this object with generation preconditions.
+      allow create: if (isAdmin() || isReception() || isAssignedDoctor(patientId))
+        && resource == null
+        && validPendingReportCreate(patientId, fileName);
+      allow read, update, delete: if false;
     }
 
     match /reports/{patientId}/{fileName} {
-      // Reception can intake a new report, but only an administrator or the
-      // doctor assigned on the patient's Firestore profile can open it.
-      allow read: if isAdmin() || isAssignedDoctor(patientId);
-      allow create: if (isAdmin() || isReception() || isAssignedDoctor(patientId))
+      // Browser reads are always denied. Authorized viewing, printing, and
+      // downloading must pass through the same-origin server endpoint so every
+      // access is checked against the current assignment and audited first.
+      allow read: if false;
+      // Only generic clinical documents may be uploaded here by a browser.
+      // Reception and every lab-linked upload use pending-reports + finalizer.
+      allow create: if (isAdmin() || isAssignedDoctor(patientId))
         && resource == null
-        && validReportCreate(patientId, fileName)
-        && (
-          !isReception()
-          || validReceptionLabOrder(patientId)
-        );
+        && validClinicalReportCreate(patientId, fileName);
 
       // Reports use unique object names. Prevent any role from silently
       // replacing the bytes or metadata of an existing clinical document.
       allow update: if false;
       // A failed client acknowledgement is ambiguous: the Firestore record may
       // already exist. Retain immutable uploads for administrator reconciliation.
-      allow delete: if isAdmin();
+      // Cleanup and retention must run through an audited trusted service. No
+      // browser role can remove the bytes behind a permanent clinical record.
+      allow delete: if false;
+    }
+
+    match /lab-reports/{patientId}/{fileName} {
+      // Finalized laboratory artifacts are a server-only namespace. Browser
+      // roles cannot create a colliding object or bypass audited delivery.
+      allow read, write: if false;
     }
 
     match /{allPaths=**} {

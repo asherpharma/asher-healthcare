@@ -78,6 +78,14 @@ function reportReference(storage, patientId, fileName = "1750000000000-report.pd
   return ref(storage, `reports/${patientId}/${fileName}`);
 }
 
+function pendingReportReference(storage, patientId, fileName = "a1b2c3d4-report.pdf") {
+  return ref(storage, `pending-reports/${patientId}/${fileName}`);
+}
+
+function labReportReference(storage, patientId, fileName = "lab-order-1.pdf") {
+  return ref(storage, `lab-reports/${patientId}/${fileName}`);
+}
+
 function reportMetadata(key, patientId, extra = {}) {
   return {
     contentType: "application/pdf",
@@ -104,6 +112,19 @@ async function seedReport(patientId, fileName = "1750000000000-report.pdf") {
       {
         contentType: "application/pdf",
         customMetadata: { patientId, uploadedBy: staff.admin.uid },
+      },
+    );
+  });
+}
+
+async function seedLabReport(patientId, fileName = "lab-order-1.pdf") {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await uploadBytes(
+      labReportReference(context.storage(), patientId, fileName),
+      reportBytes,
+      {
+        contentType: "application/pdf",
+        customMetadata: { patientId },
       },
     );
   });
@@ -143,6 +164,8 @@ beforeEach(async () => {
     ["labOrders/lab-archived", { patientId: "patient-archived", status: "processing" }],
     ["labOrders/lab-completed-open", { patientId: "patient-pediatrics", status: "completed" }],
     ["labOrders/lab-completed-attached", { patientId: "patient-pediatrics", status: "completed", reportStoragePath: "reports/patient-pediatrics/existing.pdf" }],
+    ["labOrders/lab-cancelled", { patientId: "patient-pediatrics", status: "cancelled" }],
+    ["labOrders/lab-active-partial", { patientId: "patient-pediatrics", status: "processing", reportSize: 2048 }],
     ["labOrders/lab-other-patient", { patientId: "patient-obg", status: "processing" }],
   ]);
 });
@@ -151,23 +174,38 @@ after(async () => {
   await testEnv?.cleanup();
 });
 
-test("reception can intake a bound report but cannot read, inspect, or list it", async () => {
-  const storage = staffStorage("reception");
-  const reference = reportReference(storage, "patient-pediatrics");
-  await assertSucceeds(
-    uploadBytes(
-      reference,
-      reportBytes,
-      reportMetadata("reception", "patient-pediatrics", { labOrderId: "lab-pediatrics" }),
-    ),
-  );
-
-  await assertFails(getBytes(reference));
-  await assertFails(getMetadata(reference));
-  await assertFails(listAll(ref(storage, "reports/patient-pediatrics")));
+test("no browser role can create a permanent lab-linked report object", async () => {
+  for (const [key, suffix] of [["admin", "admin"], ["reception", "reception"], ["pediatrics", "doctor"]]) {
+    await assertFails(
+      uploadBytes(
+        reportReference(staffStorage(key), "patient-pediatrics", `1750000000000-${suffix}.pdf`),
+        reportBytes,
+        reportMetadata(key, "patient-pediatrics", { labOrderId: "lab-pediatrics" }),
+      ),
+    );
+  }
 });
 
-test("reception cannot create an unlinked report object", async () => {
+test("the dedicated finalized-lab namespace is invisible and immutable to every browser role", async () => {
+  await seedLabReport("patient-pediatrics");
+  for (const key of ["admin", "reception", "pediatrics", "obg", "inactive"]) {
+    const storage = staffStorage(key);
+    const existing = labReportReference(storage, "patient-pediatrics");
+    await assertFails(getBytes(existing));
+    await assertFails(getMetadata(existing));
+    await assertFails(deleteObject(existing));
+    await assertFails(uploadBytes(
+      labReportReference(storage, "patient-pediatrics", `${key}-collision.pdf`),
+      reportBytes,
+      reportMetadata(key, "patient-pediatrics"),
+    ));
+    await assertFails(listAll(ref(storage, "lab-reports/patient-pediatrics")));
+  }
+  const anonymous = testEnv.unauthenticatedContext().storage();
+  await assertFails(getBytes(labReportReference(anonymous, "patient-pediatrics")));
+});
+
+test("reception cannot create a generic permanent clinical report", async () => {
   const storage = staffStorage("reception");
   await assertFails(
     uploadBytes(
@@ -178,65 +216,83 @@ test("reception cannot create an unlinked report object", async () => {
   );
 });
 
-test("reception lab uploads accept only a safe lab-order identifier", async () => {
-  const storage = staffStorage("reception");
+test("admin and the currently assigned doctor retain generic clinical report intake", async () => {
   await assertSucceeds(
     uploadBytes(
-      reportReference(storage, "patient-pediatrics", "1750000000001-lab.pdf"),
+      reportReference(staffStorage("admin"), "patient-pediatrics", "1750000000001-admin.pdf"),
       reportBytes,
-      reportMetadata("reception", "patient-pediatrics", { labOrderId: "lab-pediatrics" }),
+      reportMetadata("admin", "patient-pediatrics"),
+    ),
+  );
+  await assertSucceeds(
+    uploadBytes(
+      reportReference(staffStorage("pediatrics"), "patient-pediatrics", "1750000000002-doctor.pdf"),
+      reportBytes,
+      reportMetadata("pediatrics", "patient-pediatrics"),
     ),
   );
   await assertFails(
     uploadBytes(
-      reportReference(storage, "patient-pediatrics", "1750000000002-unsafe-lab.pdf"),
+      reportReference(staffStorage("pediatrics"), "patient-obg", "1750000000003-wrong-doctor.pdf"),
       reportBytes,
-      reportMetadata("reception", "patient-pediatrics", { labOrderId: "../other-patient" }),
+      reportMetadata("pediatrics", "patient-obg"),
     ),
   );
 });
 
-test("reception report objects require a real matching order that can accept a file", async () => {
+test("pending report intake is create-only for operational staff with a matching open order", async () => {
+  for (const [key, fileName] of [
+    ["admin", "admin0001-report.pdf"],
+    ["reception", "recept01-report.pdf"],
+    ["pediatrics", "doctor001-report.pdf"],
+  ]) {
+    const storage = staffStorage(key);
+    const reference = pendingReportReference(storage, "patient-pediatrics", fileName);
+    await assertSucceeds(uploadBytes(
+      reference,
+      reportBytes,
+      reportMetadata(key, "patient-pediatrics", { labOrderId: "lab-pediatrics" }),
+    ));
+    await assertFails(getBytes(reference));
+    await assertFails(getMetadata(reference));
+    await assertFails(updateMetadata(reference, { customMetadata: { changed: "true" } }));
+    await assertFails(deleteObject(reference));
+  }
+
+  await assertFails(uploadBytes(
+    pendingReportReference(staffStorage("obg"), "patient-pediatrics", "wrongdoc-report.pdf"),
+    reportBytes,
+    reportMetadata("obg", "patient-pediatrics", { labOrderId: "lab-pediatrics" }),
+  ));
+});
+
+test("pending intake rejects missing, mismatched, closed, partial, archived, and identifying paths", async () => {
   const storage = staffStorage("reception");
-  await assertFails(uploadBytes(
-    reportReference(storage, "patient-pediatrics", "1750000000016-missing-order.pdf"),
-    reportBytes,
-    reportMetadata("reception", "patient-pediatrics", { labOrderId: "not-a-real-order" }),
-  ));
-  await assertFails(uploadBytes(
-    reportReference(storage, "patient-pediatrics", "1750000000017-wrong-patient.pdf"),
-    reportBytes,
-    reportMetadata("reception", "patient-pediatrics", { labOrderId: "lab-other-patient" }),
-  ));
-  await assertFails(uploadBytes(
-    reportReference(storage, "patient-pediatrics", "1750000000018-already-attached.pdf"),
-    reportBytes,
-    reportMetadata("reception", "patient-pediatrics", { labOrderId: "lab-completed-attached" }),
-  ));
-  await assertSucceeds(uploadBytes(
-    reportReference(storage, "patient-pediatrics", "1750000000019-completed-open.pdf"),
-    reportBytes,
-    reportMetadata("reception", "patient-pediatrics", { labOrderId: "lab-completed-open" }),
-  ));
+  for (const [fileName, patientId, labOrderId] of [
+    ["missing01-report.pdf", "patient-pediatrics", "missing-order"],
+    ["otherpat-report.pdf", "patient-pediatrics", "lab-other-patient"],
+    ["cancelled-report.pdf", "patient-pediatrics", "lab-cancelled"],
+    ["attached1-report.pdf", "patient-pediatrics", "lab-completed-attached"],
+    ["partial01-report.pdf", "patient-pediatrics", "lab-active-partial"],
+    ["archived1-report.pdf", "patient-archived", "lab-archived"],
+    ["Jane-Doe-blood-test.pdf", "patient-pediatrics", "lab-pediatrics"],
+  ]) {
+    await assertFails(uploadBytes(
+      pendingReportReference(storage, patientId, fileName),
+      reportBytes,
+      reportMetadata("reception", patientId, { labOrderId }),
+    ));
+  }
 });
 
-test("non-admin staff cannot delete a newly uploaded lab report", async () => {
-  const ownerStorage = staffStorage("reception");
-  const otherStorage = staffStorage("receptionBackup");
-  const fileName = "1750000000008-rollback.pdf";
-  const ownerReference = reportReference(ownerStorage, "patient-pediatrics", fileName);
-
-  await assertSucceeds(
-    uploadBytes(
-      ownerReference,
-      reportBytes,
-      reportMetadata("reception", "patient-pediatrics", { labOrderId: "lab-rollback" }),
-    ),
-  );
-  await assertFails(
-    deleteObject(reportReference(otherStorage, "patient-pediatrics", fileName)),
-  );
-  await assertFails(deleteObject(ownerReference));
+test("no browser role can delete a permanent lab report created by the finalizer", async () => {
+  const fileName = "lab-pediatrics.pdf";
+  await seedReport("patient-pediatrics", fileName);
+  for (const key of ["admin", "reception", "receptionBackup", "pediatrics"]) {
+    await assertFails(deleteObject(
+      reportReference(staffStorage(key), "patient-pediatrics", fileName),
+    ));
+  }
 });
 
 test("an assigned doctor cannot delete their own newly uploaded general report", async () => {
@@ -252,14 +308,13 @@ test("an assigned doctor cannot delete their own newly uploaded general report",
   await assertFails(deleteObject(reference));
 });
 
-test("report object names require the client-normalized lowercase extension", async () => {
-  const storage = staffStorage("reception");
+test("generic clinical report names require the client-normalized lowercase extension", async () => {
+  const storage = staffStorage("admin");
   const metadata = {
     contentType: "image/jpeg",
     customMetadata: {
       patientId: "patient-pediatrics",
-      uploadedBy: staff.reception.uid,
-      labOrderId: "lab-camera-upload",
+      uploadedBy: staff.admin.uid,
     },
   };
 
@@ -279,20 +334,20 @@ test("report object names require the client-normalized lowercase extension", as
   );
 });
 
-test("report creation rejects a missing patient, forged uploader, and unsafe file", async () => {
-  const storage = staffStorage("reception");
+test("generic clinical report creation rejects a missing patient, forged uploader, and unsafe file", async () => {
+  const storage = staffStorage("admin");
   await assertFails(
     uploadBytes(
       reportReference(storage, "missing-patient"),
       reportBytes,
-      reportMetadata("reception", "missing-patient"),
+      reportMetadata("admin", "missing-patient"),
     ),
   );
   await assertFails(
     uploadBytes(
       reportReference(storage, "patient-pediatrics", "1750000000003-forged.pdf"),
       reportBytes,
-      reportMetadata("admin", "patient-pediatrics"),
+      reportMetadata("reception", "patient-pediatrics"),
     ),
   );
   await assertFails(
@@ -303,7 +358,7 @@ test("report creation rejects a missing patient, forged uploader, and unsafe fil
         contentType: "application/octet-stream",
         customMetadata: {
           patientId: "patient-pediatrics",
-          uploadedBy: staff.reception.uid,
+          uploadedBy: staff.admin.uid,
         },
       },
     ),
@@ -322,12 +377,12 @@ test("no staff role can upload a new report to an archived chart", async () => {
   }
 });
 
-test("the assigned doctor can read and create reports only for assigned patients", async () => {
+test("browser clients cannot read reports while assigned doctors retain scoped upload access", async () => {
   await seedReport("patient-pediatrics");
   await seedReport("patient-obg");
   const storage = staffStorage("pediatrics");
 
-  await assertSucceeds(getBytes(reportReference(storage, "patient-pediatrics")));
+  await assertFails(getBytes(reportReference(storage, "patient-pediatrics")));
   await assertFails(getBytes(reportReference(storage, "patient-obg")));
   await assertSucceeds(
     uploadBytes(
@@ -345,19 +400,19 @@ test("the assigned doctor can read and create reports only for assigned patients
   );
 });
 
-test("legacy doctorId assignment is used only when doctorName is missing or empty", async () => {
+test("legacy doctorId assignment is used only for scoped uploads, never browser reads", async () => {
   await seedReport("patient-legacy-doctor-id");
   await seedReport("patient-empty-name-doctor-id");
   await seedReport("patient-name-precedence");
   const pediatricsStorage = staffStorage("pediatrics");
   const obgStorage = staffStorage("obg");
 
-  await assertSucceeds(getBytes(reportReference(pediatricsStorage, "patient-legacy-doctor-id")));
+  await assertFails(getBytes(reportReference(pediatricsStorage, "patient-legacy-doctor-id")));
   await assertFails(getBytes(reportReference(obgStorage, "patient-legacy-doctor-id")));
-  await assertSucceeds(getBytes(reportReference(pediatricsStorage, "patient-empty-name-doctor-id")));
+  await assertFails(getBytes(reportReference(pediatricsStorage, "patient-empty-name-doctor-id")));
   await assertFails(getBytes(reportReference(obgStorage, "patient-empty-name-doctor-id")));
   await assertFails(getBytes(reportReference(pediatricsStorage, "patient-name-precedence")));
-  await assertSucceeds(getBytes(reportReference(obgStorage, "patient-name-precedence")));
+  await assertFails(getBytes(reportReference(obgStorage, "patient-name-precedence")));
   await assertSucceeds(uploadBytes(
     reportReference(pediatricsStorage, "patient-legacy-doctor-id", "1750000000014-legacy-doctor.pdf"),
     reportBytes,
@@ -370,15 +425,17 @@ test("legacy doctorId assignment is used only when doctorName is missing or empt
   ));
 });
 
-test("admin can access unassigned reports and delete retained clinical files", async () => {
+test("administrators and doctors cannot bypass the audited report proxy", async () => {
   await seedReport("patient-unassigned");
   const adminReference = reportReference(staffStorage("admin"), "patient-unassigned");
   const doctorReference = reportReference(staffStorage("pediatrics"), "patient-unassigned");
 
-  await assertSucceeds(getBytes(adminReference));
+  await assertFails(getBytes(adminReference));
   await assertFails(getBytes(doctorReference));
+  await assertFails(listAll(ref(staffStorage("admin"), "reports/patient-unassigned")));
+  await assertFails(listAll(ref(staffStorage("reception"), "reports/patient-unassigned")));
   await assertFails(deleteObject(doctorReference));
-  await assertSucceeds(deleteObject(adminReference));
+  await assertFails(deleteObject(adminReference));
 });
 
 test("no staff role can overwrite an existing report", async () => {

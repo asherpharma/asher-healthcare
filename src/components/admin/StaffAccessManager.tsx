@@ -14,6 +14,7 @@ import {
 import {
   CheckCircle2,
   Clock3,
+  FlaskConical,
   KeyRound,
   LoaderCircle,
   MailCheck,
@@ -30,6 +31,7 @@ type StaffRecord = {
   email: string;
   role: StaffRole;
   doctorName?: string;
+  labReportOperator?: boolean;
   active: boolean;
   createdAt?: Timestamp;
   inviteEmailSentAt?: Timestamp;
@@ -91,8 +93,13 @@ export default function StaffAccessManager() {
   const [staff, setStaff] = useState<StaffRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [inviteRole, setInviteRole] = useState<StaffRole>("reception");
   const [updatingUid, setUpdatingUid] = useState("");
   const [resendingUid, setResendingUid] = useState("");
+  const [accessDrafts, setAccessDrafts] = useState<Record<string, {
+    role: StaffRole;
+    doctorName: string;
+  }>>({});
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
@@ -123,6 +130,7 @@ export default function StaffAccessManager() {
     const form = event.currentTarget;
     const data = new FormData(form);
     const email = String(data.get("email") || "").trim();
+    const grantLabAccess = data.get("labReportOperator") === "true";
 
     try {
       const idToken = await user.getIdToken();
@@ -143,7 +151,28 @@ export default function StaffAccessManager() {
       if (!response.ok) {
         throw new Error(result.error || "The staff account could not be created.");
       }
+      if (grantLabAccess) {
+        const accessResponse = await fetch("/api/admin/staff/lab-access", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${idToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ uid: result.uid, allowed: true }),
+        });
+        const accessResult = await accessResponse.json().catch(() => ({}));
+        if (!accessResponse.ok) {
+          form.reset();
+          setInviteRole("reception");
+          setNotice(`Invitation sent to ${email}.`);
+          setError(
+            `The account is ready, but laboratory access was not granted. ${accessResult.error || "Use the staff access list to try again."}`,
+          );
+          return;
+        }
+      }
       form.reset();
+      setInviteRole("reception");
       setNotice(
         `Invitation sent to ${email}. The email includes secure password setup, staff login, and app installation links.`,
       );
@@ -190,21 +219,77 @@ export default function StaffAccessManager() {
 
   async function updateStaffAccess(
     record: StaffRecord,
-    changes: Partial<Pick<StaffRecord, "active" | "role" | "doctorName">>,
+    changes: Partial<Pick<StaffRecord, "active" | "role" | "doctorName" | "labReportOperator">>,
   ) {
     if (!firestore || (record.uid === profile.uid && changes.active === false)) return;
     setUpdatingUid(record.uid);
     setNotice("");
     setError("");
     try {
+      if (typeof changes.labReportOperator === "boolean") {
+        const idToken = await user.getIdToken();
+        const response = await fetch("/api/admin/staff/lab-access", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${idToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            uid: record.uid,
+            allowed: changes.labReportOperator,
+          }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(result.error || "Laboratory access could not be updated.");
+        }
+        setNotice(record.role === "doctor"
+          ? (changes.labReportOperator
+              ? "Partner-lab portal and import access granted. Assigned-patient report viewing remains part of the doctor role."
+              : "Partner-lab portal and import access removed. The doctor can still view reports for currently assigned patients.")
+          : (changes.labReportOperator
+              ? "Laboratory portal and report access granted and recorded in the audit log."
+              : "Laboratory portal and report access removed and recorded in the audit log."));
+        return;
+      }
+      if (changes.role !== undefined || changes.doctorName !== undefined) {
+        const role = changes.role ?? record.role;
+        const doctorName = role === "doctor"
+          ? String(changes.doctorName ?? record.doctorName ?? "")
+          : "";
+        const idToken = await user.getIdToken();
+        const response = await fetch("/api/admin/staff/role-assignment", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${idToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ uid: record.uid, role, doctorName }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(result.error || "The staff role assignment could not be updated.");
+        }
+        setAccessDrafts((current) => {
+          const next = { ...current };
+          delete next[record.uid];
+          return next;
+        });
+        setNotice(record.role !== role
+          ? "Staff role updated and audited. Any separate laboratory grant was removed for safety."
+          : "Doctor assignment updated and audited. Any separate partner-lab grant was removed for safety.");
+        return;
+      }
       await updateDoc(doc(firestore, "staff", record.uid), {
         ...changes,
         updatedBy: profile.uid,
         updatedAt: serverTimestamp(),
       });
       setNotice("Staff access updated.");
-    } catch {
-      setError("Staff access could not be updated. Please try again.");
+    } catch (updateError) {
+      setError(updateError instanceof Error
+        ? updateError.message
+        : "Staff access could not be updated. Please try again.");
     } finally {
       setUpdatingUid("");
     }
@@ -269,7 +354,12 @@ export default function StaffAccessManager() {
           </label>
           <label className="text-sm font-bold text-slate-700">
             Access role
-            <select name="role" defaultValue="reception" className={inputClass}>
+            <select
+              name="role"
+              value={inviteRole}
+              onChange={(event) => setInviteRole(event.target.value as StaffRole)}
+              className={inputClass}
+            >
               {roles.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}
             </select>
           </label>
@@ -279,6 +369,25 @@ export default function StaffAccessManager() {
               <option value="">Not a doctor account</option>
               {DOCTORS.map((doctor) => <option key={doctor.id} value={doctor.name}>{doctor.name}</option>)}
             </select>
+          </label>
+          <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-200 bg-white p-4 sm:col-span-2 xl:col-span-4">
+            <input name="labReportOperator" type="checkbox" value="true" disabled={inviteRole === "admin"} className="mt-0.5 h-5 w-5 shrink-0 accent-[#233A59] disabled:cursor-not-allowed disabled:opacity-50" />
+            <span>
+              <span className="block text-sm font-bold text-[#233A59]">
+                {inviteRole === "admin"
+                  ? "Laboratory access is included for administrators"
+                  : inviteRole === "doctor"
+                    ? "Allow partner-lab portal and import access"
+                    : "Allow external lab portal and report access"}
+              </span>
+              <span className="mt-1 block text-xs leading-5 text-slate-500">
+                {inviteRole === "admin"
+                  ? "No separate laboratory grant is required for this role."
+                  : inviteRole === "doctor"
+                    ? "Doctors already view reports for currently assigned patients. This extra grant enables the approved partner portal and report import workflow."
+                    : "This extra permission allows reception staff to import, securely open, download, and print external laboratory reports. Leave it off unless their duties require it."}
+              </span>
+            </span>
           </label>
           <div className="sm:col-span-2 xl:col-span-4">
             <button
@@ -314,6 +423,14 @@ export default function StaffAccessManager() {
               const state = inviteState(record);
               const status = inviteLabels[state];
               const sentAt = formatInviteTime(record.inviteEmailSentAt);
+              const accessDraft = accessDrafts[record.uid] ?? {
+                role: record.role,
+                doctorName: record.role === "doctor" ? (record.doctorName || "") : "",
+              };
+              const roleAssignmentChanged = accessDraft.role !== record.role
+                || (accessDraft.role === "doctor"
+                  ? accessDraft.doctorName !== (record.doctorName || "")
+                  : Boolean(record.doctorName));
               return (
                 <article key={record.uid} className="grid gap-4 p-5 sm:grid-cols-[1.4fr_1.2fr_auto] sm:items-center">
                   <div>
@@ -335,22 +452,34 @@ export default function StaffAccessManager() {
                   </div>
                   <div className="grid gap-2">
                     <select
-                      value={record.role}
+                      value={accessDraft.role}
                       disabled={updating || isSelf}
                       onChange={(event) => {
                         const role = event.target.value as StaffRole;
-                        void updateStaffAccess(record, { role, ...(role === "doctor" ? {} : { doctorName: "" }) });
+                        setAccessDrafts((current) => ({
+                          ...current,
+                          [record.uid]: {
+                            role,
+                            doctorName: role === "doctor" ? accessDraft.doctorName : "",
+                          },
+                        }));
                       }}
                       className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700"
                       aria-label={`Role for ${record.displayName}`}
                     >
                       {roles.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}
                     </select>
-                    {record.role === "doctor" ? (
+                    {accessDraft.role === "doctor" ? (
                       <select
-                        value={record.doctorName || ""}
+                        value={accessDraft.doctorName}
                         disabled={updating}
-                        onChange={(event) => void updateStaffAccess(record, { doctorName: event.target.value })}
+                        onChange={(event) => setAccessDrafts((current) => ({
+                          ...current,
+                          [record.uid]: {
+                            role: accessDraft.role,
+                            doctorName: event.target.value,
+                          },
+                        }))}
                         className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
                         aria-label={`Doctor assignment for ${record.displayName}`}
                       >
@@ -358,6 +487,42 @@ export default function StaffAccessManager() {
                         {DOCTORS.map((doctor) => <option key={doctor.id} value={doctor.name}>{doctor.name}</option>)}
                       </select>
                     ) : null}
+                    {roleAssignmentChanged ? (
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          disabled={updating || (accessDraft.role === "doctor" && !accessDraft.doctorName)}
+                          onClick={() => void updateStaffAccess(record, {
+                            role: accessDraft.role,
+                            doctorName: accessDraft.doctorName,
+                          })}
+                          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-[#233A59] px-3 text-xs font-bold text-white transition hover:bg-[#182f49] disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {updating ? <LoaderCircle size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
+                          Save role
+                        </button>
+                        <button
+                          type="button"
+                          disabled={updating}
+                          onClick={() => setAccessDrafts((current) => {
+                            const next = { ...current };
+                            delete next[record.uid];
+                            return next;
+                          })}
+                          className="min-h-10 rounded-xl bg-slate-100 px-3 text-xs font-bold text-slate-600 transition hover:bg-slate-200 disabled:opacity-50"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : null}
+                    <span className={`inline-flex min-h-9 items-center justify-center gap-2 rounded-xl px-3 text-[11px] font-bold ${record.role === "admin" || record.role === "doctor" || record.labReportOperator ? "bg-violet-50 text-violet-800" : "bg-slate-100 text-slate-500"}`}>
+                      <FlaskConical size={14} aria-hidden="true" />
+                      {record.role === "admin"
+                        ? "Full lab access included"
+                        : record.role === "doctor"
+                          ? (record.labReportOperator ? "Assigned reports + partner import" : "Assigned-patient reports included")
+                          : record.labReportOperator ? "Lab portal + reports allowed" : "No lab report access"}
+                    </span>
                   </div>
                   <div className="grid gap-2">
                     {record.active ? (
@@ -369,6 +534,21 @@ export default function StaffAccessManager() {
                       >
                         {resending ? <LoaderCircle size={15} className="animate-spin" /> : <RefreshCw size={15} />}
                         {resending ? "Sending…" : state === "active" ? "Send reset email" : "Resend invite"}
+                      </button>
+                    ) : null}
+                    {record.role !== "admin" ? (
+                      <button
+                        type="button"
+                        disabled={updating || resending || isSelf}
+                        onClick={() => void updateStaffAccess(record, { labReportOperator: !record.labReportOperator })}
+                        className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 text-xs font-bold transition ${
+                          record.labReportOperator ? "bg-violet-50 text-violet-800" : "bg-slate-100 text-slate-600"
+                        } disabled:cursor-not-allowed disabled:opacity-60`}
+                      >
+                        {updating ? <LoaderCircle size={15} className="animate-spin" /> : <FlaskConical size={15} />}
+                        {record.role === "doctor"
+                          ? (record.labReportOperator ? "Remove partner import" : "Allow partner import")
+                          : record.labReportOperator ? "Remove lab access" : "Allow lab access"}
                       </button>
                     ) : null}
                     <button

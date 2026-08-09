@@ -7,7 +7,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:unit": "node --test tests/firebase-write-guards.test.mjs tests/invoice-create.test.mjs tests/manual-payment.test.mjs tests/patient-directory.test.mjs tests/patient-identity.test.mjs tests/patient-profile.test.mjs tests/reception-workflow.test.mjs tests/reverse-payment.test.mjs",
+    "test:unit": "node --test tests/external-lab-link.test.mjs tests/firebase-write-guards.test.mjs tests/invoice-create.test.mjs tests/lab-order-directory.test.mjs tests/lab-report-finalizer.test.mjs tests/lab-report-reconciliation.test.mjs tests/lab-report-storage.test.mjs tests/manual-payment.test.mjs tests/patient-directory.test.mjs tests/patient-identity.test.mjs tests/patient-profile.test.mjs tests/patient-report-access.test.mjs tests/reception-workflow.test.mjs tests/report-access.test.mjs tests/report-proxy.test.mjs tests/reverse-payment.test.mjs tests/staff-lab-access.test.mjs tests/staff-role-assignment.test.mjs",
+    "test:lab-finalizer": "node --test tests/lab-report-finalizer.test.mjs tests/lab-report-reconciliation.test.mjs tests/lab-report-storage.test.mjs",
+    "test:report-proxy": "node --test tests/patient-report-access.test.mjs tests/report-access.test.mjs tests/report-proxy.test.mjs",
+    "test:staff-lab-access": "node --test tests/staff-lab-access.test.mjs",
+    "test:staff-role-assignment": "node --test tests/staff-role-assignment.test.mjs",
     "test:rules": "firebase emulators:exec --only firestore,storage --project asher-healthcare-rules-test \"node --test --test-concurrency=1 tests/firestore.rules.test.mjs tests/storage.rules.test.mjs\""
   },
   "dependencies": {

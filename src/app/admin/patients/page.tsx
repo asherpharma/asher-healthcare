@@ -8,6 +8,8 @@ import {
   MAX_REPORT_FILE_BYTES,
   REPORT_FILE_ACCEPT,
   createReportStoragePath,
+  downloadReportBlob,
+  genericReportDownloadName,
   inspectReportFile,
   openPendingReportWindow,
   reportStorageErrorMessage,
@@ -24,7 +26,7 @@ import {
   where,
   type Timestamp,
 } from "firebase/firestore";
-import { getBlob, ref, uploadBytes } from "firebase/storage";
+import { ref, uploadBytes } from "firebase/storage";
 import {
   Activity,
   Archive,
@@ -153,6 +155,7 @@ type ReportRecord = BaseRecord & {
   category: string;
   reportDate: string;
   notes: string;
+  labOrderId?: string;
 };
 type InvoiceRecord = BaseRecord & {
   invoiceNumber: string;
@@ -238,17 +241,26 @@ function PatientRegister() {
   const [invoices, setInvoices] = useState<InvoiceRecord[]>([]);
   const [labOrders, setLabOrders] = useState<LabRecord[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [reportAction, setReportAction] = useState<{ id: string; mode: "view" | "download" } | null>(null);
+  const [reportAction, setReportAction] = useState<{ id: string; mode: "view" | "download" | "print" } | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<Patient | null>(null);
   const [archiveConfirmation, setArchiveConfirmation] = useState("");
   const [archiveReason, setArchiveReason] = useState("");
   const [lifecycleActionId, setLifecycleActionId] = useState<string | null>(null);
   const [patientView, setPatientView] = useState<"active" | "archived">("active");
   const deepLinkedPatient = useRef("");
+  const selectedPatientIdRef = useRef<string | null>(null);
+  const reportAccessAbortRef = useRef<AbortController | null>(null);
   const canEditDemographics = profile.role === "admin" || profile.role === "reception";
   const canEditClinical = profile.role === "admin" || profile.role === "doctor";
 
+  const cancelPendingReportAccess = useCallback(() => {
+    reportAccessAbortRef.current?.abort();
+    reportAccessAbortRef.current = null;
+    setReportAction(null);
+  }, []);
+
   const resetPatientDetailData = useCallback(() => {
+    cancelPendingReportAccess();
     setVisits([]);
     setPrescriptions([]);
     setVaccinations([]);
@@ -257,11 +269,11 @@ function PatientRegister() {
     setReports([]);
     setInvoices([]);
     setLabOrders([]);
-    setReportAction(null);
-  }, []);
+  }, [cancelPendingReportAccess]);
 
   const clearSelectedPatientData = useCallback((reason?: string) => {
     resetPatientDetailData();
+    selectedPatientIdRef.current = null;
     setSelectedId(null);
     setShowEdit(false);
     setActiveTab("overview");
@@ -270,10 +282,13 @@ function PatientRegister() {
 
   const selectPatient = useCallback((patientId: string) => {
     resetPatientDetailData();
+    selectedPatientIdRef.current = patientId;
     setSelectedId(patientId);
     setShowEdit(false);
     setActiveTab("overview");
   }, [resetPatientDetailData]);
+
+  useEffect(() => () => cancelPendingReportAccess(), [cancelPendingReportAccess]);
 
   useEffect(() => {
     const openRegistration = () => router.push("/admin/reception");
@@ -658,7 +673,6 @@ function PatientRegister() {
     setMessage("");
     const { fileName: safeName, storagePath } = createReportStoragePath(
       selectedPatient.id,
-      file.name,
       acceptedReport.extension,
     );
     let uploaded = false;
@@ -683,7 +697,6 @@ function PatientRegister() {
       formElement.reset();
       setMessage("Medical report uploaded securely.");
     } catch (uploadError) {
-      console.error("Unable to attach the medical report.", uploadError);
       if (uploaded) {
         setMessage("The confirmation was interrupted after the report upload. The file has been retained securely; refresh this patient record before retrying so the clinic can reconcile it without creating a duplicate.");
       } else {
@@ -694,33 +707,82 @@ function PatientRegister() {
     }
   }
 
-  async function accessReport(record: ReportRecord, mode: "view" | "download") {
-    const preview = mode === "view" ? openPendingReportWindow() : null;
-    if (mode === "view" && !preview) {
+  async function accessReport(record: ReportRecord, mode: "view" | "download" | "print") {
+    if (reportAccessAbortRef.current) return;
+    const requestedPatientId = selectedId;
+    if (!requestedPatientId) {
+      setMessage("Choose a patient before opening a report.");
+      return;
+    }
+    const preview = mode === "view" || mode === "print" ? openPendingReportWindow() : null;
+    if ((mode === "view" || mode === "print") && !preview) {
       setMessage("Your browser blocked the secure preview. Allow pop-ups for Asher Healthcare or use Download.");
       return;
     }
+    const controller = new AbortController();
+    reportAccessAbortRef.current = controller;
     setReportAction({ id: record.id, mode });
     setMessage("");
     try {
-      const blob = await getBlob(ref(files, record.storagePath));
-      const url = URL.createObjectURL(blob);
-      if (mode === "view") {
-        preview!.location.href = url;
-      } else {
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = record.fileName;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
+      const idToken = await user.getIdToken();
+      if (controller.signal.aborted || selectedPatientIdRef.current !== requestedPatientId) {
+        preview?.close();
+        return;
       }
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      const response = await fetch(
+        record.labOrderId ? "/api/labs/report-access" : "/api/patients/report-access",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${idToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(record.labOrderId ? {
+            labOrderId: record.labOrderId,
+            action: mode === "view" ? "preview" : mode,
+          } : {
+            patientId: requestedPatientId,
+            reportId: record.id,
+            action: mode,
+          }),
+          signal: controller.signal,
+        },
+      );
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({})) as { error?: string };
+        preview?.close();
+        setMessage(result.error || "Report access could not be authorized. Please try again.");
+        return;
+      }
+      const blob = await response.blob();
+      if (controller.signal.aborted || selectedPatientIdRef.current !== requestedPatientId) {
+        preview?.close();
+        return;
+      }
+      if (mode === "download") {
+        downloadReportBlob(
+          blob,
+          genericReportDownloadName(blob, record.labOrderId ? "lab-report" : "medical-report"),
+        );
+      } else {
+        const url = URL.createObjectURL(blob);
+        if (mode === "print") {
+          preview!.addEventListener("load", () => {
+            try { preview!.print(); } catch { /* The PDF viewer may require a manual Print action. */ }
+          }, { once: true });
+        }
+        preview!.location.href = url;
+        window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      }
     } catch (reportError) {
       preview?.close();
+      if (controller.signal.aborted) return;
       setMessage(reportStorageErrorMessage(reportError, "open"));
     } finally {
-      setReportAction(null);
+      if (reportAccessAbortRef.current === controller) {
+        reportAccessAbortRef.current = null;
+        setReportAction(null);
+      }
     }
   }
 
@@ -1197,7 +1259,7 @@ function PregnancyPanel({ canEdit, records, saving, onSave }: { canEdit: boolean
   );
 }
 
-function ReportsPanel({ records, uploading, action, onUpload, onAccess }: { records: ReportRecord[]; uploading: boolean; action: { id: string; mode: "view" | "download" } | null; onUpload?: (event: FormEvent<HTMLFormElement>) => Promise<void>; onAccess: (record: ReportRecord, mode: "view" | "download") => Promise<void> }) {
+function ReportsPanel({ records, uploading, action, onUpload, onAccess }: { records: ReportRecord[]; uploading: boolean; action: { id: string; mode: "view" | "download" | "print" } | null; onUpload?: (event: FormEvent<HTMLFormElement>) => Promise<void>; onAccess: (record: ReportRecord, mode: "view" | "download" | "print") => Promise<void> }) {
   return (
     <div>
       <SectionHeading icon={FileUp} title="Medical reports" action="PDFs and images protected by staff-only Firebase access" />
@@ -1217,9 +1279,10 @@ function ReportsPanel({ records, uploading, action, onUpload, onAccess }: { reco
                 <p className="mt-1 text-sm text-slate-600">{record.category} · {record.reportDate} · {formatFileSize(record.size)}</p>
                 <p className="mt-1 text-xs text-slate-500">Uploaded {formatCreatedAt(record.createdAt)}</p>
               </div>
-              <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
-                <button type="button" disabled={action?.id === record.id} onClick={() => void onAccess(record, "view")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">{action?.id === record.id && action.mode === "view" ? <LoaderCircle size={15} className="animate-spin" /> : <ExternalLink size={15} />} View</button>
-                <button type="button" disabled={action?.id === record.id} onClick={() => void onAccess(record, "download")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#233A59] px-3 py-2 text-xs font-bold text-white transition hover:bg-[#1b2d46] disabled:opacity-50">{action?.id === record.id && action.mode === "download" ? <LoaderCircle size={15} className="animate-spin" /> : <Download size={15} />} Download</button>
+              <div className="grid w-full grid-cols-3 gap-2 sm:flex sm:w-auto">
+                <button type="button" disabled={action !== null} onClick={() => void onAccess(record, "view")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">{action?.id === record.id && action.mode === "view" ? <LoaderCircle size={15} className="animate-spin" /> : <ExternalLink size={15} />} View</button>
+                <button type="button" disabled={action !== null} onClick={() => void onAccess(record, "print")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">{action?.id === record.id && action.mode === "print" ? <LoaderCircle size={15} className="animate-spin" /> : <Printer size={15} />} Print</button>
+                <button type="button" disabled={action !== null} onClick={() => void onAccess(record, "download")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#233A59] px-3 py-2 text-xs font-bold text-white transition hover:bg-[#1b2d46] disabled:opacity-50">{action?.id === record.id && action.mode === "download" ? <LoaderCircle size={15} className="animate-spin" /> : <Download size={15} />} Download</button>
               </div>
             </div>
             {record.notes && <p className="mt-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">{record.notes}</p>}

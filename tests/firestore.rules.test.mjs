@@ -126,6 +126,84 @@ after(async () => {
   await testEnv?.cleanup();
 });
 
+test("browser staff management cannot create accounts or change privileged assignments", async () => {
+  await seedDocuments([
+    ["staff/lab-operator-off", {
+      active: true,
+      role: "reception",
+      displayName: "Lab Operator Off",
+      labReportOperator: false,
+    }],
+    ["staff/lab-operator-on", {
+      active: true,
+      role: "doctor",
+      displayName: "Lab Operator On",
+      doctorName: "Dr. Shaik Reshma",
+      labReportOperator: true,
+    }],
+  ]);
+
+  const database = staffDb("admin");
+  await assertFails(updateDoc(doc(database, "staff/lab-operator-off"), {
+    labReportOperator: true,
+  }));
+  await assertFails(updateDoc(doc(database, "staff/lab-operator-on"), {
+    labReportOperator: false,
+  }));
+  await assertFails(updateDoc(doc(database, "staff/lab-operator-off"), {
+    role: "admin",
+  }));
+  await assertFails(updateDoc(doc(database, "staff/lab-operator-on"), {
+    doctorName: "Dr. Lt Col Shafi Ahamad",
+  }));
+  await assertFails(setDoc(doc(database, "staff/browser-granted-operator"), {
+    active: true,
+    role: "reception",
+    displayName: "Browser Granted Operator",
+    labReportOperator: true,
+  }));
+  await assertFails(setDoc(doc(database, "staff/browser-created-with-role"), {
+    active: true,
+    role: "reception",
+    displayName: "Browser Created Staff",
+  }));
+});
+
+test("no browser role can inspect or mutate trusted report finalization intents", async () => {
+  const intentPath = "labReportFinalizationIntents/lab-order-rules-1";
+  await seedDocuments([[intentPath, {
+    schemaVersion: 1,
+    status: "prepared",
+    labOrderId: "lab-order-rules-1",
+    patientId: "patient-1",
+    requestFingerprint: "a".repeat(64),
+  }]]);
+
+  for (const key of ["admin", "reception", "pediatrics", "obg"]) {
+    const database = staffDb(key);
+    const reference = doc(database, intentPath);
+    await assertFails(getDoc(reference));
+    await assertFails(setDoc(reference, { status: "discarded" }, { merge: true }));
+    await assertFails(updateDoc(reference, { status: "completed" }));
+    await assertFails(deleteDoc(reference));
+  }
+});
+
+test("admin browser management still permits non-privileged staff profile changes", async () => {
+  await seedDocuments([["staff/profile-maintenance", {
+    active: true,
+    role: "reception",
+    displayName: "Original Name",
+    labReportOperator: false,
+  }]]);
+
+  const database = staffDb("admin");
+  await assertSucceeds(updateDoc(doc(database, "staff/profile-maintenance"), {
+    displayName: "Updated Name",
+    active: false,
+  }));
+});
+
 test("reception check-in requires the atomic nested queue counter", async () => {
   await seedDocuments([["appointments/check-in-1", appointment()]]);
   const database = staffDb("reception");
@@ -383,15 +461,16 @@ test("patient profile and identity reservations are writable only by protected s
   }));
 });
 
-test("reception can attach validated lab metadata but cannot attach an unrelated order", async () => {
+test("browser reception cannot bind lab report metadata even in an atomic matching batch", async () => {
   await seedDocuments([
     ["patients/lab-patient", { fullName: "Lab Patient", archived: false }],
     ["patients/other-patient", { fullName: "Other Patient", archived: false }],
     ["labOrders/lab-order-1", { patientId: "lab-patient", status: "processing" }],
+    ["labOrders/lab-order-mismatch", { patientId: "lab-patient", status: "processing" }],
   ]);
   const database = staffDb("reception");
   const report = {
-    fileName: "Blood Report.JPG",
+    fileName: "blood-report.jpg",
     storagePath: "reports/lab-patient/1750000000000-blood-report.jpg",
     contentType: "image/jpeg",
     size: 2048,
@@ -403,9 +482,41 @@ test("reception can attach validated lab metadata but cannot attach an unrelated
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
-  await assertSucceeds(
-    setDoc(doc(database, "patients/lab-patient/reports/report-1"), report),
+  await assertFails(
+    setDoc(doc(database, "patients/lab-patient/reports/lab-order-1"), report),
   );
+  const mismatchedReport = {
+    ...report,
+    labOrderId: "lab-order-mismatch",
+    storagePath: "reports/lab-patient/1750000000001-other-report.jpg",
+  };
+  const mismatchedBatch = writeBatch(database);
+  mismatchedBatch.set(
+    doc(database, "patients/lab-patient/reports/lab-order-mismatch"),
+    mismatchedReport,
+  );
+  mismatchedBatch.update(doc(database, "labOrders/lab-order-mismatch"), {
+    status: "completed",
+    reportFileName: mismatchedReport.fileName,
+    reportStoragePath: report.storagePath,
+    reportContentType: mismatchedReport.contentType,
+    reportSize: mismatchedReport.size,
+    completedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  await assertFails(mismatchedBatch.commit());
+  const validBatch = writeBatch(database);
+  validBatch.set(doc(database, "patients/lab-patient/reports/lab-order-1"), report);
+  validBatch.update(doc(database, "labOrders/lab-order-1"), {
+    status: "completed",
+    reportFileName: report.fileName,
+    reportStoragePath: report.storagePath,
+    reportContentType: report.contentType,
+    reportSize: report.size,
+    completedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  await assertFails(validBatch.commit());
   await assertFails(
     setDoc(doc(database, "patients/other-patient/reports/report-2"), {
       ...report,
@@ -414,7 +525,7 @@ test("reception can attach validated lab metadata but cannot attach an unrelated
   );
 });
 
-test("reception can attach the first report to a completed order but cannot replace it", async () => {
+test("reception cannot attach or replace a report on a completed order", async () => {
   await seedDocuments([
     ["patients/completed-lab-patient", { fullName: "Completed Lab Patient", archived: false }],
     ["labOrders/completed-without-file", { patientId: "completed-lab-patient", status: "completed" }],
@@ -436,7 +547,7 @@ test("reception can attach the first report to a completed order but cannot repl
   const database = staffDb("reception");
   const firstBatch = writeBatch(database);
   firstBatch.set(
-    doc(database, "patients/completed-lab-patient/reports/first-report"),
+    doc(database, "patients/completed-lab-patient/reports/completed-without-file"),
     report("completed-without-file", "02"),
   );
   firstBatch.update(doc(database, "labOrders/completed-without-file"), {
@@ -447,7 +558,7 @@ test("reception can attach the first report to a completed order but cannot repl
     completedAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
-  await assertSucceeds(firstBatch.commit());
+  await assertFails(firstBatch.commit());
   await assertFails(updateDoc(doc(database, "labOrders/completed-without-file"), {
     reportStoragePath: "reports/completed-lab-patient/1750000000099-replacement.pdf",
     updatedAt: serverTimestamp(),
@@ -488,6 +599,10 @@ test("clinical report metadata is patient-bound and immutable", async () => {
   const reportRef = doc(database, "patients/report-patient/reports/report-secure");
   await assertSucceeds(setDoc(reportRef, report));
   await assertFails(setDoc(
+    doc(database, "patients/report-patient/reports/lab-reserved-identity"),
+    report,
+  ));
+  await assertFails(setDoc(
     doc(database, "patients/report-patient/reports/report-cross-linked"),
     {
       ...report,
@@ -500,7 +615,7 @@ test("clinical report metadata is patient-bound and immutable", async () => {
   }));
 });
 
-test("lab order report metadata must be complete and bound to its patient", async () => {
+test("lab order report metadata cannot be browser-bound even when complete and patient-matched", async () => {
   await seedDocuments([
     ["patients/lab-binding-patient", { fullName: "Lab Binding Patient", archived: false }],
     ["labOrders/lab-binding-order", {
@@ -509,7 +624,8 @@ test("lab order report metadata must be complete and bound to its patient", asyn
       status: "processing",
     }],
   ]);
-  const orderRef = doc(staffDb("reception"), "labOrders/lab-binding-order");
+  const database = staffDb("reception");
+  const orderRef = doc(database, "labOrders/lab-binding-order");
   await assertFails(updateDoc(orderRef, {
     status: "completed",
     reportStoragePath: "reports/another-patient/1750000000020-result.pdf",
@@ -523,16 +639,74 @@ test("lab order report metadata must be complete and bound to its patient", asyn
     updatedAt: serverTimestamp(),
     completedAt: serverTimestamp(),
   }));
-  await assertSucceeds(updateDoc(orderRef, {
+  const report = {
+    fileName: "result.pdf",
+    storagePath: "reports/lab-binding-patient/1750000000022-a1b2c3d4-result.pdf",
+    contentType: "application/pdf",
+    size: 2048,
+    category: "Lab report",
+    reportDate: "2026-08-07",
+    notes: "Lab order lab-binding-order",
+    labOrderId: "lab-binding-order",
+    createdBy: staff.reception.uid,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  const validBatch = writeBatch(database);
+  validBatch.set(
+    doc(database, "patients/lab-binding-patient/reports/lab-binding-order"),
+    report,
+  );
+  validBatch.update(orderRef, {
     status: "completed",
-    resultSummary: "Verified result",
-    reportStoragePath: "reports/lab-binding-patient/1750000000022-a1b2c3d4-result.pdf",
-    reportFileName: "result.pdf",
-    reportContentType: "application/pdf",
-    reportSize: 2048,
+    reportStoragePath: report.storagePath,
+    reportFileName: report.fileName,
+    reportContentType: report.contentType,
+    reportSize: report.size,
     updatedAt: serverTimestamp(),
     completedAt: serverTimestamp(),
+  });
+  await assertFails(validBatch.commit());
+
+  const genericReport = Object.fromEntries(
+    Object.entries(report).filter(([field]) => field !== "labOrderId"),
+  );
+  await assertFails(setDoc(
+    doc(staffDb("admin"), "patients/lab-binding-patient/reports/lab-binding-order"),
+    {
+      ...genericReport,
+      createdBy: staff.admin.uid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    },
+  ));
+});
+
+test("reception cannot author clinical result summaries and lab orders cannot be hard-deleted", async () => {
+  await seedDocuments([
+    ["patients/lab-summary-patient", {
+      fullName: "Lab Summary Patient",
+      doctorName: "Dr. Lt Col Shafi Ahamad",
+      archived: false,
+    }],
+    ["labOrders/lab-summary-order", {
+      patientId: "lab-summary-patient",
+      clinician: "Dr. Lt Col Shafi Ahamad",
+      status: "processing",
+    }],
+  ]);
+
+  await assertFails(updateDoc(doc(staffDb("reception"), "labOrders/lab-summary-order"), {
+    resultSummary: "Reception-authored interpretation",
+    updatedAt: serverTimestamp(),
   }));
+  await assertSucceeds(updateDoc(doc(staffDb("pediatrics"), "labOrders/lab-summary-order"), {
+    status: "completed",
+    resultSummary: "Doctor-verified interpretation",
+    completedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }));
+  await assertFails(deleteDoc(doc(staffDb("admin"), "labOrders/lab-summary-order")));
 });
 
 test("archived patients reject new clinical records for every staff role", async () => {
@@ -596,9 +770,13 @@ test("new lab orders cannot be attached to an archived patient", async () => {
   const database = staffDb("reception");
   await assertSucceeds(setDoc(doc(database, "labOrders/active-order"), order("active-lab-order")));
   await assertFails(setDoc(doc(database, "labOrders/archived-order"), order("archived-lab-order")));
+  await assertFails(setDoc(doc(database, "labOrders/noncanonical-clinician"), {
+    ...order("active-lab-order"),
+    clinician: "Unlinked clinician",
+  }));
 });
 
-test("lab order history is clinician-scoped for doctors and retained for the front desk", async () => {
+test("lab order history is clinician-scoped for doctors and hidden from direct reception reads", async () => {
   await seedDocuments([
     ["patients/lab-pediatrics", {
       fullName: "Pediatrics Lab Patient",
@@ -619,6 +797,11 @@ test("lab order history is clinician-scoped for doctors and retained for the fro
       fullName: "Archived Lab Patient",
       doctorName: "Dr. Lt Col Shafi Ahamad",
       archived: true,
+    }],
+    ["patients/lab-reassigned", {
+      fullName: "Reassigned Lab Patient",
+      doctorName: "Dr. Shaik Reshma",
+      archived: false,
     }],
     ["labOrders/pediatrics-canonical", {
       patientId: "lab-pediatrics",
@@ -645,6 +828,11 @@ test("lab order history is clinician-scoped for doctors and retained for the fro
       clinician: "Dr. Lt Col Shafi Ahamad",
       status: "ordered",
     }],
+    ["labOrders/reassigned-history", {
+      patientId: "lab-reassigned",
+      clinician: "Dr. Lt Col Shafi Ahamad",
+      status: "ordered",
+    }],
   ]);
 
   const pediatrics = staffDb("pediatrics");
@@ -652,14 +840,19 @@ test("lab order history is clinician-scoped for doctors and retained for the fro
   await assertSucceeds(getDoc(doc(pediatrics, "labOrders/pediatrics-legacy")));
   await assertFails(getDoc(doc(pediatrics, "labOrders/pediatrics-wrong-clinician")));
   await assertFails(getDoc(doc(pediatrics, "labOrders/obg-canonical")));
-  await assertSucceeds(getDoc(doc(pediatrics, "labOrders/archived-order")));
-  await assertSucceeds(getDocs(query(
+  await assertFails(getDoc(doc(pediatrics, "labOrders/archived-order")));
+  await assertFails(getDoc(doc(pediatrics, "labOrders/reassigned-history")));
+  // A historical clinician query can include archived or reassigned patients,
+  // so Firestore correctly rejects the entire browser query. The doctor lab
+  // desk uses the protected current-assignment directory instead.
+  await assertFails(getDocs(query(
     collection(pediatrics, "labOrders"),
     where("clinician", "==", "Dr. Lt Col Shafi Ahamad"),
   )));
   await assertFails(getDocs(collection(pediatrics, "labOrders")));
-  await assertSucceeds(getDoc(doc(staffDb("reception"), "labOrders/pediatrics-canonical")));
-  await assertSucceeds(getDoc(doc(staffDb("reception"), "labOrders/archived-order")));
+  await assertFails(getDoc(doc(staffDb("reception"), "labOrders/pediatrics-canonical")));
+  await assertFails(getDoc(doc(staffDb("reception"), "labOrders/archived-order")));
+  await assertFails(getDocs(collection(staffDb("reception"), "labOrders")));
   await assertSucceeds(getDoc(doc(staffDb("admin"), "labOrders/obg-canonical")));
   await assertSucceeds(getDoc(doc(staffDb("admin"), "labOrders/archived-order")));
 });

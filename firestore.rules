@@ -199,7 +199,22 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time;
     }
 
-    function validReceptionLabReportCreate(patientId) {
+    function validLinkedLabReport(patientId, reportId) {
+      let orderPath = /databases/$(database)/documents/labOrders/$(request.resource.data.labOrderId);
+      return request.resource.data.keys().hasAny(['labOrderId'])
+        && request.resource.data.labOrderId is string
+        && request.resource.data.labOrderId.matches('^[A-Za-z0-9_-]{1,128}$')
+        && reportId == request.resource.data.labOrderId
+        && exists(orderPath)
+        && get(orderPath).data.patientId == patientId
+        && existsAfter(orderPath)
+        && getAfter(orderPath).data.reportFileName == request.resource.data.fileName
+        && getAfter(orderPath).data.reportStoragePath == request.resource.data.storagePath
+        && getAfter(orderPath).data.reportContentType == request.resource.data.contentType
+        && getAfter(orderPath).data.reportSize == request.resource.data.size;
+    }
+
+    function validReceptionLabReportCreate(patientId, reportId) {
       let orderPath = /databases/$(database)/documents/labOrders/$(request.resource.data.labOrderId);
       return isReception()
         && patientIsActive(patientId)
@@ -212,8 +227,9 @@ service cloud.firestore {
           'reportDate', 'notes', 'labOrderId', 'createdBy', 'createdAt', 'updatedAt'
         ])
         && request.resource.data.fileName is string
-        && request.resource.data.fileName.size() > 0
-        && request.resource.data.fileName.size() <= 200
+        && request.resource.data.fileName.matches(
+          '^[A-Za-z0-9_-]{1,100}[.](pdf|jpg|jpeg|png|webp)$'
+        )
         && request.resource.data.storagePath is string
         && request.resource.data.storagePath.matches(
           '^reports/' + patientId + '/[0-9]{13}-[A-Za-z0-9._-]+[.](pdf|jpg|jpeg|png|webp)$'
@@ -226,7 +242,7 @@ service cloud.firestore {
         && request.resource.data.size < 10 * 1024 * 1024
         && request.resource.data.category == 'Lab report'
         && request.resource.data.reportDate is string
-        && request.resource.data.reportDate.size() == 10
+        && request.resource.data.reportDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
         && request.resource.data.notes is string
         && request.resource.data.notes.size() <= 500
         && request.resource.data.labOrderId is string
@@ -236,20 +252,19 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time
         && exists(orderPath)
         && get(orderPath).data.patientId == patientId
-        && (
-          get(orderPath).data.status in ['ordered', 'collected', 'processing']
-          || (
-            get(orderPath).data.status == 'completed'
-            && !get(orderPath).data.keys().hasAny(['reportStoragePath'])
-          )
-        );
+        && get(orderPath).data.status in ['ordered', 'collected', 'processing', 'completed']
+        && !get(orderPath).data.keys().hasAny([
+          'reportFileName', 'reportStoragePath', 'reportContentType', 'reportSize'
+        ])
+        && validLinkedLabReport(patientId, reportId);
     }
 
-    function validLabReportAttachment() {
+    function validLabReportAttachment(orderId) {
       let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
       let reportKeys = [
         'reportFileName', 'reportStoragePath', 'reportContentType', 'reportSize'
       ];
+      let reportPath = /databases/$(database)/documents/patients/$(resource.data.patientId)/reports/$(orderId);
       return !changedKeys.hasAny(reportKeys)
         || (
           !resource.data.keys().hasAny(reportKeys)
@@ -269,12 +284,31 @@ service cloud.firestore {
           && request.resource.data.reportSize is number
           && request.resource.data.reportSize > 0
           && request.resource.data.reportSize < 10 * 1024 * 1024
+          && existsAfter(reportPath)
+          && getAfter(reportPath).data.labOrderId == orderId
+          && getAfter(reportPath).data.fileName == request.resource.data.reportFileName
+          && getAfter(reportPath).data.storagePath == request.resource.data.reportStoragePath
+          && getAfter(reportPath).data.contentType == request.resource.data.reportContentType
+          && getAfter(reportPath).data.size == request.resource.data.reportSize
         );
     }
 
-    function validClinicalReportCreate(patientId) {
+    function isCanonicalLabClinician(clinician) {
+      return clinician in [
+        'Dr. Lt Col Shafi Ahamad',
+        'Dr. Shaik Reshma'
+      ];
+    }
+
+    function validClinicalReportCreate(patientId, reportId) {
       let reportKeys = request.resource.data.keys();
       return validClinicalCreate(patientId)
+        // lab-* identities are reserved for the trusted lab finalizer.
+        && !reportId.matches('^lab-.*')
+        // Preserve pre-migration lab-order document identities as reserved too.
+        // A generic client cannot create a report at an existing order ID and
+        // obstruct linking or reconciliation of an older clinical record.
+        && !exists(/databases/$(database)/documents/labOrders/$(reportId))
         && reportKeys.hasAll([
           'fileName', 'storagePath', 'contentType', 'size', 'category',
           'reportDate', 'notes', 'createdBy', 'createdAt', 'updatedAt'
@@ -301,16 +335,12 @@ service cloud.firestore {
         && request.resource.data.category.size() > 0
         && request.resource.data.category.size() <= 100
         && request.resource.data.reportDate is string
-        && request.resource.data.reportDate.size() == 10
+        && request.resource.data.reportDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
         && request.resource.data.notes is string
         && request.resource.data.notes.size() <= 1000
-        && (
-          !reportKeys.hasAny(['labOrderId'])
-          || (
-            request.resource.data.labOrderId is string
-            && request.resource.data.labOrderId.matches('^[A-Za-z0-9_-]{1,128}$')
-          )
-        );
+        // A lab-linked report is finalized by the trusted server after the
+        // staged object bytes and current order state are verified.
+        && !reportKeys.hasAny(['labOrderId']);
     }
 
     function validLabCompletionTimestamp() {
@@ -473,13 +503,14 @@ service cloud.firestore {
     }
 
     match /labOrders/{orderId} {
-      // Front-desk staff retain read-only lab history after archival. A doctor
-      // can query their own canonical clinician history; the UI joins it to the
-      // active assigned-patient directory before showing actionable orders.
+      // Reception receives a masked operational directory from a protected
+      // same-origin server endpoint. Direct browser reads stay clinical-only so
+      // result summaries and report object metadata cannot reach front-desk
+      // sessions. Doctors remain limited to their canonical clinician history.
       allow read: if isAdmin()
-        || isReception()
         || (
           isDoctor()
+          && isAssignedPatientDoctor(resource.data.patientId)
           && resource.data.clinician is string
           && resource.data.clinician == staffProfile().data.doctorName
         );
@@ -511,7 +542,7 @@ service cloud.firestore {
         && request.resource.data.tests.size() <= 50
         && request.resource.data.priority in ['routine', 'urgent']
         && request.resource.data.clinician is string
-        && request.resource.data.clinician.size() <= 100
+        && isCanonicalLabClinician(request.resource.data.clinician)
         && request.resource.data.notes is string
         && request.resource.data.notes.size() <= 1000
         && request.resource.data.status == 'ordered'
@@ -519,6 +550,13 @@ service cloud.firestore {
         && request.resource.data.orderedAt == request.time
         && request.resource.data.updatedAt == request.time;
       allow update: if canAccessLabOrder(resource.data.patientId, resource.data.clinician)
+        // Browsers can operate the lab workflow, but only the trusted
+        // finalizer can bind immutable Storage metadata to an order.
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'reportFileName', 'reportStoragePath', 'reportContentType', 'reportSize',
+          'reportSourceProvider', 'reportExternalLinkVersion',
+          'reportAttachedBy', 'reportAttachedAt'
+        ])
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'status', 'resultSummary', 'reportFileName', 'reportStoragePath',
           'reportContentType', 'reportSize', 'specimenCollectedAt',
@@ -539,7 +577,18 @@ service cloud.firestore {
           ])
           || request.resource.data.status == 'completed'
         )
-        && validLabReportAttachment()
+        && (
+          !isReception()
+          || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['resultSummary'])
+        )
+        && (
+          !isReception()
+          || request.resource.data.status != 'completed'
+          || request.resource.data.keys().hasAll([
+            'reportFileName', 'reportStoragePath', 'reportContentType', 'reportSize'
+          ])
+        )
+        && validLabReportAttachment(orderId)
         && validLabCompletionTimestamp()
         && (
           !request.resource.data.keys().hasAny(['resultSummary'])
@@ -556,7 +605,32 @@ service cloud.firestore {
           )
         )
         && request.resource.data.updatedAt == request.time;
-      allow delete: if isAdmin() && patientIsActive(resource.data.patientId);
+      // Lab orders are clinical audit records. Cancellation is an explicit
+      // terminal state; browser clients never hard-delete the order or orphan
+      // its immutable patient report and Storage object.
+      allow delete: if false;
+    }
+
+    // External laboratory identifiers are correlated by protected Cloudflare
+    // Functions. They are intentionally invisible to browser Firebase clients,
+    // including administrators, so a future provider credential can never be
+    // added to a client-readable record by accident.
+    match /externalLabLinks/{linkId} {
+      allow read, create, update, delete: if false;
+    }
+
+    // A one-way provider-reference reservation prevents one external Lab No
+    // being attached to multiple Asher orders. Only the server service account
+    // may read or write these deterministic reservation documents.
+    match /externalLabReferenceKeys/{referenceHash} {
+      allow read, create, update, delete: if false;
+    }
+
+    // Finalization intents are a trusted-server recovery journal. They contain
+    // integrity fingerprints and staging identities that must never be exposed
+    // to, or altered by, a browser role (including administrators).
+    match /labReportFinalizationIntents/{intentId} {
+      allow read, create, update, delete: if false;
     }
 
     match /staffTasks/{taskId} {
@@ -663,7 +737,15 @@ service cloud.firestore {
 
     match /staff/{staffId} {
       allow read: if signedIn() && (request.auth.uid == staffId || isAdmin());
-      allow create, update, delete: if isAdmin();
+      // Account creation, role transitions, doctor assignments, and external
+      // lab grants are privileged server actions with immutable audit entries.
+      // The browser may only maintain non-privileged profile/status fields.
+      allow create: if false;
+      allow update: if isAdmin()
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'role', 'doctorName', 'labReportOperator'
+        ]);
+      allow delete: if isAdmin();
     }
 
     // Exact patient-identity reservations are maintained only by protected
@@ -839,8 +921,9 @@ service cloud.firestore {
 
       match /reports/{reportId} {
         allow read: if canAccessPatientClinical(patientId);
-        allow create: if validClinicalReportCreate(patientId)
-          || validReceptionLabReportCreate(patientId);
+        // Generic clinical files remain supported; lab-linked report records
+        // are created only by /api/labs/finalize-report.
+        allow create: if validClinicalReportCreate(patientId, reportId);
         // The Firestore pointer and the underlying Storage object are one
         // immutable clinical artifact. Corrections create a new version.
         allow update, delete: if false;

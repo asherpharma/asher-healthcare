@@ -1,7 +1,7 @@
 "use client";
 
 import { firebaseAuth, firestore, isFirebaseConfigured } from "@/firebase/config";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, onSnapshot } from "firebase/firestore";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { LoaderCircle, ShieldAlert } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -15,6 +15,7 @@ export type StaffProfile = {
   email: string;
   role: StaffRole;
   doctorName?: string;
+  labReportOperator: boolean;
 };
 
 type StaffContextValue = {
@@ -38,24 +39,32 @@ export default function StaffGuard({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!firebaseAuth || !firestore) return;
 
-    return onAuthStateChanged(firebaseAuth!, async (user) => {
+    let stopStaffProfile: (() => void) | null = null;
+    const onboardingRequestedFor = new Set<string>();
+    const stopAuthentication = onAuthStateChanged(firebaseAuth!, (user) => {
+      stopStaffProfile?.();
+      stopStaffProfile = null;
       if (!user) {
+        setSession(null);
         router.replace("/admin/login");
         return;
       }
 
-      try {
-        const staffSnapshot = await getDoc(doc(firestore!, "staff", user.uid));
+      stopStaffProfile = onSnapshot(doc(firestore!, "staff", user.uid), async (staffSnapshot) => {
         const data = staffSnapshot.data();
         const role = data?.role as StaffRole | undefined;
         const validRole = role === "admin" || role === "doctor" || role === "reception";
 
         if (!staffSnapshot.exists() || data?.active !== true || !validRole) {
+          // Clear protected content before the asynchronous Firebase sign-out
+          // completes so a revoked session cannot leave patient data rendered.
+          setSession(null);
           await signOut(firebaseAuth!);
           router.replace("/admin/login?error=unauthorized");
           return;
         }
 
+        setError("");
         setSession({
           user,
           profile: {
@@ -64,10 +73,15 @@ export default function StaffGuard({ children }: { children: ReactNode }) {
             email: String(data.email || user.email || ""),
             role,
             doctorName: String(data.doctorName || ""),
+            labReportOperator: role === "admin" || data.labReportOperator === true,
           },
         });
 
-        if (data?.inviteStatus === "pending" || data?.inviteStatus === "expired") {
+        if (
+          (data?.inviteStatus === "pending" || data?.inviteStatus === "expired")
+          && !onboardingRequestedFor.has(user.uid)
+        ) {
+          onboardingRequestedFor.add(user.uid);
           void user.getIdToken()
             .then((idToken) => fetch("/api/staff/onboarding/complete", {
               method: "POST",
@@ -78,10 +92,16 @@ export default function StaffGuard({ children }: { children: ReactNode }) {
               // staff profile above remain the source of access control.
             });
         }
-      } catch {
+      }, () => {
+        setSession(null);
         setError("We could not verify this staff account. Please try again.");
-      }
+      });
     });
+
+    return () => {
+      stopStaffProfile?.();
+      stopAuthentication();
+    };
   }, [router]);
 
   if (!isFirebaseConfigured) {

@@ -30,29 +30,32 @@ export async function inspectReportFile(file: File): Promise<AcceptedReport | nu
   return null;
 }
 
-export function normalizedReportName(originalName: string, extension: AcceptedReport["extension"]) {
-  const stem = originalName
-    .replace(/\.[^.]*$/, "")
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9_-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^[-_.]+|[-_.]+$/g, "")
-    .slice(0, 80)
-    .toLowerCase() || "medical-report";
-  return `${stem}.${extension}`;
-}
-
 export function createReportStoragePath(
   patientId: string,
-  originalName: string,
   extension: AcceptedReport["extension"],
 ) {
-  const fileName = normalizedReportName(originalName, extension);
-  const uniquePart = crypto.randomUUID().slice(0, 8);
+  // Partner-lab downloads often contain a patient's name, mobile number, or
+  // lab number in the original filename. Never persist that browser-supplied
+  // name in Firestore, Storage paths, logs, or download metadata.
+  const opaqueId = crypto.randomUUID();
+  const fileName = `medical-report-${opaqueId.slice(0, 8)}.${extension}`;
   return {
     fileName,
-    storagePath: `reports/${patientId}/${Date.now()}-${uniquePart}-${fileName}`,
+    storagePath: `reports/${patientId}/${Date.now()}-${opaqueId}.${extension}`,
+  };
+}
+
+export function createPendingLabReportStoragePath(
+  patientId: string,
+  extension: AcceptedReport["extension"],
+) {
+  // Lab reports first enter a create-only staging area. A trusted server then
+  // verifies their bytes and atomically binds a deterministic permanent copy
+  // to the laboratory order.
+  const opaqueId = crypto.randomUUID();
+  return {
+    fileName: `lab-report.${extension}`,
+    storagePath: `pending-reports/${patientId}/${opaqueId}-report.${extension}`,
   };
 }
 
@@ -65,6 +68,17 @@ export function reportStorageErrorMessage(error: unknown, action: "upload" | "op
     return action === "upload"
       ? "Your staff role does not allow this report upload. Check the patient assignment or ask an administrator."
       : "Your staff role does not allow access to this report.";
+  }
+  if (code.includes("unauthenticated")) {
+    return "Your staff session has expired. Sign in again before continuing.";
+  }
+  if (code.includes("object-not-found")) {
+    return "The secure report file could not be found. Ask an administrator to review the patient record.";
+  }
+  if (code.includes("invalid-checksum") || code.includes("invalid-argument")) {
+    return action === "upload"
+      ? "The report file could not be verified. Choose the original PDF or image and try again."
+      : "The stored report could not be verified. Ask an administrator to review it.";
   }
   if (code.includes("bucket-not-found") || code.includes("no-default-bucket")) {
     return "Secure report storage is temporarily unavailable. Please contact the clinic administrator.";
@@ -81,6 +95,42 @@ export function reportStorageErrorMessage(error: unknown, action: "upload" | "op
   return action === "upload"
     ? "Unable to upload this report. Please check access and try again."
     : "Unable to open this report. Please check access and try again.";
+}
+
+export function formatReportFileSize(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 KB";
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function downloadReportBlob(blob: Blob, fileName: string) {
+  const safeName = fileName
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "")
+    .slice(0, 120) || "lab-report";
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = safeName;
+  link.rel = "noopener";
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+export function genericReportDownloadName(blob: Blob, prefix: "lab-report" | "medical-report") {
+  const extension = blob.type === "application/pdf"
+    ? "pdf"
+    : blob.type === "image/jpeg"
+      ? "jpg"
+      : blob.type === "image/png"
+        ? "png"
+        : blob.type === "image/webp"
+          ? "webp"
+          : "bin";
+  return `${prefix}.${extension}`;
 }
 
 export function openPendingReportWindow() {

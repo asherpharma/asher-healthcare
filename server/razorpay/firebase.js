@@ -3,6 +3,12 @@ import { HttpError, requireEnvironment } from "./http.js";
 let cachedAccessToken = null;
 let cachedAccessTokenExpiry = 0;
 
+export const SERVICE_ACCOUNT_SCOPES = Object.freeze([
+  "https://www.googleapis.com/auth/datastore",
+  "https://www.googleapis.com/auth/identitytoolkit",
+  "https://www.googleapis.com/auth/devstorage.read_only",
+]);
+
 function bytesToBase64Url(bytes) {
   let binary = "";
   for (let index = 0; index < bytes.length; index += 1) {
@@ -34,10 +40,7 @@ async function createServiceAccountAssertion(env) {
   const header = textToBase64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
   const claims = textToBase64Url(JSON.stringify({
     iss: env.FIREBASE_CLIENT_EMAIL,
-    scope: [
-      "https://www.googleapis.com/auth/datastore",
-      "https://www.googleapis.com/auth/identitytoolkit",
-    ].join(" "),
+    scope: SERVICE_ACCOUNT_SCOPES.join(" "),
     aud: "https://oauth2.googleapis.com/token",
     iat: issuedAt,
     exp: issuedAt + 3600,
@@ -296,6 +299,8 @@ export async function requireActiveStaff(request, env) {
     email: firebaseUser.email || "",
     displayName: staff.data.displayName || firebaseUser.displayName || firebaseUser.email || "Clinic staff",
     role,
+    doctorName: String(staff.data.doctorName || ""),
+    labReportOperator: role === "admin" || staff.data.labReportOperator === true,
     staffUpdateTime: staff.updateTime,
   };
 }
@@ -303,6 +308,13 @@ export async function requireActiveStaff(request, env) {
 export function assertBillingStaff(staff) {
   if (!staff || !["admin", "reception"].includes(staff.role)) {
     throw new HttpError(403, "Only clinic administrators and reception staff can manage payments.");
+  }
+  return staff;
+}
+
+export function assertLabReportOperator(staff) {
+  if (!staff?.labReportOperator) {
+    throw new HttpError(403, "This staff account is not allowed to use an external laboratory portal.");
   }
   return staff;
 }
