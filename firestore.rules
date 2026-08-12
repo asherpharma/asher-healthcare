@@ -510,6 +510,7 @@ service cloud.firestore {
       allow read: if isAdmin()
         || (
           isDoctor()
+          && patientIsActive(resource.data.patientId)
           && isAssignedPatientDoctor(resource.data.patientId)
           && resource.data.clinician is string
           && resource.data.clinician == staffProfile().data.doctorName
