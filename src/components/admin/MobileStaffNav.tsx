@@ -180,7 +180,7 @@ export default function MobileStaffNav({ role, onLock }: { role: string; onLock:
                   Staff access
                 </Link>
               ) : null}
-              {role !== "doctor" ? (
+              {role === "admin" ? (
                 <Link href="/admin/consultations" onClick={() => setMoreOpen(false)} className="flex min-h-24 flex-col justify-between rounded-2xl bg-cyan-50 p-4 font-bold text-cyan-900">
                   <Stethoscope size={25} />
                   Consultations

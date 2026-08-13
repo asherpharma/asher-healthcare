@@ -32,6 +32,12 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type Result = { tone: "success" | "error"; message: string } | null;
 
+type Availability = {
+  key: string;
+  slots: Set<string>;
+  error: boolean;
+};
+
 function currentClinicClock() {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Kolkata",
@@ -56,9 +62,10 @@ export default function AppointmentCTA() {
   const [doctorId, setDoctorId] = useState<DoctorId>("pediatrics");
   const [date, setDate] = useState(() => nextEnabledDate(schedule));
   const [time, setTime] = useState("");
-  const [availability, setAvailability] = useState<{ key: string; slots: Set<string> }>({
+  const [availability, setAvailability] = useState<Availability>({
     key: "",
     slots: new Set(),
+    error: false,
   });
   const [result, setResult] = useState<Result>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -79,9 +86,10 @@ export default function AppointmentCTA() {
     [availability, availabilityKey],
   );
   const availabilityLoading = Boolean(firestore) && availability.key !== availabilityKey;
+  const availabilityError = availability.key === availabilityKey && availability.error;
   const availableSlots = useMemo(
-    () => allSlots.filter((slot) => !occupiedSlots.has(slot)),
-    [allSlots, occupiedSlots],
+    () => availabilityError ? [] : allSlots.filter((slot) => !occupiedSlots.has(slot)),
+    [allSlots, availabilityError, occupiedSlots],
   );
   const selectedTime = availableSlots.includes(time) ? time : availableSlots[0] ?? "";
 
@@ -104,16 +112,23 @@ export default function AppointmentCTA() {
         setAvailability({
           key: `${doctorId}_${date}`,
           slots: new Set(snapshot.docs.map((item) => String(item.data().time || ""))),
+          error: false,
         });
       },
       () => {
-        setAvailability({ key: `${doctorId}_${date}`, slots: new Set() });
+        // Fail closed: never present every slot as available when the live
+        // occupancy check cannot be completed.
+        setAvailability({ key: `${doctorId}_${date}`, slots: new Set(), error: true });
       },
     );
   }, [date, doctorId]);
 
   async function submitBooking(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (availabilityLoading || availabilityError) {
+      setResult({ tone: "error", message: "Live availability is still being checked. Please wait a moment and try again." });
+      return;
+    }
     if (!selectedTime) {
       setResult({ tone: "error", message: "Please choose an available appointment time." });
       return;
@@ -164,6 +179,7 @@ export default function AppointmentCTA() {
       setAvailability((current) => ({
         key: availabilityKey,
         slots: new Set(current.key === availabilityKey ? current.slots : []).add(selectedTime),
+        error: false,
       }));
       setResult({
         tone: "success",
@@ -276,6 +292,8 @@ export default function AppointmentCTA() {
                 <option value="">
                   {availabilityLoading
                     ? "Checking availability…"
+                    : availabilityError
+                      ? "Availability temporarily unavailable"
                     : !selectedDayEnabled
                       ? "Clinic closed this day"
                       : availableSlots.length === 0
@@ -301,6 +319,11 @@ export default function AppointmentCTA() {
               {scheduleError} Default clinic timings are shown.
             </p>
           )}
+          {availabilityError && (
+            <p className="rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700" role="alert">
+              Live appointment availability could not be checked. Please retry in a moment or call the clinic on 90192 63709.
+            </p>
+          )}
 
           <label>
             Reason for visit <span className="optional">Optional</span>
@@ -313,7 +336,7 @@ export default function AppointmentCTA() {
           <button
             className="button button-primary booking-submit"
             type="submit"
-            disabled={submitting || scheduleLoading || !selectedTime}
+            disabled={submitting || scheduleLoading || availabilityLoading || availabilityError || !selectedTime}
           >
             {submitting ? <LoaderCircle className="animate-spin" /> : <CalendarCheck />}
             {submitting ? "Reserving slot…" : "Reserve appointment"}

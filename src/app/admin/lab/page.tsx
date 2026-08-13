@@ -627,6 +627,12 @@ function LabDesk() {
       return;
     }
     if (status === order.status) return;
+    if (
+      status === "cancelled"
+      && !window.confirm("Cancel this laboratory order? Results and reports cannot be attached after cancellation.")
+    ) {
+      return;
+    }
     setStatusBusyOrderId(order.id);
     setError("");
     try {

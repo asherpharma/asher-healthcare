@@ -120,12 +120,22 @@ function sortPatients(left, right) {
 
 export async function patientDirectoryForStaff(env, staff, { includeArchived = false } = {}) {
   const staffRecord = await getDocument(env, `staff/${staff.uid}`);
-  if (!staffRecord || staffRecord.data.active !== true) {
+  const currentRole = String(staffRecord?.data?.role || "");
+  if (
+    !staffRecord
+    || staffRecord.data.active !== true
+    || !["admin", "doctor", "reception"].includes(currentRole)
+  ) {
     throw new HttpError(403, "This staff account is no longer active.");
   }
 
   const documents = await listMaskedPatientDocuments(env);
-  return projectPatientDirectory(documents, staff, staffRecord.data, { includeArchived });
+  return projectPatientDirectory(
+    documents,
+    { ...staff, role: currentRole },
+    staffRecord.data,
+    { includeArchived },
+  );
 }
 
 export function projectPatientDirectory(

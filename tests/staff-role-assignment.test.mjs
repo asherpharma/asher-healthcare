@@ -3,7 +3,9 @@ import test from "node:test";
 
 import { HttpError } from "../server/razorpay/http.js";
 import {
+  normalizeStaffActiveRequest,
   normalizeStaffRoleAssignmentRequest,
+  setStaffActiveState,
   setStaffRoleAssignment,
 } from "../server/staff/role-assignment.js";
 
@@ -262,4 +264,45 @@ test("an already-current assignment is an idempotent no-op", async () => {
   assert.equal(result.changed, false);
   assert.equal(result.labReportOperator, false);
   assert.equal(database.commits.length, 0);
+});
+
+test("staff activation changes are atomic, audited, and self-deactivation is blocked", async () => {
+  assert.deepEqual(normalizeStaffActiveRequest({ uid: " reception-1 ", active: false }), {
+    uid: "reception-1",
+    active: false,
+  });
+  assert.throws(
+    () => normalizeStaffActiveRequest({ uid: "reception-1", active: "no" }),
+    (error) => error instanceof HttpError && error.status === 400,
+  );
+
+  const database = fakeDatabase({
+    "staff/admin-1": administrator(),
+    "staff/reception-1": target(),
+  });
+  const result = await setStaffActiveState(
+    env,
+    { uid: "reception-1", active: false },
+    { uid: "admin-1", role: "admin" },
+    database,
+  );
+  const [, updateTarget, audit] = database.commits[0];
+  assert.deepEqual(updateTarget.fieldPaths, ["active", "updatedBy", "updatedAt"]);
+  assert.equal(updateTarget.data.active, false);
+  assert.equal(updateTarget.data.updatedBy, "admin-1");
+  assert.equal(audit.data.eventType, "staff.access_deactivated");
+  assert.equal(audit.data.targetUid, "reception-1");
+  assert.equal(result.changed, true);
+
+  const selfDatabase = fakeDatabase({ "staff/admin-1": administrator() });
+  await assert.rejects(
+    setStaffActiveState(
+      env,
+      { uid: "admin-1", active: false },
+      { uid: "admin-1", role: "admin" },
+      selfDatabase,
+    ),
+    (error) => error instanceof HttpError && error.status === 409,
+  );
+  assert.equal(selfDatabase.commits.length, 0);
 });

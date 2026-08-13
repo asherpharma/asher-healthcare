@@ -5,10 +5,7 @@ import { firestore } from "@/firebase/config";
 import { DOCTORS } from "@/lib/appointments";
 import {
   collection,
-  doc,
   onSnapshot,
-  serverTimestamp,
-  updateDoc,
   type Timestamp,
 } from "firebase/firestore";
 import {
@@ -280,12 +277,25 @@ export default function StaffAccessManager() {
           : "Doctor assignment updated and audited. Any separate partner-lab grant was removed for safety.");
         return;
       }
-      await updateDoc(doc(firestore, "staff", record.uid), {
-        ...changes,
-        updatedBy: profile.uid,
-        updatedAt: serverTimestamp(),
-      });
-      setNotice("Staff access updated.");
+      if (changes.active !== undefined) {
+        const idToken = await user.getIdToken();
+        const response = await fetch("/api/admin/staff/active", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${idToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ uid: record.uid, active: changes.active }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(result.error || "Staff access could not be updated.");
+        }
+        setNotice(changes.active
+          ? "Staff access reactivated and recorded in the audit log."
+          : "Staff access deactivated and recorded in the audit log.");
+        return;
+      }
     } catch (updateError) {
       setError(updateError instanceof Error
         ? updateError.message
@@ -554,13 +564,18 @@ export default function StaffAccessManager() {
                     <button
                       type="button"
                       disabled={updating || resending || isSelf}
-                      onClick={() => void updateStaffAccess(record, { active: !record.active })}
+                      onClick={() => {
+                        const action = record.active ? "deactivate" : "reactivate";
+                        if (window.confirm(`Are you sure you want to ${action} access for ${record.displayName}?`)) {
+                          void updateStaffAccess(record, { active: !record.active });
+                        }
+                      }}
                       className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 text-xs font-bold transition ${
                         record.active ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-700"
                       } disabled:cursor-not-allowed disabled:opacity-60`}
                     >
                       {updating ? <LoaderCircle size={15} className="animate-spin" /> : record.active ? <ShieldCheck size={15} /> : <KeyRound size={15} />}
-                      {record.active ? "Access enabled" : "Access disabled"}
+                      {record.active ? "Deactivate access" : "Reactivate access"}
                     </button>
                   </div>
                 </article>

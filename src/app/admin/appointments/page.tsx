@@ -163,9 +163,10 @@ function AppointmentDesk() {
   const [creating, setCreating] = useState(false);
   const [bookingError, setBookingError] = useState("");
   const [booking, setBooking] = useState<BookingForm>(() => emptyBooking(nextEnabledDate(schedule, today)));
-  const [availability, setAvailability] = useState<{ key: string; slots: Set<string> }>({
+  const [availability, setAvailability] = useState<{ key: string; slots: Set<string>; error: boolean }>({
     key: "",
     slots: new Set(),
+    error: false,
   });
   const deskDate = dateFilter || today;
   const loading = deskLoading || historyLoading || archiveLoading;
@@ -275,9 +276,10 @@ function AppointmentDesk() {
     [availability, availabilityKey],
   );
   const availabilityLoading = Boolean(firestore) && availability.key !== availabilityKey;
+  const availabilityError = availability.key === availabilityKey && availability.error;
   const availableBookingSlots = useMemo(
-    () => bookingSlots.filter((slot) => !occupiedSlots.has(slot)),
-    [bookingSlots, occupiedSlots],
+    () => availabilityError ? [] : bookingSlots.filter((slot) => !occupiedSlots.has(slot)),
+    [availabilityError, bookingSlots, occupiedSlots],
   );
   const selectedBookingTime = availableBookingSlots.includes(booking.preferredTime)
     ? booking.preferredTime
@@ -296,12 +298,14 @@ function AppointmentDesk() {
         setAvailability({
           key: `${booking.doctorId}_${booking.preferredDate}`,
           slots: new Set(snapshot.docs.map((item) => String(item.data().time || ""))),
+          error: false,
         });
       },
       () => {
         setAvailability({
           key: `${booking.doctorId}_${booking.preferredDate}`,
           slots: new Set(),
+          error: true,
         });
       },
     );
@@ -449,6 +453,16 @@ function AppointmentDesk() {
 
   async function changeStatus(id: string, status: AppointmentStatus) {
     if (!firestore) return false;
+    if (
+      (status === "cancelled" || status === "no_show")
+      && !window.confirm(
+        status === "cancelled"
+          ? "Cancel this appointment and release its reserved time slot?"
+          : "Mark this patient as a no-show?",
+      )
+    ) {
+      return false;
+    }
     const database = firestore;
     setUpdatingId(id);
     setError("");
@@ -604,6 +618,10 @@ function AppointmentDesk() {
       setBookingError("Choose an appointment date.");
       return;
     }
+    if (availabilityLoading || availabilityError) {
+      setBookingError("Live availability could not be checked. Refresh and try again before creating this booking.");
+      return;
+    }
     if (!selectedBookingTime || occupiedSlots.has(selectedBookingTime)) {
       setBookingError("Choose an available appointment time.");
       return;
@@ -711,10 +729,10 @@ function AppointmentDesk() {
               <select
                 value={selectedBookingTime}
                 onChange={(event) => updateBooking("preferredTime", event.target.value)}
-                disabled={availabilityLoading || availableBookingSlots.length === 0}
+                disabled={availabilityLoading || availabilityError || availableBookingSlots.length === 0}
                 className={inputClass + " mt-2 w-full text-slate-800 disabled:opacity-60"}
               >
-                <option value="">{availabilityLoading ? "Checking availability…" : availableBookingSlots.length ? "Select a time" : "No slots available"}</option>
+                <option value="">{availabilityLoading ? "Checking availability…" : availabilityError ? "Availability temporarily unavailable" : availableBookingSlots.length ? "Select a time" : "No slots available"}</option>
                 {bookingSlots.map((slot) => (
                   <option key={slot} value={slot} disabled={occupiedSlots.has(slot)}>
                     {formatAppointmentTime(slot)}{occupiedSlots.has(slot) ? " — Booked" : ""}
@@ -723,6 +741,7 @@ function AppointmentDesk() {
               </select>
               <span className="mt-2 block text-xs font-medium text-white/60">{scheduleSummary(schedule, booking.doctorId)}</span>
             </label>
+            {availabilityError && <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 sm:col-span-2 xl:col-span-3">Live availability could not be checked. Refresh before creating a booking so an occupied slot is never shown as free.</p>}
             <label className="text-sm font-bold">Booking source
               <select value={booking.source} onChange={(event) => updateBooking("source", event.target.value as BookingSource)} className={inputClass + " mt-2 w-full text-slate-800"}>
                 <option value="reception">Reception desk</option>
@@ -735,7 +754,7 @@ function AppointmentDesk() {
             </label>
             {bookingError && <p className="rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 sm:col-span-2 xl:col-span-3">{bookingError}</p>}
             <div className="flex flex-wrap gap-3 sm:col-span-2 xl:col-span-3">
-              <button type="submit" disabled={creating} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-[#233A59] transition hover:bg-[#F8F4EA] disabled:cursor-not-allowed disabled:opacity-60">
+              <button type="submit" disabled={creating || availabilityLoading || availabilityError || !selectedBookingTime} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-[#233A59] transition hover:bg-[#F8F4EA] disabled:cursor-not-allowed disabled:opacity-60">
                 {creating ? <LoaderCircle size={17} className="animate-spin" /> : <Save size={17} />} {creating ? "Creating…" : "Create confirmed booking"}
               </button>
               <button type="button" onClick={() => { setShowCreate(false); setBookingError(""); }} className="min-h-11 rounded-xl border border-white/25 px-5 py-3 text-sm font-bold text-white transition hover:bg-white/10">Cancel</button>

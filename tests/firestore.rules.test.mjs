@@ -9,10 +9,12 @@ import {
 import {
   Timestamp,
   collection,
+  collectionGroup,
   deleteDoc,
   doc,
   getDoc,
   getDocs,
+  orderBy,
   query,
   serverTimestamp,
   setDoc,
@@ -200,6 +202,8 @@ test("admin browser management still permits non-privileged staff profile change
   const database = staffDb("admin");
   await assertSucceeds(updateDoc(doc(database, "staff/profile-maintenance"), {
     displayName: "Updated Name",
+  }));
+  await assertFails(updateDoc(doc(database, "staff/profile-maintenance"), {
     active: false,
   }));
 });
@@ -374,7 +378,14 @@ test("reception receives no direct patient document access and doctors see only 
   await assertSucceeds(getDoc(doc(staffDb("admin"), "patients/obg-chart")));
 
   const assignedVisit = {
+    visitDate: "2026-08-12",
     doctorName: "Dr. Lt Col Shafi Ahamad",
+    chiefComplaint: "Routine follow-up",
+    vitals: "",
+    diagnosis: "Stable",
+    treatment: "Continue care",
+    followUpDate: "",
+    notes: "",
     createdBy: staff.pediatrics.uid,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -385,6 +396,230 @@ test("reception receives no direct patient document access and doctors see only 
   await assertFails(
     setDoc(doc(staffDb("pediatrics"), "patients/obg-chart/visits/visit-2"), assignedVisit),
   );
+});
+
+test("clinical history is append-only for doctors and administrators", async () => {
+  const createdAt = Timestamp.fromMillis(1_750_000_000_000);
+  await seedDocuments([
+    ["patients/immutable-chart", {
+      fullName: "Immutable Patient",
+      doctorName: "Dr. Lt Col Shafi Ahamad",
+      archived: false,
+    }],
+    ["patients/immutable-chart/visits/visit-1", {
+      doctorName: "Dr. Lt Col Shafi Ahamad",
+      diagnosis: "Original diagnosis",
+      createdBy: staff.pediatrics.uid,
+      createdAt,
+      updatedAt: createdAt,
+    }],
+    ["patients/immutable-chart/prescriptions/prescription-1", {
+      doctorName: "Dr. Lt Col Shafi Ahamad",
+      advice: "Original advice",
+      createdBy: staff.pediatrics.uid,
+      createdAt,
+      updatedAt: createdAt,
+    }],
+  ]);
+
+  await assertFails(updateDoc(
+    doc(staffDb("pediatrics"), "patients/immutable-chart/visits/visit-1"),
+    { diagnosis: "Rewritten diagnosis", updatedAt: serverTimestamp() },
+  ));
+  await assertFails(updateDoc(
+    doc(staffDb("admin"), "patients/immutable-chart/prescriptions/prescription-1"),
+    { advice: "Rewritten advice", updatedAt: serverTimestamp() },
+  ));
+});
+
+test("retention rules prevent browser deletion and clinical-history rewrites", async () => {
+  const createdAt = Timestamp.fromMillis(1_750_000_000_000);
+  await seedDocuments([
+    ["appointments/retained-appointment", appointment()],
+    ["patients/retained-chart", {
+      fullName: "Retained Patient",
+      doctorName: "Dr. Lt Col Shafi Ahamad",
+      archived: false,
+    }],
+    ["patients/retained-chart/vaccinations/vaccine-1", { notes: "Original", createdAt }],
+    ["patients/retained-chart/pregnancyRecords/pregnancy-1", { notes: "Original", createdAt }],
+    ["patients/retained-chart/growthRecords/growth-1", { milestone: "Original", createdAt }],
+  ]);
+
+  const admin = staffDb("admin");
+  await assertFails(deleteDoc(doc(admin, "appointments/retained-appointment")));
+  await assertFails(deleteDoc(doc(admin, `staff/${staff.reception.uid}`)));
+  await assertFails(updateDoc(doc(admin, "patients/retained-chart/vaccinations/vaccine-1"), { notes: "Rewritten" }));
+  await assertFails(updateDoc(doc(admin, "patients/retained-chart/pregnancyRecords/pregnancy-1"), { notes: "Rewritten" }));
+  await assertFails(updateDoc(doc(admin, "patients/retained-chart/growthRecords/growth-1"), { milestone: "Rewritten" }));
+});
+
+test("collection-group visit access cannot outlive a doctor assignment", async () => {
+  await seedDocuments([
+    ["patients/reassigned-chart", {
+      fullName: "Reassigned Patient",
+      doctorName: "Dr. Shaik Reshma",
+      archived: false,
+    }],
+    ["patients/reassigned-chart/visits/old-pediatrics-visit", {
+      doctorName: "Dr. Lt Col Shafi Ahamad",
+      diagnosis: "Historical entry",
+      createdBy: staff.pediatrics.uid,
+      createdAt: Timestamp.fromMillis(1_750_000_000_000),
+      updatedAt: Timestamp.fromMillis(1_750_000_000_000),
+    }],
+  ]);
+
+  const path = "patients/reassigned-chart/visits/old-pediatrics-visit";
+  await assertFails(getDoc(doc(staffDb("pediatrics"), path)));
+  await assertSucceeds(getDoc(doc(staffDb("admin"), path)));
+  await assertFails(getDocs(query(
+    collectionGroup(staffDb("pediatrics"), "visits"),
+    where("doctorName", "==", "Dr. Lt Col Shafi Ahamad"),
+  )));
+});
+
+test("clinical visit and prescription creates reject unknown or oversized shapes", async () => {
+  await seedDocuments([
+    ["patients/schema-chart", {
+      fullName: "Schema Patient",
+      doctorName: "Dr. Lt Col Shafi Ahamad",
+      archived: false,
+    }],
+  ]);
+  const database = staffDb("pediatrics");
+  const clinicalMetadata = {
+    createdBy: staff.pediatrics.uid,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  await assertSucceeds(setDoc(doc(database, "patients/schema-chart/prescriptions/valid-prescription"), {
+    ...clinicalMetadata,
+    consultationId: "consultation-1",
+    appointmentId: "appointment-1",
+    prescribedDate: "2026-08-12",
+    doctorName: "Dr. Lt Col Shafi Ahamad",
+    medicines: [{
+      name: "Paracetamol",
+      dose: "5 ml",
+      frequency: "Twice daily",
+      duration: "3 days",
+      instructions: "After food",
+    }],
+    advice: "Return if symptoms worsen.",
+  }));
+  await assertFails(setDoc(doc(database, "patients/schema-chart/visits/invalid-visit"), {
+    ...clinicalMetadata,
+    visitDate: "2026-08-12",
+    doctorName: "Dr. Lt Col Shafi Ahamad",
+    chiefComplaint: "Follow-up",
+    vitals: "",
+    diagnosis: "Stable",
+    treatment: "",
+    followUpDate: "",
+    notes: "",
+    unexpectedClinicalField: "must not be accepted",
+  }));
+  await assertFails(setDoc(doc(database, "patients/schema-chart/prescriptions/invalid-prescription"), {
+    ...clinicalMetadata,
+    prescribedDate: "2026-08-12",
+    doctorName: "Unknown clinician",
+    medicines: [],
+    advice: "Continue care",
+  }));
+  await assertFails(setDoc(doc(database, "patients/schema-chart/prescriptions/malformed-medicine"), {
+    ...clinicalMetadata,
+    prescribedDate: "2026-08-12",
+    doctorName: "Dr. Lt Col Shafi Ahamad",
+    medicines: [null],
+    advice: "Continue care",
+  }));
+  await assertFails(setDoc(doc(database, "patients/schema-chart/visits/wrong-doctor"), {
+    ...clinicalMetadata,
+    visitDate: "2026-08-12",
+    doctorName: "Dr. Shaik Reshma",
+    chiefComplaint: "Follow-up",
+    vitals: "",
+    diagnosis: "Stable",
+    treatment: "",
+    followUpDate: "",
+    notes: "",
+  }));
+});
+
+test("patient-related tasks are visible and mutable only to their assignee or an administrator", async () => {
+  await seedDocuments([
+    ["staffTasks/assigned-pediatrics", {
+      title: "Call after results",
+      details: "Discuss the protected patient follow-up.",
+      type: "follow_up",
+      priority: "medium",
+      status: "open",
+      dueDate: "2026-08-12",
+      dueTime: "18:00",
+      patientId: "patient-1",
+      patientName: "Rules Test Patient",
+      assignedTo: staff.pediatrics.uid,
+      assignedToName: "Dr. Lt Col Shafi Ahamad",
+      createdBy: staff.admin.uid,
+      createdAt: Timestamp.fromMillis(1_750_000_000_000),
+      updatedAt: Timestamp.fromMillis(1_750_000_000_000),
+      completedAt: null,
+      completedBy: "",
+    }],
+  ]);
+
+  const taskPath = "staffTasks/assigned-pediatrics";
+  await assertSucceeds(getDoc(doc(staffDb("admin"), taskPath)));
+  await assertSucceeds(getDoc(doc(staffDb("pediatrics"), taskPath)));
+  await assertFails(getDoc(doc(staffDb("obg"), taskPath)));
+  await assertFails(getDoc(doc(staffDb("reception"), taskPath)));
+  await assertSucceeds(getDocs(query(
+    collection(staffDb("pediatrics"), "staffTasks"),
+    where("assignedTo", "==", staff.pediatrics.uid),
+    orderBy("dueDate", "asc"),
+  )));
+  await assertFails(getDocs(collection(staffDb("pediatrics"), "staffTasks")));
+  await assertFails(updateDoc(doc(staffDb("obg"), taskPath), {
+    status: "completed",
+    completedAt: serverTimestamp(),
+    completedBy: staff.obg.uid,
+    updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(updateDoc(doc(staffDb("pediatrics"), taskPath), {
+    status: "completed",
+    completedAt: serverTimestamp(),
+    completedBy: staff.pediatrics.uid,
+    updatedAt: serverTimestamp(),
+  }));
+  await assertFails(deleteDoc(doc(staffDb("admin"), taskPath)));
+
+  const taskCreate = {
+    title: "Review tomorrow",
+    details: "",
+    type: "general",
+    priority: "medium",
+    status: "open",
+    dueDate: "2026-08-13",
+    dueTime: "18:00",
+    patientId: "",
+    patientName: "",
+    assignedToName: "Dr. Lt Col Shafi Ahamad",
+    createdBy: staff.pediatrics.uid,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    completedAt: null,
+    completedBy: "",
+  };
+  await assertSucceeds(setDoc(doc(staffDb("pediatrics"), "staffTasks/own-task"), {
+    ...taskCreate,
+    assignedTo: staff.pediatrics.uid,
+  }));
+  await assertFails(setDoc(doc(staffDb("pediatrics"), "staffTasks/unassigned-task"), {
+    ...taskCreate,
+    assignedTo: "",
+    assignedToName: "Administrator triage queue",
+  }));
 });
 
 test("legacy doctorId assignment is used only when canonical doctorName is empty", async () => {
@@ -968,6 +1203,23 @@ test("billing records are unavailable to doctors but remain available to admin a
   await assertFails(getDoc(doc(staffDb("pediatrics"), "invoices/billing-invoice/payments/payment-1")));
   await assertSucceeds(getDoc(doc(staffDb("reception"), "invoices/billing-invoice")));
   await assertSucceeds(getDoc(doc(staffDb("admin"), "invoices/billing-invoice/payments/payment-1")));
+});
+
+test("ordered payment audit queries are available only to billing staff", async () => {
+  await seedDocuments([
+    ["invoices/audit-invoice/payments/payment-1", {
+      amount: 500,
+      createdAt: Timestamp.fromMillis(1_750_000_000_000),
+    }],
+  ]);
+
+  const paymentAudit = (database) => query(
+    collectionGroup(database, "payments"),
+    orderBy("createdAt", "desc"),
+  );
+  await assertSucceeds(getDocs(paymentAudit(staffDb("admin"))));
+  await assertSucceeds(getDocs(paymentAudit(staffDb("reception"))));
+  await assertFails(getDocs(paymentAudit(staffDb("pediatrics"))));
 });
 
 test("client payment increases and direct ledger entries are always denied", async () => {

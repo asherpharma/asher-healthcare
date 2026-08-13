@@ -191,12 +191,111 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time;
     }
 
-    function validClinicalUpdate(patientId) {
-      return canAccessPatientClinical(patientId)
-        && patientIsActive(patientId)
-        && request.resource.data.createdBy == resource.data.createdBy
-        && request.resource.data.createdAt == resource.data.createdAt
-        && request.resource.data.updatedAt == request.time;
+    function validVisitCreate(patientId) {
+      let data = request.resource.data;
+      let keys = data.keys();
+      return validClinicalCreate(patientId)
+        && keys.hasAll([
+          'visitDate', 'doctorName', 'chiefComplaint', 'vitals', 'diagnosis',
+          'treatment', 'followUpDate', 'notes',
+          'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && keys.hasOnly([
+          'consultationId', 'appointmentId', 'visitDate', 'doctorName',
+          'chiefComplaint', 'vitals', 'vitalSigns', 'examinationFindings',
+          'diagnosis', 'treatment', 'followUpDate', 'notes', 'status', 'source',
+          'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.visitDate is string
+        && data.visitDate.size() == 10
+        && data.doctorName in ['Dr. Lt Col Shafi Ahamad', 'Dr. Shaik Reshma']
+        && (isAdmin() || data.doctorName == staffProfile().data.doctorName)
+        && data.chiefComplaint is string
+        && data.chiefComplaint.size() >= 2
+        && data.chiefComplaint.size() <= 2000
+        && data.vitals is string
+        && data.vitals.size() <= 1000
+        && data.diagnosis is string
+        && data.diagnosis.size() >= 2
+        && data.diagnosis.size() <= 2000
+        && data.treatment is string
+        && data.treatment.size() <= 3000
+        && data.followUpDate is string
+        && data.followUpDate.size() <= 10
+        && data.notes is string
+        && data.notes.size() <= 3000
+        && (!keys.hasAny(['consultationId']) || (data.consultationId is string && data.consultationId.size() <= 80))
+        && (!keys.hasAny(['appointmentId']) || (data.appointmentId is string && data.appointmentId.size() <= 80))
+        && (!keys.hasAny(['vitalSigns']) || data.vitalSigns is map)
+        && (!keys.hasAny(['examinationFindings']) || (data.examinationFindings is string && data.examinationFindings.size() <= 3000))
+        && (!keys.hasAny(['status']) || data.status == 'completed')
+        && (!keys.hasAny(['source']) || data.source in ['doctor_workspace', 'patient_record']);
+    }
+
+    function validMedicine(medicine) {
+      return medicine is map
+        && medicine.keys().hasAll(['name', 'dose', 'frequency', 'duration', 'instructions'])
+        && medicine.keys().hasOnly(['name', 'dose', 'frequency', 'duration', 'instructions'])
+        && medicine.name is string
+        && medicine.name.size() >= 1
+        && medicine.name.size() <= 200
+        && medicine.dose is string
+        && medicine.dose.size() <= 100
+        && medicine.frequency is string
+        && medicine.frequency.size() <= 100
+        && medicine.duration is string
+        && medicine.duration.size() <= 100
+        && medicine.instructions is string
+        && medicine.instructions.size() <= 300;
+    }
+
+    function validMedicineList(medicines) {
+      return medicines is list
+        && medicines.size() <= 20
+        && (medicines.size() < 1 || validMedicine(medicines[0]))
+        && (medicines.size() < 2 || validMedicine(medicines[1]))
+        && (medicines.size() < 3 || validMedicine(medicines[2]))
+        && (medicines.size() < 4 || validMedicine(medicines[3]))
+        && (medicines.size() < 5 || validMedicine(medicines[4]))
+        && (medicines.size() < 6 || validMedicine(medicines[5]))
+        && (medicines.size() < 7 || validMedicine(medicines[6]))
+        && (medicines.size() < 8 || validMedicine(medicines[7]))
+        && (medicines.size() < 9 || validMedicine(medicines[8]))
+        && (medicines.size() < 10 || validMedicine(medicines[9]))
+        && (medicines.size() < 11 || validMedicine(medicines[10]))
+        && (medicines.size() < 12 || validMedicine(medicines[11]))
+        && (medicines.size() < 13 || validMedicine(medicines[12]))
+        && (medicines.size() < 14 || validMedicine(medicines[13]))
+        && (medicines.size() < 15 || validMedicine(medicines[14]))
+        && (medicines.size() < 16 || validMedicine(medicines[15]))
+        && (medicines.size() < 17 || validMedicine(medicines[16]))
+        && (medicines.size() < 18 || validMedicine(medicines[17]))
+        && (medicines.size() < 19 || validMedicine(medicines[18]))
+        && (medicines.size() < 20 || validMedicine(medicines[19]));
+    }
+
+    function validPrescriptionCreate(patientId) {
+      let data = request.resource.data;
+      let keys = data.keys();
+      return validClinicalCreate(patientId)
+        && keys.hasAll([
+          'prescribedDate', 'doctorName', 'medicines', 'advice',
+          'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && keys.hasOnly([
+          'consultationId', 'appointmentId', 'prescribedDate', 'doctorName',
+          'medicines', 'advice', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.prescribedDate is string
+        && data.prescribedDate.size() == 10
+        && data.doctorName in ['Dr. Lt Col Shafi Ahamad', 'Dr. Shaik Reshma']
+        && (isAdmin() || data.doctorName == staffProfile().data.doctorName)
+        && validMedicineList(data.medicines)
+        && data.advice is string
+        && data.advice.size() <= 3000
+        && (data.medicines.size() > 0 || data.advice.size() > 0)
+        && (!keys.hasAny(['consultationId']) || (data.consultationId is string && data.consultationId.size() <= 80))
+        && (!keys.hasAny(['appointmentId']) || (data.appointmentId is string && data.appointmentId.size() <= 80));
     }
 
     function validLinkedLabReport(patientId, reportId) {
@@ -371,7 +470,9 @@ service cloud.firestore {
           isAssignedAppointmentDoctor()
           && (validAppointmentQueueUpdate() || validLegacyAppointmentUpdate())
         ));
-      allow delete: if isAdmin();
+      // Appointment history is retained; cancellation releases the separate
+      // slot lock without erasing the booking audit record.
+      allow delete: if false;
     }
 
     match /appointmentSlots/{slotId} {
@@ -462,16 +563,11 @@ service cloud.firestore {
       allow read: if isAdmin() || isReception();
     }
 
-    // The management dashboard reads clinical visits across all patient
-    // records. Clinical content stays unavailable to reception accounts;
-    // writes remain governed by the patient-specific rules below.
+    // Only the administrator dashboard reads clinical visits across patient
+    // records. Doctors use patient-bound paths so reassignment or archiving
+    // immediately revokes their collection-group access too.
     match /{path=**}/visits/{visitId} {
-      allow read: if isAdmin()
-        || (
-          isDoctor()
-          && resource.data.doctorName is string
-          && resource.data.doctorName == staffProfile().data.doctorName
-        );
+      allow read: if isAdmin();
     }
 
     match /invoices/{invoiceId} {
@@ -635,7 +731,12 @@ service cloud.firestore {
     }
 
     match /staffTasks/{taskId} {
-      allow read: if isStaff();
+      // Patient follow-ups are visible clinic-wide only to administrators.
+      // Other roles receive only tasks explicitly assigned to their account.
+      allow read: if isAdmin()
+        || (isStaff()
+          && resource.data.assignedTo is string
+          && resource.data.assignedTo == request.auth.uid);
       allow create: if isStaff()
         && request.resource.data.keys().hasAll([
           'title', 'details', 'type', 'priority', 'status', 'dueDate', 'dueTime',
@@ -666,9 +767,8 @@ service cloud.firestore {
         && request.resource.data.assignedTo is string
         && request.resource.data.assignedTo.size() <= 128
         && (
-          request.resource.data.assignedTo == ''
+          isAdmin()
           || request.resource.data.assignedTo == request.auth.uid
-          || isAdmin()
         )
         && request.resource.data.assignedToName is string
         && request.resource.data.assignedToName.size() <= 100
@@ -677,7 +777,10 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time
         && request.resource.data.completedAt == null
         && request.resource.data.completedBy == '';
-      allow update: if isStaff()
+      allow update: if (isAdmin()
+          || (isStaff()
+            && resource.data.assignedTo is string
+            && resource.data.assignedTo == request.auth.uid))
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'status', 'updatedAt', 'completedAt', 'completedBy'
         ])
@@ -695,7 +798,8 @@ service cloud.firestore {
             && request.resource.data.completedBy == ''
           )
         );
-      allow delete: if isAdmin();
+      // Task history is retained for operational accountability.
+      allow delete: if false;
     }
 
     // Clinical audit entries are immutable. Doctors and administrators can
@@ -744,9 +848,10 @@ service cloud.firestore {
       allow create: if false;
       allow update: if isAdmin()
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-          'role', 'doctorName', 'labReportOperator'
+          'active', 'role', 'doctorName', 'labReportOperator'
         ]);
-      allow delete: if isAdmin();
+      // Staff identities remain in the audit history after access is revoked.
+      allow delete: if false;
     }
 
     // Exact patient-identity reservations are maintained only by protected
@@ -773,16 +878,16 @@ service cloud.firestore {
 
       match /visits/{visitId} {
         allow read: if canAccessPatientClinical(patientId);
-        allow create: if validClinicalCreate(patientId);
-        allow update: if validClinicalUpdate(patientId);
-        allow delete: if false;
+        allow create: if validVisitCreate(patientId);
+        // Clinical history is append-only. Corrections create a new signed
+        // entry instead of silently changing a previous clinician's record.
+        allow update, delete: if false;
       }
 
       match /prescriptions/{prescriptionId} {
         allow read: if canAccessPatientClinical(patientId);
-        allow create: if validClinicalCreate(patientId);
-        allow update: if validClinicalUpdate(patientId);
-        allow delete: if false;
+        allow create: if validPrescriptionCreate(patientId);
+        allow update, delete: if false;
       }
 
       match /vaccinations/{vaccinationId} {
@@ -824,8 +929,7 @@ service cloud.firestore {
           && request.resource.data.adverseEvents.size() <= 500
           && request.resource.data.notes is string
           && request.resource.data.notes.size() <= 500;
-        allow update: if validClinicalUpdate(patientId);
-        allow delete: if false;
+        allow update, delete: if false;
       }
 
       match /pregnancyRecords/{pregnancyRecordId} {
@@ -880,8 +984,7 @@ service cloud.firestore {
           && request.resource.data.carePlan.size() <= 800
           && request.resource.data.notes is string
           && request.resource.data.notes.size() <= 800;
-        allow update: if validClinicalUpdate(patientId);
-        allow delete: if false;
+        allow update, delete: if false;
       }
 
       match /growthRecords/{growthRecordId} {
@@ -916,8 +1019,7 @@ service cloud.firestore {
             'Dr. Lt Col Shafi Ahamad',
             'Dr. Shaik Reshma'
           ];
-        allow update: if validClinicalUpdate(patientId);
-        allow delete: if false;
+        allow update, delete: if false;
       }
 
       match /reports/{reportId} {

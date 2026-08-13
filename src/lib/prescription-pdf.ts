@@ -180,7 +180,10 @@ async function createPrescriptionPdf(
   pdf.text("Rx", 14, 110);
   let y = drawMedicineHeader(pdf, 115);
 
-  for (const [index, medicine] of prescription.medicines.entries()) {
+  const safeMedicines = Array.isArray(prescription.medicines)
+    ? prescription.medicines.filter((medicine) => medicine && typeof medicine === "object")
+    : [];
+  for (const [index, medicine] of safeMedicines.entries()) {
     const nameLines = pdf.splitTextToSize(String(index + 1) + ". " + medicine.name, 62) as string[];
     const doseLines = pdf.splitTextToSize(medicine.dose || "-", 22) as string[];
     const frequencyLines = pdf.splitTextToSize(medicine.frequency || "-", 35) as string[];

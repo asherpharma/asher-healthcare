@@ -33,9 +33,9 @@
     }
   ],
   "shortcuts": [
+    { "name": "Staff Home", "short_name": "Home", "url": "/admin" },
     { "name": "Appointments", "short_name": "Bookings", "url": "/admin/appointments" },
-    { "name": "Register Patient", "short_name": "New Patient", "url": "/admin/patients" },
-    { "name": "Billing", "short_name": "Billing", "url": "/admin/billing" },
-    { "name": "Consultations", "short_name": "Consult", "url": "/admin/consultations" }
+    { "name": "Tasks and Follow-ups", "short_name": "Tasks", "url": "/admin/tasks" },
+    { "name": "App Help", "short_name": "App", "url": "/admin/app" }
   ]
 }

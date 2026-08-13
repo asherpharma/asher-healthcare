@@ -64,6 +64,20 @@ export function normalizeStaffRoleAssignmentRequest(body = {}) {
   return { uid, role, doctorName: "", doctorId: "unassigned" };
 }
 
+export function normalizeStaffActiveRequest(body = {}) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new HttpError(400, "Choose a valid staff access change.");
+  }
+  const uid = typeof body.uid === "string" ? body.uid.trim() : "";
+  if (!validDocumentId(uid)) {
+    throw new HttpError(400, "Choose a valid staff account.");
+  }
+  if (typeof body.active !== "boolean") {
+    throw new HttpError(400, "Choose whether this staff account is active.");
+  }
+  return { uid, active: body.active };
+}
+
 function currentAdministrator(authenticatedAdministrator, administratorDocument) {
   if (
     !authenticatedAdministrator
@@ -180,4 +194,60 @@ export async function setStaffRoleAssignment(
     labReportOperator: privilegeContextChanged ? false : target.labReportOperator,
     changed: true,
   };
+}
+
+export async function setStaffActiveState(
+  env,
+  body,
+  authenticatedAdministrator,
+  database = DEFAULT_DATABASE,
+) {
+  const input = normalizeStaffActiveRequest(body);
+  if (!validDocumentId(authenticatedAdministrator?.uid)) {
+    throw new HttpError(403, "Only a clinic administrator can change staff access.");
+  }
+
+  const administratorPath = `staff/${authenticatedAdministrator.uid}`;
+  const targetPath = `staff/${input.uid}`;
+  const [administratorDocument, targetDocument] = await Promise.all([
+    database.getDocument(env, administratorPath),
+    database.getDocument(env, targetPath),
+  ]);
+  const actor = currentAdministrator(authenticatedAdministrator, administratorDocument);
+  if (!targetDocument) {
+    throw new HttpError(404, "This staff account could not be found.");
+  }
+  if (actor.uid === input.uid && !input.active) {
+    throw new HttpError(409, "You cannot deactivate your own administrator account.");
+  }
+
+  const previousActive = targetDocument.data.active === true;
+  if (previousActive === input.active) {
+    return { uid: input.uid, active: input.active, changed: false };
+  }
+
+  const now = new Date();
+  const auditId = crypto.randomUUID();
+  await database.commitWrites(env, [
+    database.verifyDocumentWrite(env, administratorPath, administratorDocument.updateTime),
+    database.updateDocumentWrite(
+      env,
+      targetPath,
+      { active: input.active, updatedBy: actor.uid, updatedAt: now },
+      ["active", "updatedBy", "updatedAt"],
+      targetDocument.updateTime,
+    ),
+    database.createDocumentWrite(env, `auditLogs/${auditId}`, {
+      eventType: input.active ? "staff.access_reactivated" : "staff.access_deactivated",
+      category: "staff_access",
+      actorUid: actor.uid,
+      actorRole: actor.role,
+      targetUid: input.uid,
+      previousActive,
+      nextActive: input.active,
+      createdAt: now,
+    }),
+  ]);
+
+  return { uid: input.uid, active: input.active, changed: true };
 }

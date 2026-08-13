@@ -1,7 +1,6 @@
 import { PwaRegister } from "@/components/pwa/PwaRegister";
 import type { Metadata, Viewport } from "next";
 import { Geist, Playfair_Display } from "next/font/google";
-import { GoogleAnalytics } from "@next/third-parties/google";
 import "./globals.css";
 
 const geist = Geist({
@@ -100,7 +99,6 @@ export default function RootLayout({
         <PwaRegister />
         {children}
 
-        <GoogleAnalytics gaId="G-TE1937TJRF" />
       </body>
     </html>
   );

@@ -1,6 +1,14 @@
 {
   "indexes": [
     {
+      "collectionGroup": "staffTasks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "assignedTo", "order": "ASCENDING" },
+        { "fieldPath": "dueDate", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "appointments",
       "queryScope": "COLLECTION",
       "fields": [

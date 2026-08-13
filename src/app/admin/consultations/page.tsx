@@ -367,43 +367,23 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   const requestedPatientRecords = useRef(new Set<string>());
 
   useEffect(() => {
-    if (profile.role !== "admin") {
-      let active = true;
-      void fetchPatientDirectory(user)
-        .then((directory) => {
-          if (!active) return;
-          setPatients(directory as Patient[]);
-          setPatientsLoaded(true);
-        })
-        .catch((loadError) => {
-          console.error("Patient directory could not be loaded", loadError);
-          if (!active) return;
-          setError(loadError instanceof Error ? loadError.message : "Patient records could not be loaded.");
-          setPatientsLoaded(true);
-        });
-      return () => {
-        active = false;
-      };
-    }
-
-    const stopPatients = onSnapshot(
-      query(collection(db, "patients"), orderBy("createdAt", "desc"), limit(300)),
-      (snapshot) => {
-        setPatients(
-          snapshot.docs
-            .map((item) => ({ id: item.id, ...item.data() }) as Patient)
-            .filter(isActivePatient),
-        );
+    let active = true;
+    void fetchPatientDirectory(user)
+      .then((directory) => {
+        if (!active) return;
+        setPatients((directory as Patient[]).filter(isActivePatient));
         setPatientsLoaded(true);
-      },
-      (loadError) => {
-        console.error(loadError);
-        setError("Patient records could not be loaded.");
+      })
+      .catch((loadError) => {
+        console.error("Patient directory could not be loaded", loadError);
+        if (!active) return;
+        setError(loadError instanceof Error ? loadError.message : "Patient records could not be loaded.");
         setPatientsLoaded(true);
-      },
-    );
-    return stopPatients;
-  }, [db, profile.role, user]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [user]);
 
   useEffect(() => {
     const canonicalDoctorId = doctorIdForName(profileDoctor);
@@ -555,7 +535,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       setNotice("");
       setError(message);
     };
-    const stopPatient = profile.role === "doctor"
+    const stopPatient = profile.role === "doctor" || profile.role === "admin"
       ? onSnapshot(
           patientRef,
           (snapshot) => {
@@ -564,7 +544,11 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
               return;
             }
             const patient = { id: snapshot.id, ...snapshot.data() } as Patient;
-            if (patient.archived === true || !patientIsAssignedToDoctor(patient, profileDoctor)) {
+            if (
+              patient.archived === true
+              || (profile.role === "doctor" && !patientIsAssignedToDoctor(patient, profileDoctor))
+            ) {
+              setPatients((current) => current.filter((entry) => entry.id !== patient.id));
               clearSelectedChart("This patient chart was archived or reassigned. Clinical details have been cleared immediately.");
               return;
             }
@@ -584,7 +568,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       },
       (loadError) => {
         console.error("Previous visit history could not be loaded", loadError);
-        if (profile.role === "doctor") {
+        if (profile.role === "doctor" || profile.role === "admin") {
           clearSelectedChart("Access to this patient chart changed. Clinical details have been cleared immediately.");
         } else {
           setError("Previous visit history could not be loaded.");
@@ -597,7 +581,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       (snapshot) => setPrescriptions(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Prescription)),
       (loadError) => {
         console.error("Prescription history could not be loaded", loadError);
-        if (profile.role === "doctor") clearSelectedChart("Access to this patient chart changed. Clinical details have been cleared immediately.");
+        if (profile.role === "doctor" || profile.role === "admin") clearSelectedChart("Access to this patient chart changed. Clinical details have been cleared immediately.");
       },
     );
     const stopReports = onSnapshot(
@@ -605,7 +589,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       (snapshot) => setReports(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Report)),
       (loadError) => {
         console.error("Report history could not be loaded", loadError);
-        if (profile.role === "doctor") clearSelectedChart("Access to this patient chart changed. Clinical details have been cleared immediately.");
+        if (profile.role === "doctor" || profile.role === "admin") clearSelectedChart("Access to this patient chart changed. Clinical details have been cleared immediately.");
       },
     );
     return () => {
@@ -1200,7 +1184,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
                 <div className="flex items-center gap-3"><span className="rounded-xl bg-violet-50 p-2.5 text-violet-700"><History size={20} /></span><div><h2 className="text-xl font-bold text-[#233A59]">Recent clinical history</h2><p className="text-xs text-slate-500">Review before prescribing</p></div>{historyLoading ? <LoaderCircle size={18} className="ml-auto animate-spin text-slate-400" /> : null}</div>
                 <div className="mt-5 grid gap-4 lg:grid-cols-3">
                   <HistoryColumn title="Visits" icon={Activity} empty="No previous visits" items={visits.slice(0, 3).map((visit) => ({ id: visit.id, title: `${visit.visitDate} · ${visit.diagnosis}`, detail: visit.chiefComplaint }))} />
-                  <HistoryColumn title="Prescriptions" icon={FileHeart} empty="No previous prescriptions" items={prescriptions.slice(0, 3).map((prescription) => ({ id: prescription.id, title: `${prescription.prescribedDate} · ${prescription.doctorName}`, detail: prescription.medicines?.map((medicine) => medicine.name).filter(Boolean).join(", ") || prescription.advice || "Prescription" }))} />
+                  <HistoryColumn title="Prescriptions" icon={FileHeart} empty="No previous prescriptions" items={prescriptions.slice(0, 3).map((prescription) => ({ id: prescription.id, title: `${prescription.prescribedDate} · ${prescription.doctorName}`, detail: Array.isArray(prescription.medicines) ? prescription.medicines.filter((medicine) => medicine && typeof medicine === "object").map((medicine) => medicine.name).filter(Boolean).join(", ") || prescription.advice || "Prescription" : "Legacy medicine record needs review" }))} />
                   <HistoryColumn title="Reports" icon={FileText} empty="No reports uploaded" items={reports.slice(0, 3).map((report) => ({ id: report.id, title: report.fileName, detail: [report.category, report.reportDate].filter(Boolean).join(" · ") }))} />
                 </div>
               </section>

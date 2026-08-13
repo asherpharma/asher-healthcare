@@ -298,7 +298,7 @@ function BillingWorkspace() {
       },
     );
     const unsubscribePayments = onSnapshot(
-      query(collectionGroup(db, "payments"), limit(500)),
+      query(collectionGroup(db, "payments"), orderBy("createdAt", "desc"), limit(500)),
       (snapshot) => setPayments(
         snapshot.docs
           .map((item) => ({ id: item.id, ...item.data() }) as PaymentEntry)

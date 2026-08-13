@@ -12,6 +12,7 @@ import {
   query,
   serverTimestamp,
   updateDoc,
+  where,
   type Timestamp,
 } from "firebase/firestore";
 import {
@@ -139,7 +140,13 @@ function TasksContent() {
       return;
     }
 
-    const tasksQuery = query(collection(firestore, "staffTasks"), orderBy("dueDate", "asc"));
+    const tasksQuery = profile.role === "admin"
+      ? query(collection(firestore, "staffTasks"), orderBy("dueDate", "asc"))
+      : query(
+          collection(firestore, "staffTasks"),
+          where("assignedTo", "==", profile.uid),
+          orderBy("dueDate", "asc"),
+        );
     return onSnapshot(
       tasksQuery,
       (snapshot) => {
@@ -157,7 +164,7 @@ function TasksContent() {
         setLoading(false);
       },
     );
-  }, []);
+  }, [profile.role, profile.uid]);
 
   useEffect(() => {
     if (!firestore || profile.role !== "admin") return;
@@ -297,7 +304,7 @@ function TasksContent() {
           <p className="text-sm font-bold uppercase tracking-[0.16em] text-[#A8864A]">Care coordination</p>
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-[#233A59] sm:text-4xl">Tasks & follow-ups</h1>
           <p className="mt-3 max-w-2xl text-slate-600">
-            Keep callbacks, vaccinations, lab follow-ups and payment reminders visible to the whole clinic team.
+            Keep callbacks, vaccinations, lab follow-ups and payment reminders visible to their assignee and clinic administrators.
           </p>
         </div>
         <button
@@ -374,7 +381,7 @@ function TasksContent() {
             <label className="grid gap-2 text-sm font-bold text-slate-700 md:col-span-2">
               Assigned to
               <select className={inputClass} value={assignedTo} onChange={(event) => setAssignedTo(event.target.value)}>
-                <option value="">Any available staff member</option>
+                {profile.role === "admin" ? <option value="">Administrator triage queue</option> : null}
                 <option value={profile.uid}>Me — {profile.displayName}</option>
                 {profile.role === "admin"
                   ? staffOptions.filter((staff) => staff.uid !== profile.uid).map((staff) => <option key={staff.uid} value={staff.uid}>{staff.displayName}</option>)
