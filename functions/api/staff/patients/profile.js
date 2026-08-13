@@ -23,6 +23,10 @@ import {
   canonicalPatientIdentity,
   validatePatientProfileUpdate,
 } from "../../../../server/patients/profile.js";
+import {
+  createPatientSearchPrefixes,
+  patientSearchDoctorKey,
+} from "../../../../server/patients/search-index.js";
 
 function validPatientId(value) {
   return /^[A-Za-z0-9_-]{1,128}$/u.test(value);
@@ -213,8 +217,24 @@ export async function onRequestPost(context) {
       );
     }
 
-    const patientUpdates = { ...validated.updates, updatedAt: now };
-    const patientFieldPaths = [...Object.keys(validated.updates), "updatedAt"];
+    const patientUpdates = {
+      ...validated.updates,
+      searchPrefixes: createPatientSearchPrefixes({
+        ...patientDocument.data,
+        ...validated.updates,
+      }),
+      searchDoctorKey: patientSearchDoctorKey({
+        ...patientDocument.data,
+        ...validated.updates,
+      }),
+      updatedAt: now,
+    };
+    const patientFieldPaths = [
+      ...Object.keys(validated.updates),
+      "searchPrefixes",
+      "searchDoctorKey",
+      "updatedAt",
+    ];
     const auditId = crypto.randomUUID();
     await commitWrites(context.env, [
       // The service account bypasses Firestore rules, so authorization must

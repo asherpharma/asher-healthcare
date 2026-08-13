@@ -3,6 +3,10 @@
 import { useStaff } from "@/components/admin/StaffGuard";
 import { firestore, storage } from "@/firebase/config";
 import { DOCTORS } from "@/lib/appointments";
+import {
+  ADMIN_NAVIGATION_HANDOFF_EVENT,
+  consumeAdminNavigationHandoff,
+} from "@/lib/admin-navigation-handoff";
 import { AYUSLAB_PROVIDER } from "@/lib/external-lab-providers";
 import { fetchPatientDirectory } from "@/lib/patient-directory";
 import {
@@ -227,7 +231,7 @@ function LabDesk() {
   const [customTest, setCustomTest] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
-  const deepLinkedPatientHandled = useRef(false);
+  const [handoffPatientId, setHandoffPatientId] = useState("");
   const uploadTaskRef = useRef<UploadTask | null>(null);
   const chooseFileRef = useRef<HTMLInputElement | null>(null);
   const cameraFileRef = useRef<HTMLInputElement | null>(null);
@@ -247,6 +251,16 @@ function LabDesk() {
     if (requestedPriority !== "routine" && requestedPriority !== "urgent") return;
     const timer = window.setTimeout(() => setPriorityFilter(requestedPriority), 0);
     return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    const consumePatientHandoff = () => {
+      const handoff = consumeAdminNavigationHandoff("/admin/lab");
+      if (handoff?.intent === "create-lab-order") setHandoffPatientId(handoff.patientId);
+    };
+    window.addEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumePatientHandoff);
+    consumePatientHandoff();
+    return () => window.removeEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumePatientHandoff);
   }, []);
 
   useEffect(() => {
@@ -342,21 +356,17 @@ function LabDesk() {
   }, [db, directoryRefresh, profile.doctorName, profile.role, user]);
 
   useEffect(() => {
-    if (!patientDirectoryAvailable || deepLinkedPatientHandled.current) return;
-
-    const params = new URLSearchParams(window.location.search);
-    const requestedPatientId = params.get("patient")?.trim();
-    if (params.get("new") !== "1" || !requestedPatientId) return;
-    const deepLinkedPatientExists = patients.some((patient) => patient.id === requestedPatientId);
+    if (!patientDirectoryAvailable || !handoffPatientId) return;
+    const deepLinkedPatientExists = patients.some((patient) => patient.id === handoffPatientId);
     const timer = window.setTimeout(() => {
-      deepLinkedPatientHandled.current = true;
+      setHandoffPatientId("");
       if (!deepLinkedPatientExists) return;
-      setPatientId(requestedPatientId);
+      setPatientId(handoffPatientId);
       setShowCreate(true);
       setError("");
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [patientDirectoryAvailable, patients]);
+  }, [handoffPatientId, patientDirectoryAvailable, patients]);
 
   const filteredOrders = useMemo(() => {
     if (!patientsLoaded || !patientDirectoryAvailable) return [];
@@ -443,8 +453,13 @@ function LabDesk() {
     setAyusLinkBusy(true);
     try {
       const idToken = await user.getIdToken();
-      const response = await fetch(`/api/labs/ayus/link?labOrderId=${encodeURIComponent(order.id)}`, {
-        headers: { Authorization: `Bearer ${idToken}` },
+      const response = await fetch("/api/labs/ayus/link", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ action: "read", labOrderId: order.id }),
       });
       const result = await response.json().catch(() => ({})) as AyusLinkResponse;
       if (!response.ok) {

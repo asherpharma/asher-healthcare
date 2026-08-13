@@ -2,6 +2,10 @@
 
 import { useStaff } from "@/components/admin/StaffGuard";
 import { firestore } from "@/firebase/config";
+import {
+  ADMIN_NAVIGATION_HANDOFF_EVENT,
+  consumeAdminNavigationHandoff,
+} from "@/lib/admin-navigation-handoff";
 import { fetchPatientDirectory } from "@/lib/patient-directory";
 import type { ReceiptInvoice } from "@/lib/receipt-pdf";
 import Script from "next/script";
@@ -33,7 +37,7 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 type Patient = {
   id: string;
@@ -252,7 +256,7 @@ function BillingWorkspace() {
   const [submittingRefund, setSubmittingRefund] = useState(false);
   const [syncingRefundId, setSyncingRefundId] = useState("");
   const [receiptActionId, setReceiptActionId] = useState("");
-  const deepLinkedPatientHandled = useRef(false);
+  const [handoffPatientId, setHandoffPatientId] = useState("");
 
   useEffect(() => {
     const requestedStatus = new URLSearchParams(window.location.search).get("status");
@@ -262,6 +266,16 @@ function BillingWorkspace() {
       0,
     );
     return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    const consumePatientHandoff = () => {
+      const handoff = consumeAdminNavigationHandoff("/admin/billing");
+      if (handoff?.intent === "create-invoice") setHandoffPatientId(handoff.patientId);
+    };
+    window.addEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumePatientHandoff);
+    consumePatientHandoff();
+    return () => window.removeEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumePatientHandoff);
   }, []);
 
   useEffect(() => {
@@ -334,15 +348,11 @@ function BillingWorkspace() {
   }, [db, profile.role, user]);
 
   useEffect(() => {
-    if (!patientsLoaded || deepLinkedPatientHandled.current) return;
+    if (!patientsLoaded || !handoffPatientId) return;
 
-    const params = new URLSearchParams(window.location.search);
-    const patientId = params.get("patient")?.trim();
-    if (params.get("new") !== "1" || !patientId) return;
-
-    const patient = patients.find((entry) => entry.id === patientId && entry.archived !== true);
+    const patient = patients.find((entry) => entry.id === handoffPatientId && entry.archived !== true);
     const timer = window.setTimeout(() => {
-      deepLinkedPatientHandled.current = true;
+      setHandoffPatientId("");
       if (!patient) return;
 
       const consultationFee = Math.max(0, Number(patient.consultationFee || 0));
@@ -358,7 +368,7 @@ function BillingWorkspace() {
       setError("");
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [patients, patientsLoaded]);
+  }, [handoffPatientId, patients, patientsLoaded]);
 
   const activePatients = useMemo(
     () => patients.filter((patient) => patient.archived !== true),

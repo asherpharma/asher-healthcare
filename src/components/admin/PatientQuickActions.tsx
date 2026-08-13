@@ -1,7 +1,10 @@
 "use client";
 
 import { useStaff, type StaffRole } from "@/components/admin/StaffGuard";
-import Link from "next/link";
+import {
+  stageAdminNavigationHandoff,
+  type AdminNavigationHandoff,
+} from "@/lib/admin-navigation-handoff";
 import {
   CalendarPlus,
   FlaskConical,
@@ -11,6 +14,7 @@ import {
   Stethoscope,
   type LucideIcon,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 type PatientQuickActionsProps = {
   patient: {
@@ -21,7 +25,7 @@ type PatientQuickActionsProps = {
 
 type RouteAction = {
   label: string;
-  href: string;
+  handoff: AdminNavigationHandoff;
   icon: LucideIcon;
   tone: string;
   roles: StaffRole[];
@@ -40,33 +44,49 @@ function normaliseIndianWhatsAppNumber(phone: string) {
 }
 
 export default function PatientQuickActions({ patient }: PatientQuickActionsProps) {
+  const router = useRouter();
   const { profile } = useStaff();
-  const patientId = encodeURIComponent(patient.id);
   const allRouteActions: RouteAction[] = [
     {
       label: "Consult",
-      href: `/admin/consultations?patient=${patientId}`,
+      handoff: {
+        destination: "/admin/consultations",
+        intent: "open-patient-consultation",
+        patientId: patient.id,
+      },
       icon: Stethoscope,
       tone: "bg-blue-50 text-blue-700",
       roles: ["admin", "doctor"],
     },
     {
       label: "Book",
-      href: `/admin/appointments?new=1&patient=${patientId}`,
+      handoff: {
+        destination: "/admin/appointments",
+        intent: "create-appointment",
+        patientId: patient.id,
+      },
       icon: CalendarPlus,
       tone: "bg-violet-50 text-violet-700",
       roles: ["admin", "doctor", "reception"],
     },
     {
       label: "Bill",
-      href: `/admin/billing?new=1&patient=${patientId}`,
+      handoff: {
+        destination: "/admin/billing",
+        intent: "create-invoice",
+        patientId: patient.id,
+      },
       icon: IndianRupee,
       tone: "bg-emerald-50 text-emerald-700",
       roles: ["admin", "reception"],
     },
     {
       label: "Lab",
-      href: `/admin/lab?new=1&patient=${patientId}`,
+      handoff: {
+        destination: "/admin/lab",
+        intent: "create-lab-order",
+        patientId: patient.id,
+      },
       icon: FlaskConical,
       tone: "bg-amber-50 text-amber-700",
       roles: ["admin", "doctor", "reception"],
@@ -79,18 +99,21 @@ export default function PatientQuickActions({ patient }: PatientQuickActionsProp
   return (
     <section aria-label="Patient quick actions" className="border-b border-slate-200 bg-slate-50/80 p-3 sm:p-4">
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-        {routeActions.map(({ label, href, icon: Icon, tone }) => (
-          <Link
+        {routeActions.map(({ label, handoff, icon: Icon, tone }) => (
+          <button
             key={label}
-            href={href}
-            prefetch={false}
+            type="button"
+            onClick={() => {
+              stageAdminNavigationHandoff(handoff);
+              router.push(handoff.destination);
+            }}
             className="group flex min-h-16 flex-col items-center justify-center gap-1.5 rounded-2xl bg-white px-2 py-2.5 text-center text-xs font-bold text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:-translate-y-0.5 hover:ring-[#A8864A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#233A59]"
           >
             <span className={`flex h-8 w-8 items-center justify-center rounded-xl ${tone}`}>
               <Icon aria-hidden="true" size={17} />
             </span>
             {label}
-          </Link>
+          </button>
         ))}
 
         <a

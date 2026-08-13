@@ -5,7 +5,8 @@ import ReceptionPayment, {
   type ReceptionPatient,
 } from "@/components/admin/ReceptionPayment";
 import { useStaff } from "@/components/admin/StaffGuard";
-import { fetchPatientDirectory } from "@/lib/patient-directory";
+import { useServiceCatalog } from "@/hooks/useServiceCatalog";
+import { searchPatientDirectory } from "@/lib/patient-directory";
 import {
   findPotentialPatientDuplicates,
   normalizeIndianPhone,
@@ -88,10 +89,15 @@ function clinicDateToday() {
 
 export default function ExpressReception() {
   const { user, profile } = useStaff();
+  const {
+    catalog,
+    loading: loadingServiceCatalog,
+    error: serviceCatalogError,
+  } = useServiceCatalog();
   const today = clinicDateToday();
   const [stage, setStage] = useState<Stage>("identify");
   const [patients, setPatients] = useState<PatientCandidate[]>([]);
-  const [loadingPatients, setLoadingPatients] = useState(true);
+  const [loadingPatients, setLoadingPatients] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [fullName, setFullName] = useState("");
@@ -107,31 +113,47 @@ export default function ExpressReception() {
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
 
   useEffect(() => {
+    const phoneDigits = phone.replace(/\D/gu, "").slice(-10);
+    const normalizedName = normalizePatientName(fullName);
+    const search = phoneDigits.length >= 6
+      ? phoneDigits
+      : normalizedName.length >= 3
+        ? normalizedName
+        : "";
     let cancelled = false;
-    void fetchPatientDirectory(user)
-      .then((directory) => {
-        if (cancelled) return;
-        setPatients(directory
-          .map((patient) => ({
-            ...patient,
-            gender: String(patient.gender || "").toLowerCase(),
-          }))
-          .filter((patient) => ["female", "male", "other"].includes(patient.gender))
-          .map((patient) => ({ ...patient, gender: patient.gender as Gender })));
-      })
-      .catch((reason) => {
-        if (cancelled) return;
-        console.error("Express Reception directory failed", reason);
+    const timeout = window.setTimeout(() => {
+      if (!search) {
+        setPatients([]);
         setLoadingPatients(false);
-        setError("The secure patient directory could not be checked. Please try again before creating a new chart.");
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingPatients(false);
-      });
+        return;
+      }
+      setLoadingPatients(true);
+      void searchPatientDirectory(user, search, { pageSize: 10 })
+        .then(({ patients: matches }) => {
+          if (cancelled) return;
+          setPatients(matches
+            .map((patient) => ({
+              ...patient,
+              gender: String(patient.gender || "").toLowerCase(),
+            }))
+            .filter((patient) => ["female", "male", "other"].includes(patient.gender))
+            .map((patient) => ({ ...patient, gender: patient.gender as Gender })));
+        })
+        .catch((reason) => {
+          if (cancelled) return;
+          console.error("Express Reception patient search failed", reason);
+          setPatients([]);
+          setError("Patient search could not be completed. Exact duplicate protection remains active when you save.");
+        })
+        .finally(() => {
+          if (!cancelled) setLoadingPatients(false);
+        });
+    }, search ? 300 : 0);
     return () => {
       cancelled = true;
+      window.clearTimeout(timeout);
     };
-  }, [user]);
+  }, [fullName, phone, user]);
 
   const possibleMatches = (() => {
     const completePhone = normalizeIndianPhone(phone);
@@ -167,12 +189,19 @@ export default function ExpressReception() {
       : doctorName === doctors[1]
         ? "obg"
         : "";
-  const fee = caseType === "general" ? 250 : 500;
-  const consultationLabel = caseType === "general"
-    ? "General consultation"
-    : specialty === "pediatrics"
-      ? "Pediatric consultation"
-      : "Obstetrics & Gynaecology consultation";
+  const serviceId = caseType === "general" ? "general" : specialty;
+  const selectedService = serviceId ? catalog.services[serviceId] : null;
+  const fee = selectedService?.fee ?? 0;
+  const consultationLabel = selectedService?.label ?? "Select a consultation service";
+  const specialistServices = [catalog.services.pediatrics, catalog.services.obg];
+  const specialistActive = specialistServices.some((service) => service.active);
+  const specialistFeeLabel = specialistServices
+    .filter((service) => service.active)
+    .map((service) => service.fee)
+    .filter((value, index, values) => values.indexOf(value) === index)
+    .sort((left, right) => left - right)
+    .map(money)
+    .join(" / ");
 
   function updateIdentity(setter: (value: string) => void, value: string) {
     setter(value);
@@ -196,6 +225,14 @@ export default function ExpressReception() {
   function prepareReview(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
+    if (loadingServiceCatalog || serviceCatalogError) {
+      setError(serviceCatalogError || "Wait while the current consultation fees are confirmed.");
+      return;
+    }
+    if (!selectedService?.active) {
+      setError("This consultation service is currently unavailable. Choose another service.");
+      return;
+    }
     if (!normalizeIndianPhone(phone)) {
       setError("Enter a valid 10-digit mobile number.");
       return;
@@ -216,6 +253,14 @@ export default function ExpressReception() {
   }
 
   async function createArrival() {
+    if (loadingServiceCatalog || serviceCatalogError) {
+      setError(serviceCatalogError || "Wait while the current consultation fees are confirmed.");
+      return;
+    }
+    if (!selectedService?.active) {
+      setError("This consultation service is currently unavailable. Return to patient details and choose another service.");
+      return;
+    }
     if (!doctorName || !doctorId || !gender) return;
     setSaving(true);
     setError("");
@@ -235,6 +280,7 @@ export default function ExpressReception() {
           dateOfBirth,
           gender,
           caseType,
+          serviceId,
           specialty: caseType === "specialist" ? specialty : "",
           doctorId,
           fee,
@@ -316,6 +362,8 @@ export default function ExpressReception() {
 
       {error ? <p role="alert" className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold leading-6 text-red-700">{error}</p> : null}
 
+      {serviceCatalogError ? <p role="alert" className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold leading-6 text-amber-800">{serviceCatalogError} Refresh before creating an invoice.</p> : null}
+
       {stage === "identify" ? (
         <form onSubmit={prepareReview} className="rounded-[28px] bg-white p-5 shadow-sm ring-1 ring-slate-200 sm:p-7">
           <div className="flex items-start gap-3">
@@ -348,9 +396,9 @@ export default function ExpressReception() {
           ) : loadingPatients ? <p className="mt-4 flex items-center gap-2 text-sm text-slate-500"><LoaderCircle className="animate-spin" size={16} />Checking recent patient records…</p> : null}
 
           <div className="mt-6 grid gap-4 sm:grid-cols-2">
-            <label className={labelClass}>Case category<select value={caseType} onChange={(event) => { setCaseType(event.target.value as CaseType); setSpecialty(""); setGeneralDoctor(""); setRequestId(crypto.randomUUID()); }} className={inputClass}><option value="general">General case · ₹250</option><option value="specialist">Specialist case · ₹500</option></select></label>
+            <label className={labelClass}>Case category<select value={caseType} disabled={loadingServiceCatalog} onChange={(event) => { setCaseType(event.target.value as CaseType); setSpecialty(""); setGeneralDoctor(""); setRequestId(crypto.randomUUID()); }} className={inputClass}><option value="general" disabled={!catalog.services.general.active}>{catalog.services.general.label} · {money(catalog.services.general.fee)}{catalog.services.general.active ? "" : " · unavailable"}</option><option value="specialist" disabled={!specialistActive}>Specialist case{specialistFeeLabel ? ` · ${specialistFeeLabel}` : " · unavailable"}</option></select></label>
             {caseType === "specialist" ? (
-              <label className={labelClass}>Specialist department<select required value={specialty} onChange={(event) => { setSpecialty(event.target.value as Specialty); setRequestId(crypto.randomUUID()); }} className={inputClass}><option value="" disabled>Select department</option><option value="pediatrics">Pediatrics · {doctors[0]}</option><option value="obg">OBG · {doctors[1]}</option></select></label>
+              <label className={labelClass}>Specialist department<select required value={specialty} disabled={loadingServiceCatalog} onChange={(event) => { setSpecialty(event.target.value as Specialty); setRequestId(crypto.randomUUID()); }} className={inputClass}><option value="" disabled>Select department</option><option value="pediatrics" disabled={!catalog.services.pediatrics.active}>{catalog.services.pediatrics.label} · {doctors[0]} · {money(catalog.services.pediatrics.fee)}{catalog.services.pediatrics.active ? "" : " · unavailable"}</option><option value="obg" disabled={!catalog.services.obg.active}>{catalog.services.obg.label} · {doctors[1]} · {money(catalog.services.obg.fee)}{catalog.services.obg.active ? "" : " · unavailable"}</option></select></label>
             ) : (
               <label className={labelClass}>Consulting doctor<select required value={generalDoctor} onChange={(event) => { setGeneralDoctor(event.target.value); setRequestId(crypto.randomUUID()); }} className={inputClass}><option value="" disabled>Select doctor</option>{doctors.map((doctor) => <option key={doctor}>{doctor}</option>)}</select></label>
             )}
@@ -360,7 +408,7 @@ export default function ExpressReception() {
             <div><p className="text-xs font-bold uppercase tracking-wide text-blue-700">Consultation charge</p><p className="mt-1 font-semibold text-slate-700">{doctorName ? `${consultationLabel} · ${doctorName}` : "Select the doctor or department"}</p></div>
             <strong className="text-2xl text-[#233A59]">{money(fee)}</strong>
           </div>
-          <button type="submit" className="mt-6 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#233A59] px-5 font-bold text-white sm:w-auto">Review patient &amp; fee <ArrowRight size={18} /></button>
+          <button type="submit" disabled={loadingServiceCatalog || Boolean(serviceCatalogError)} className="mt-6 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#233A59] px-5 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto">{loadingServiceCatalog ? "Loading current fees…" : "Review patient & fee"} <ArrowRight size={18} /></button>
         </form>
       ) : null}
 
@@ -377,7 +425,7 @@ export default function ExpressReception() {
           <div className="mt-5 flex items-center justify-between rounded-2xl bg-emerald-50 p-4"><span className="flex items-center gap-2 font-bold text-emerald-900"><IndianRupee size={19} />Amount due</span><strong className="text-2xl text-emerald-800">{money(fee)}</strong></div>
           <div className="mt-6 grid gap-3 sm:grid-cols-2">
             <button type="button" onClick={() => setStage("identify")} disabled={saving} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-slate-200 px-5 font-bold text-slate-700 disabled:opacity-50"><ArrowLeft size={18} />Edit details</button>
-            <button type="button" onClick={() => void createArrival()} disabled={saving} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-[#A8864A] px-5 font-bold text-white disabled:opacity-60">{saving ? <LoaderCircle className="animate-spin" size={18} /> : <UserRoundCheck size={18} />}{saving ? "Saving securely…" : selectedExisting ? "Create visit invoice" : "Register & create invoice"}</button>
+            <button type="button" onClick={() => void createArrival()} disabled={saving || loadingServiceCatalog || Boolean(serviceCatalogError) || !selectedService?.active} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-[#A8864A] px-5 font-bold text-white disabled:cursor-not-allowed disabled:opacity-60">{saving ? <LoaderCircle className="animate-spin" size={18} /> : <UserRoundCheck size={18} />}{saving ? "Saving securely…" : loadingServiceCatalog ? "Confirming current fee…" : selectedExisting ? "Create visit invoice" : "Register & create invoice"}</button>
           </div>
         </section>
       ) : null}

@@ -2,6 +2,7 @@
 
 import type { StaffRole } from "@/components/admin/StaffGuard";
 import { firebaseAuth } from "@/firebase/config";
+import { stageAdminNavigationHandoff } from "@/lib/admin-navigation-handoff";
 import { fetchPatientDirectory } from "@/lib/patient-directory";
 import {
   ArrowRight,
@@ -186,11 +187,13 @@ export default function StaffCommandCenter({ role }: { role: StaffRole }) {
   }
 
   function openPatient(patientId: string) {
-    if (pathname === "/admin/patients") {
-      window.dispatchEvent(new CustomEvent("asher:open-patient", { detail: { patientId } }));
-    }
+    stageAdminNavigationHandoff({
+      destination: "/admin/patients",
+      intent: "open-patient",
+      patientId,
+    });
     close();
-    router.push(`/admin/patients?patient=${encodeURIComponent(patientId)}`);
+    router.push("/admin/patients");
   }
 
   return (

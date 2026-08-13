@@ -1,5 +1,6 @@
 import { getDocument, serviceAccountAccessToken } from "../razorpay/firebase.js";
 import { HttpError } from "../razorpay/http.js";
+import { createPatientSearchPrefixes } from "./search-index.js";
 
 const PAGE_SIZE = 500;
 const MAX_PAGES = 20;
@@ -22,6 +23,7 @@ const PATIENT_FIELD_MASK = [
   "createdAt",
   "updatedAt",
 ];
+export const LEGACY_SEARCH_SCAN_LIMIT = 500;
 
 const DOCTOR_IDS = new Map([
   ["Dr. Lt Col Shafi Ahamad", "pediatrics"],
@@ -60,7 +62,7 @@ function firestorePatientsUrl(env, pageToken = "") {
   return url;
 }
 
-async function listMaskedPatientDocuments(env) {
+async function listMaskedPatientDocuments(env, { maximum = PAGE_SIZE * MAX_PAGES } = {}) {
   const accessToken = await serviceAccountAccessToken(env);
   const patients = [];
   let pageToken = "";
@@ -78,6 +80,7 @@ async function listMaskedPatientDocuments(env) {
     (result.documents || []).forEach((document) => {
       patients.push({ id: documentId(document.name), ...decodeFields(document.fields || {}) });
     });
+    if (patients.length >= maximum) return patients.slice(0, maximum);
     pageToken = String(result.nextPageToken || "");
     if (!pageToken) return patients;
   }
@@ -159,4 +162,45 @@ export function projectPatientDirectory(
         : Boolean(doctorId && patient.doctorId === doctorId)))
     .sort(sortPatients)
     .map((patient) => operationalPatient(patient, canIncludeArchived));
+}
+
+function directorySearchMatch(patient, token) {
+  return createPatientSearchPrefixes(patient).includes(token);
+}
+
+function minimalSearchPatient(patient) {
+  return {
+    id: patient.id,
+    patientNumber: String(patient.patientNumber || ""),
+    fullName: String(patient.fullName || "Patient"),
+    phone: String(patient.phone || ""),
+    dateOfBirth: String(patient.dateOfBirth || ""),
+    gender: String(patient.gender || ""),
+    doctorId: String(patient.doctorId || ""),
+    doctorName: String(patient.doctorName || ""),
+    caseType: String(patient.caseType || ""),
+    specialty: String(patient.specialty || ""),
+    consultationFee: Number(patient.consultationFee || 0),
+  };
+}
+
+/** Temporary compatibility path for records created before searchPrefixes.
+ * It is intentionally capped and should be removed after the resumable admin
+ * backfill reports completion.
+ */
+export async function legacyPatientSearchForStaff(env, staff, staffRecord, token, limit = 10) {
+  const documents = await listMaskedPatientDocuments(env, { maximum: LEGACY_SEARCH_SCAN_LIMIT + 1 });
+  if (documents.length > LEGACY_SEARCH_SCAN_LIMIT) return { patients: [], scanSkipped: true };
+  return {
+    patients: projectLegacyPatientSearch(documents, staff, staffRecord, token, limit),
+    scanSkipped: false,
+  };
+}
+
+export function projectLegacyPatientSearch(documents, staff, staffRecord, token, limit = 10) {
+  return projectPatientDirectory(
+    documents.filter((patient) => directorySearchMatch(patient, token)),
+    staff,
+    staffRecord,
+  ).slice(0, Math.max(1, limit)).map(minimalSearchPatient);
 }
