@@ -54,6 +54,18 @@
   ],
   "fieldOverrides": [
     {
+      "collectionGroup": "bookingGuards",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "communicationOutbox",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
       "collectionGroup": "consultationDrafts",
       "fieldPath": "expiresAt",
       "ttl": true,

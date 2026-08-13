@@ -12,7 +12,6 @@ import { fetchPatientDirectory } from "@/lib/patient-directory";
 import {
   clinicDate,
   dateIsEnabled,
-  doctorName,
   DOCTORS,
   formatAppointmentTime,
   generateTimeSlots,
@@ -46,13 +45,13 @@ import {
 import {
   CalendarCheck2,
   CalendarDays,
+  BellRing,
   CheckCircle2,
   Clock3,
   Filter,
   Hash,
   LoaderCircle,
   LogIn,
-  MessageCircle,
   Phone,
   Play,
   Plus,
@@ -135,11 +134,6 @@ function prettyDate(value: string) {
   const parsed = new Date(value + "T00:00:00");
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleDateString("en-IN", { weekday: "short", day: "2-digit", month: "short", year: "numeric" });
-}
-
-function whatsAppNumber(phone: string) {
-  const digits = phone.replace(/\D/g, "");
-  return digits.length === 10 ? "91" + digits : digits;
 }
 
 function AppointmentDesk() {
@@ -843,7 +837,6 @@ function AppointmentDesk() {
           const nextStatuses = appointmentTransitionOptions(item.status).filter((status) => canApplyStatus(item, status));
           const canManageClinical = canManageClinicalAppointment(item);
           const canCheckInToday = item.preferredDate === today;
-          const message = "Hello " + item.patientName + ", your appointment request at Asher Women & Child Healthcare for " + prettyDate(item.preferredDate) + " at " + formatAppointmentTime(item.preferredTime) + " with " + doctorName(item.doctorId) + " has been received. Please reply here if you need help.";
           return (
             <article key={item.id} className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
               <div className="grid gap-5 xl:grid-cols-[1.05fr_1.15fr_auto] xl:items-center">
@@ -856,7 +849,7 @@ function AppointmentDesk() {
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-500"><span>{doctorNames[item.doctorId] || item.doctorId}</span><span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-slate-500">{item.source === "walk-in" ? "Walk-in" : item.source === "phone" ? "Phone" : item.source === "reception" ? "Reception" : "Website"}</span></div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <a href={"tel:" + item.phone} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-100"><Phone size={14} /> Call</a>
-                    <a href={"https://wa.me/" + whatsAppNumber(item.phone) + "?text=" + encodeURIComponent(message)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800 transition hover:bg-emerald-100"><MessageCircle size={14} /> WhatsApp</a>
+                    {profile.role !== "doctor" ? <button type="button" onClick={() => router.push("/admin/communications")} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800 transition hover:bg-emerald-100"><BellRing size={14} /> Consent-aware reminder</button> : null}
                     <span className="rounded-lg bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">{item.phone}</span>
                   </div>
                 </div>

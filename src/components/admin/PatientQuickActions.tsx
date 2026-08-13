@@ -6,10 +6,10 @@ import {
   type AdminNavigationHandoff,
 } from "@/lib/admin-navigation-handoff";
 import {
+  BellRing,
   CalendarPlus,
   FlaskConical,
   IndianRupee,
-  MessageCircle,
   Phone,
   Stethoscope,
   type LucideIcon,
@@ -34,13 +34,6 @@ type RouteAction = {
 function normalisePhone(phone: string) {
   const compact = phone.trim().replace(/[^+\d]/g, "");
   return compact || phone;
-}
-
-function normaliseIndianWhatsAppNumber(phone: string) {
-  const digits = phone.replace(/\D/g, "");
-  if (digits.length === 10) return `91${digits}`;
-  if (digits.length === 11 && digits.startsWith("0")) return `91${digits.slice(1)}`;
-  return digits;
 }
 
 export default function PatientQuickActions({ patient }: PatientQuickActionsProps) {
@@ -94,7 +87,6 @@ export default function PatientQuickActions({ patient }: PatientQuickActionsProp
   ];
   const routeActions = allRouteActions.filter((action) => action.roles.includes(profile.role));
   const phoneNumber = normalisePhone(patient.phone);
-  const whatsappNumber = normaliseIndianWhatsAppNumber(patient.phone);
 
   return (
     <section aria-label="Patient quick actions" className="border-b border-slate-200 bg-slate-50/80 p-3 sm:p-4">
@@ -126,17 +118,18 @@ export default function PatientQuickActions({ patient }: PatientQuickActionsProp
           Call
         </a>
 
-        <a
-          href={`https://wa.me/${whatsappNumber}`}
-          target="_blank"
-          rel="noreferrer"
-          className="group flex min-h-16 flex-col items-center justify-center gap-1.5 rounded-2xl bg-white px-2 py-2.5 text-center text-xs font-bold text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:-translate-y-0.5 hover:ring-[#A8864A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#233A59]"
-        >
-          <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-green-50 text-green-700">
-            <MessageCircle aria-hidden="true" size={17} />
-          </span>
-          WhatsApp
-        </a>
+        {profile.role !== "doctor" ? (
+          <button
+            type="button"
+            onClick={() => router.push("/admin/communications")}
+            className="group flex min-h-16 flex-col items-center justify-center gap-1.5 rounded-2xl bg-white px-2 py-2.5 text-center text-xs font-bold text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:-translate-y-0.5 hover:ring-[#A8864A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#233A59]"
+          >
+            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-green-50 text-green-700">
+              <BellRing aria-hidden="true" size={17} />
+            </span>
+            Remind
+          </button>
+        ) : null}
       </div>
     </section>
   );

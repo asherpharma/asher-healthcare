@@ -19,11 +19,26 @@
   Cache-Control: no-cache, no-store, must-revalidate
   Service-Worker-Allowed: /admin
 
+/patient-portal.webmanifest
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/patient-portal-sw.js
+  Cache-Control: no-cache, no-store, must-revalidate
+  Service-Worker-Allowed: /portal
+
 /admin
   Cache-Control: no-cache, no-store, must-revalidate
   X-Robots-Tag: noindex, nofollow
 
 /admin/*
+  Cache-Control: no-cache, no-store, must-revalidate
+  X-Robots-Tag: noindex, nofollow
+
+/portal
+  Cache-Control: no-cache, no-store, must-revalidate
+  X-Robots-Tag: noindex, nofollow
+
+/portal/*
   Cache-Control: no-cache, no-store, must-revalidate
   X-Robots-Tag: noindex, nofollow
 

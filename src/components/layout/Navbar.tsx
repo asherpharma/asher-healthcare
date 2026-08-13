@@ -36,6 +36,7 @@ export default function Navbar() {
           </nav>
 
           <div className="nav-actions">
+            <Link className="staff-link" href="/portal/login">Patient portal</Link>
             <Link className="staff-link" href="/admin/login">Staff login</Link>
             <Link className="button button-primary button-small" href="/#appointment">
               <CalendarDays size={18} /> Book appointment
@@ -50,6 +51,7 @@ export default function Navbar() {
         {open && (
           <div className="mobile-nav">
             {links.map((link) => <Link key={link.href} href={link.href} onClick={() => setOpen(false)}>{link.label}</Link>)}
+            <Link href="/portal/login" onClick={() => setOpen(false)}>Patient portal</Link>
             <Link href="/admin/login" onClick={() => setOpen(false)}>Staff login</Link>
             <Link className="button button-primary" href="/#appointment" onClick={() => setOpen(false)}>Book appointment</Link>
           </div>

@@ -261,6 +261,7 @@ async function createPrescriptionPdf(
 export async function downloadPrescriptionPdf(
   patient: PrescriptionPdfPatient,
   prescription: PrescriptionPdfRecord,
+  requestedFileName?: string,
 ) {
   const pdf = await createPrescriptionPdf(patient, prescription);
   const fileName =
@@ -269,7 +270,7 @@ export async function downloadPrescriptionPdf(
     "-" +
     (prescription.prescribedDate || "record") +
     ".pdf";
-  pdf.save(fileName);
+  pdf.save(requestedFileName || fileName);
 }
 
 function openPrintPage(title: string) {
@@ -309,8 +310,9 @@ export async function printBlankPrescriptionPdf(
 export async function printPrescriptionPdf(
   patient: PrescriptionPdfPatient,
   prescription: PrescriptionPdfRecord,
+  existingPrintWindow?: Window,
 ) {
-  const printWindow = openPrintPage("Print prescription");
+  const printWindow = existingPrintWindow || openPrintPage("Print prescription");
   try {
     const pdf = await createPrescriptionPdf(patient, prescription);
     showPdfInPrintPage(pdf, printWindow);

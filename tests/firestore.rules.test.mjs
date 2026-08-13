@@ -1567,3 +1567,71 @@ test("legacy completion denies reception and other doctors", async () => {
     }),
   );
 });
+
+test("communication consent, outbox, and audit collections are server-only", async () => {
+  const paths = [
+    "communicationPreferences/patient-1",
+    "communicationConsentEvents/consent-event-1",
+    "communicationOutbox/outbox-1",
+    "communicationDeliveryEvents/delivery-event-1",
+  ];
+  await seedDocuments(paths.map((path) => [path, {
+    patientId: "patient-1",
+    status: "ready",
+    recipient: "+919019263709",
+  }]));
+
+  for (const role of ["admin", "reception", "pediatrics"]) {
+    const database = staffDb(role);
+    for (const path of paths) {
+      await assertFails(getDoc(doc(database, path)));
+      await assertFails(setDoc(doc(database, path), {
+        patientId: "patient-1",
+        status: "rewritten",
+        recipient: "+919999999999",
+      }));
+      await assertFails(deleteDoc(doc(database, path)));
+    }
+  }
+});
+
+test("patient portal accounts, grants, consent, and audits are server-only for every browser role", async () => {
+  const paths = [
+    "patientAccounts/patient-account-1",
+    "patientAccounts/patient-account-1/grants/grant-1",
+    "patientAccessGrants/grant-1",
+    "patientAccessConsents/consent-1",
+    "patientAccessAudit/audit-1",
+  ];
+  await seedDocuments(paths.map((path) => [path, { status: "active", patientId: "patient-1" }]));
+  const databases = [
+    testEnv.unauthenticatedContext().firestore(),
+    testEnv.authenticatedContext("patient-account-1").firestore(),
+    ...["admin", "reception", "pediatrics", "obg"].map(staffDb),
+  ];
+  for (const database of databases) {
+    for (const path of paths) {
+      await assertFails(getDoc(doc(database, path)));
+      await assertFails(setDoc(doc(database, path), { status: "rewritten" }));
+      await assertFails(deleteDoc(doc(database, path)));
+    }
+  }
+});
+
+test("patient portal identities cannot directly read or rewrite clinical or billing data", async () => {
+  const paths = [
+    "patients/patient-1",
+    "patients/patient-1/prescriptions/rx-1",
+    "patients/patient-1/reports/report-1",
+    "appointments/appointment-1",
+    "invoices/invoice-1",
+    "invoices/invoice-1/payments/payment-1",
+  ];
+  await seedDocuments(paths.map((path) => [path, { patientId: "patient-1", status: "active" }]));
+  const database = testEnv.authenticatedContext("patient-account-1").firestore();
+  for (const path of paths) {
+    await assertFails(getDoc(doc(database, path)));
+    await assertFails(setDoc(doc(database, path), { patientId: "patient-1", status: "rewritten" }));
+    await assertFails(deleteDoc(doc(database, path)));
+  }
+});

@@ -2,9 +2,11 @@
 
 import { InstallAppButton } from "@/components/pwa/PwaRegister";
 import {
+  BellRing,
   CalendarDays,
   ClipboardPlus,
   FlaskConical,
+  HeartHandshake,
   LayoutDashboard,
   ListTodo,
   LockKeyhole,
@@ -186,6 +188,12 @@ export default function MobileStaffNav({ role, onLock }: { role: string; onLock:
                   Consultations
                 </Link>
               ) : null}
+              {role === "admin" ? (
+                <Link href="/admin/patient-access" onClick={() => setMoreOpen(false)} className="flex min-h-24 flex-col justify-between rounded-2xl bg-sky-50 p-4 font-bold text-sky-900">
+                  <HeartHandshake size={25} />
+                  Family portal
+                </Link>
+              ) : null}
               {role !== "doctor" ? (
                 <Link href="/admin/billing" onClick={() => setMoreOpen(false)} className="flex min-h-24 flex-col justify-between rounded-2xl bg-emerald-50 p-4 font-bold text-emerald-900">
                   <ReceiptIndianRupee size={25} />
@@ -196,6 +204,12 @@ export default function MobileStaffNav({ role, onLock }: { role: string; onLock:
                 <ListTodo size={25} />
                 Tasks
               </Link>
+              {role !== "doctor" ? (
+                <Link href="/admin/communications" onClick={() => setMoreOpen(false)} className="flex min-h-24 flex-col justify-between rounded-2xl bg-teal-50 p-4 font-bold text-teal-900">
+                  <BellRing size={25} />
+                  Reminders
+                </Link>
+              ) : null}
               <Link href="/admin/lab" onClick={() => setMoreOpen(false)} className="flex min-h-24 flex-col justify-between rounded-2xl bg-violet-50 p-4 font-bold text-violet-900">
                 <FlaskConical size={25} />
                 Lab desk

@@ -738,6 +738,47 @@ service cloud.firestore {
       allow read, create, update, delete: if false;
     }
 
+    // Communication preferences, consent evidence, provider-neutral outbox
+    // items, and delivery events are available only through protected server
+    // APIs. This prevents a browser role from bypassing consent checks,
+    // rewriting an audit event, or reading patient contact destinations.
+    match /communicationPreferences/{patientId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /communicationConsentEvents/{eventId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /communicationOutbox/{outboxId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /communicationDeliveryEvents/{eventId} {
+      allow read, create, update, delete: if false;
+    }
+
+    // Patient portal identity, grants, consent evidence, and access audits are
+    // server-only. Patient browsers receive only scoped API projections.
+    match /patientAccounts/{accountId} {
+      allow read, create, update, delete: if false;
+      match /grants/{grantId} {
+        allow read, create, update, delete: if false;
+      }
+    }
+
+    match /patientAccessGrants/{grantId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /patientAccessConsents/{consentId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /patientAccessAudit/{eventId} {
+      allow read, create, update, delete: if false;
+    }
+
     match /staffTasks/{taskId} {
       // Patient follow-ups are visible clinic-wide only to administrators.
       // Other roles receive only tasks explicitly assigned to their account.

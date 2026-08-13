@@ -474,3 +474,16 @@ test("unauthenticated and inactive users cannot access reports", async () => {
     ),
   );
 });
+
+test("patient portal identities cannot read report objects directly", async () => {
+  await seedReport("patient-pediatrics");
+  await seedLabReport("patient-pediatrics");
+  const patientStorage = testEnv.authenticatedContext("patient-account-1").storage();
+  await assertFails(getBytes(reportReference(patientStorage, "patient-pediatrics")));
+  await assertFails(getBytes(labReportReference(patientStorage, "patient-pediatrics")));
+  await assertFails(listAll(ref(patientStorage, "reports/patient-pediatrics")));
+  await assertFails(listAll(ref(patientStorage, "lab-reports/patient-pediatrics")));
+  await assertFails(uploadBytes(reportReference(patientStorage, "patient-pediatrics", "portal-upload.pdf"), reportBytes, { contentType: "application/pdf" }));
+  await assertFails(uploadBytes(labReportReference(patientStorage, "patient-pediatrics", "portal-lab.pdf"), reportBytes, { contentType: "application/pdf" }));
+  await assertFails(uploadBytes(pendingReportReference(patientStorage, "patient-pediatrics", "portal-pending.pdf"), reportBytes, { contentType: "application/pdf" }));
+});

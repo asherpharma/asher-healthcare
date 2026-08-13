@@ -1,5 +1,11 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
-import { browserLocalPersistence, getAuth, setPersistence } from "firebase/auth";
+import {
+  browserLocalPersistence,
+  browserSessionPersistence,
+  getAuth,
+  initializeAuth,
+  setPersistence,
+} from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 
@@ -22,6 +28,29 @@ export const firebaseAuth = firebaseApp ? getAuth(firebaseApp) : null;
 export const firestore = firebaseApp ? getFirestore(firebaseApp) : null;
 export const storage = firebaseApp ? getStorage(firebaseApp) : null;
 
+// Patient sessions deliberately use a separately named Firebase app and
+// session-only persistence. Signing into the family portal must never replace
+// a staff session that happens to be open in another tab on the same device.
+const patientFirebaseApp = isFirebaseConfigured
+  ? getApps().find((app) => app.name === "asher-patient-portal")
+    ?? initializeApp(firebaseConfig, "asher-patient-portal")
+  : null;
+export const patientFirebaseAuth = patientFirebaseApp
+  ? (() => {
+      try {
+        return initializeAuth(patientFirebaseApp, {
+          persistence: browserSessionPersistence,
+        });
+      } catch {
+        return getAuth(patientFirebaseApp);
+      }
+    })()
+  : null;
+
 if (firebaseAuth && typeof window !== "undefined") {
   void setPersistence(firebaseAuth, browserLocalPersistence);
+}
+
+if (patientFirebaseAuth && typeof window !== "undefined") {
+  void setPersistence(patientFirebaseAuth, browserSessionPersistence);
 }

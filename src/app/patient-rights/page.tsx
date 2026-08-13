@@ -39,7 +39,7 @@ export default function PatientRightsPage() {
       </section>
       <section>
         <h2>Children and dependent patients</h2>
-        <p>A parent, guardian or authorised caregiver should provide accurate information and participate in decisions where required. We aim to explain care in age-appropriate language and respect the child&apos;s comfort and dignity.</p>
+        <p>A parent, guardian or authorised caregiver should provide accurate information and participate in decisions where required. We aim to explain care in age-appropriate language and respect the child&apos;s comfort and dignity. Access to a dependent&apos;s digital record is verified, limited and reviewable; it is not created automatically from shared contact details.</p>
       </section>
       <section>
         <h2>Questions or concerns</h2>

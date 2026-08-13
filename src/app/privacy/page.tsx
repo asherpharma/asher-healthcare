@@ -24,7 +24,15 @@ export default function PrivacyPage() {
       </section>
       <section>
         <h2>Who can access records</h2>
-        <p>Patient records are available only to authorised Asher Healthcare staff with active accounts and an appropriate clinic role. We do not sell patient or visitor information. Access should be used only for legitimate care and clinic operations.</p>
+        <p>Patient records are available to authorised Asher Healthcare staff with active accounts and an appropriate clinic role. Where the clinic enables portal access, a patient or explicitly approved parent, guardian or caregiver may see only the records covered by that revocable access grant. We do not automatically link records from a matching name, phone number or email address, and we do not sell patient or visitor information.</p>
+      </section>
+      <section>
+        <h2>Family and dependent access</h2>
+        <p>Access for a child or dependent is created only after clinic verification. The clinic records the approved relationship and may limit, review or revoke that access when circumstances change, including when a child reaches adulthood. Adult records are not shared with a family member without an appropriate basis or the patient&apos;s authorisation.</p>
+      </section>
+      <section>
+        <h2>Messages and reminders</h2>
+        <p>Appointment, follow-up, vaccination or report-availability reminders are sent only through approved contact channels and use neutral wording. We keep care-related communications separate from optional promotional messages. You may ask the clinic to change or stop a communication channel, although essential service messages may still be needed to deliver requested care.</p>
       </section>
       <section>
         <h2>Service providers</h2>
@@ -36,7 +44,7 @@ export default function PrivacyPage() {
       </section>
       <section>
         <h2>Your choices</h2>
-        <p>You may ask the clinic to correct inaccurate contact details, explain how your information is used, or help you access clinic records subject to identity checks and applicable requirements. Call the clinic at +91 90192 63709 for assistance.</p>
+        <p>You may ask the clinic to correct inaccurate contact details, explain how your information is used, change communication preferences, revoke family portal access, or help you access clinic records subject to identity checks and applicable requirements. Call the clinic at +91 90192 63709 for assistance.</p>
       </section>
       <section>
         <h2>Children&apos;s information</h2>

@@ -6,7 +6,7 @@ import StaffCommandCenter from "@/components/admin/StaffCommandCenter";
 import StaffSessionProtection, { type StaffLockReason } from "@/components/admin/StaffSessionProtection";
 import { InstallAppButton, NetworkStatus } from "@/components/pwa/PwaRegister";
 import { firebaseAuth } from "@/firebase/config";
-import { CalendarDays, ClipboardPlus, FlaskConical, LayoutDashboard, ListTodo, LockKeyhole, ReceiptIndianRupee, Settings2, Smartphone, Stethoscope, UserRoundCog, UsersRound, type LucideIcon } from "lucide-react";
+import { BellRing, CalendarDays, ClipboardPlus, FlaskConical, HeartHandshake, LayoutDashboard, ListTodo, LockKeyhole, ReceiptIndianRupee, Settings2, Smartphone, Stethoscope, UserRoundCog, UsersRound, type LucideIcon } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -27,9 +27,11 @@ const navigation: NavigationItem[] = [
   { href: "/admin/consultations", label: "Consultations", icon: Stethoscope, roles: ["admin", "doctor"] },
   { href: "/admin/patients", label: "Patients", icon: UsersRound },
   { href: "/admin/tasks", label: "Tasks & follow-ups", icon: ListTodo },
+  { href: "/admin/communications", label: "Reminders & recalls", icon: BellRing, roles: ["admin", "reception"] },
   { href: "/admin/billing", label: "Billing", icon: ReceiptIndianRupee, roles: ["admin", "reception"] },
   { href: "/admin/lab", label: "Lab", icon: FlaskConical },
   { href: "/admin/staff", label: "Staff access", icon: UserRoundCog, adminOnly: true },
+  { href: "/admin/patient-access", label: "Family portal access", icon: HeartHandshake, adminOnly: true },
   { href: "/admin/app", label: "Mobile app", icon: Smartphone },
   { href: "/admin/settings", label: "Settings", icon: Settings2, adminOnly: true },
 ];

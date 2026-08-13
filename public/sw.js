@@ -37,13 +37,17 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
 
   // Never cache authenticated clinic screens or medical/financial information.
-  if (url.pathname.startsWith("/admin")) {
+  // The family portal follows the same network-only rule so a shared phone
+  // cannot reopen cached patient records after sign-out.
+  const isPrivateWorkspace =
+    url.pathname.startsWith("/admin") || url.pathname.startsWith("/portal");
+  if (isPrivateWorkspace) {
     event.respondWith(
       fetch(request, { cache: "no-store" }).catch(async () => {
         if (request.mode === "navigate") {
           return (await caches.match("/offline.html")) || Response.error();
         }
-        return new Response("The Asher Staff app is offline.", {
+        return new Response("A secure connection is required to open Asher Healthcare records.", {
           status: 503,
           headers: { "Content-Type": "text/plain; charset=utf-8" },
         });

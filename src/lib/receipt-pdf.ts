@@ -160,13 +160,13 @@ function openPrintPage() {
   return printWindow;
 }
 
-export async function downloadReceiptPdf(invoice: ReceiptInvoice) {
+export async function downloadReceiptPdf(invoice: ReceiptInvoice, requestedFileName?: string) {
   const pdf = await createReceiptPdf(invoice);
-  pdf.save(invoice.invoiceNumber + "-receipt.pdf");
+  pdf.save(requestedFileName || invoice.invoiceNumber + "-receipt.pdf");
 }
 
-export async function printReceiptPdf(invoice: ReceiptInvoice) {
-  const printWindow = openPrintPage();
+export async function printReceiptPdf(invoice: ReceiptInvoice, existingPrintWindow?: Window) {
+  const printWindow = existingPrintWindow || openPrintPage();
   try {
     const pdf = await createReceiptPdf(invoice);
     const pdfUrl = String(pdf.output("bloburl"));

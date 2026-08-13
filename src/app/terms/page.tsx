@@ -39,6 +39,10 @@ export default function TermsPage() {
         <p>Do not attempt to access staff areas without authorisation, interfere with the website, submit false information, upload harmful content, or use the service in a way that could affect another patient or clinic operation.</p>
       </section>
       <section>
+        <h2>Patient and family portal</h2>
+        <p>Portal access is personal and may be provided only after clinic verification. Keep your sign-in secure, use a private device where possible and sign out from shared devices. A parent, guardian or caregiver may access a dependent&apos;s information only while the clinic&apos;s approval remains active. Contact the clinic immediately if access is incorrect, no longer appropriate or may have been compromised.</p>
+      </section>
+      <section>
         <h2>Changes and contact</h2>
         <p>We may update these terms as services change. The current version will remain available on this page. Call +91 90192 63709 with questions about an appointment, invoice or website service.</p>
       </section>
