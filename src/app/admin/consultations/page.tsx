@@ -2,6 +2,11 @@
 
 import { type StaffProfile, useStaff } from "@/components/admin/StaffGuard";
 import { firestore } from "@/firebase/config";
+import {
+  ADMIN_NAVIGATION_HANDOFF_EVENT,
+  consumeAdminNavigationHandoff,
+  type AdminNavigationHandoff,
+} from "@/lib/admin-navigation-handoff";
 import { fetchPatientDirectory } from "@/lib/patient-directory";
 import type { PrescriptionPdfRecord } from "@/lib/prescription-pdf";
 import {
@@ -130,6 +135,35 @@ type Medicine = {
   duration: string;
   instructions: string;
 };
+
+type ConsultationDraftFields = {
+  temperature: string;
+  pulse: string;
+  bloodPressure: string;
+  spo2: string;
+  weight: string;
+  chiefComplaint: string;
+  examinationFindings: string;
+  diagnosis: string;
+  treatment: string;
+  clinicalNotes: string;
+  advice: string;
+  labPriority: string;
+  labNotes: string;
+  followUpDate: string;
+  followUpTime: string;
+  followUpPriority: string;
+};
+
+type ConsultationDraft = {
+  fields?: Partial<ConsultationDraftFields>;
+  medicines?: Array<Omit<Medicine, "id">>;
+  labTests?: string[];
+  expiresAt?: string;
+  updatedAt?: string;
+};
+
+type DraftStatus = "idle" | "loading" | "clean" | "dirty" | "saving" | "saved" | "error";
 
 type QueueEntry = {
   id: string;
@@ -294,6 +328,58 @@ function emptyMedicine(): Medicine {
   };
 }
 
+const CONSULTATION_DRAFT_FIELD_NAMES: Array<keyof ConsultationDraftFields> = [
+  "temperature",
+  "pulse",
+  "bloodPressure",
+  "spo2",
+  "weight",
+  "chiefComplaint",
+  "examinationFindings",
+  "diagnosis",
+  "treatment",
+  "clinicalNotes",
+  "advice",
+  "labPriority",
+  "labNotes",
+  "followUpDate",
+  "followUpTime",
+  "followUpPriority",
+];
+
+function draftAppointmentKey(appointmentId: string) {
+  return appointmentId || "walkin";
+}
+
+function consultationDraftId(uid: string, appointmentId: string) {
+  return `${uid}--${draftAppointmentKey(appointmentId)}`;
+}
+
+function formDraftFields(formElement: HTMLFormElement): ConsultationDraftFields {
+  const form = new FormData(formElement);
+  return Object.fromEntries(
+    CONSULTATION_DRAFT_FIELD_NAMES.map((name) => [name, String(form.get(name) || "").trim()]),
+  ) as ConsultationDraftFields;
+}
+
+function restoreDraftFields(formElement: HTMLFormElement, fields: Partial<ConsultationDraftFields>) {
+  CONSULTATION_DRAFT_FIELD_NAMES.forEach((name) => {
+    const control = formElement.elements.namedItem(name);
+    if (control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement) {
+      control.value = String(fields[name] || "");
+    }
+  });
+}
+
+function draftTime(value?: string) {
+  if (!value || Number.isNaN(Date.parse(value))) return "";
+  return new Intl.DateTimeFormat("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  }).format(new Date(value));
+}
+
 function labOrderNumber() {
   const stamp = clinicDate().replaceAll("-", "");
   return `LAB-${stamp}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
@@ -363,8 +449,32 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   const [notice, setNotice] = useState("");
   const [savedPrescription, setSavedPrescription] = useState<PrescriptionPdfRecord | null>(null);
   const [documentAction, setDocumentAction] = useState<"print" | "download" | null>(null);
-  const deepLinkedPatientHandled = useRef(false);
+  const [draftStatus, setDraftStatus] = useState<DraftStatus>("idle");
+  const [draftRevision, setDraftRevision] = useState(0);
+  const [draftSavedAt, setDraftSavedAt] = useState("");
+  const [completedDraftCleanup, setCompletedDraftCleanup] = useState<{ patientId: string; appointmentId: string } | null>(null);
+  const [navigationHandoff, setNavigationHandoff] = useState<
+    Extract<AdminNavigationHandoff, { destination: "/admin/consultations" }> | null
+  >(null);
   const requestedPatientRecords = useRef(new Set<string>());
+  const consultationFormRef = useRef<HTMLFormElement>(null);
+  const draftAutosaveTimerRef = useRef<number | null>(null);
+  const draftExistsRef = useRef(false);
+  const draftCompletionRef = useRef(false);
+  const draftRevisionRef = useRef(0);
+  const draftContextRef = useRef("");
+  const draftSavePromiseRef = useRef<Promise<void> | null>(null);
+  const draftRestoreEpochRef = useRef(0);
+
+  useEffect(() => {
+    const consumeConsultationHandoff = () => {
+      const handoff = consumeAdminNavigationHandoff("/admin/consultations");
+      if (handoff) setNavigationHandoff(handoff);
+    };
+    window.addEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumeConsultationHandoff);
+    consumeConsultationHandoff();
+    return () => window.removeEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumeConsultationHandoff);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -451,11 +561,14 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   }, [appointments, db, patients, profile.role]);
 
   useEffect(() => {
-    if (!patientsLoaded || !appointmentsLoaded || deepLinkedPatientHandled.current) return;
+    if (!patientsLoaded || !appointmentsLoaded || !navigationHandoff) return;
 
-    const params = new URLSearchParams(window.location.search);
-    const requestedPatientId = params.get("patient")?.trim();
-    const requestedAppointmentId = params.get("appointment")?.trim();
+    const requestedPatientId = navigationHandoff.intent === "open-patient-consultation"
+      ? navigationHandoff.patientId
+      : "";
+    const requestedAppointmentId = navigationHandoff.intent === "open-appointment-consultation"
+      ? navigationHandoff.appointmentId
+      : "";
     const deepLinkedAppointment = requestedAppointmentId
       ? appointments.find((appointment) => appointment.id === requestedAppointmentId)
       : undefined;
@@ -471,7 +584,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
         : resolution?.patient
       : requestedPatient;
     const timer = window.setTimeout(() => {
-      deepLinkedPatientHandled.current = true;
+      setNavigationHandoff(null);
       if (deepLinkedAppointment && !doctorCanOpenAppointment(profileDoctor, deepLinkedAppointment)) {
         setError(`This appointment belongs to ${doctorFromAppointment(deepLinkedAppointment.doctorId)}. Open it from that doctor's workspace.`);
         return;
@@ -511,7 +624,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       setError("");
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [appointments, appointmentsLoaded, patients, patientsLoaded, profileDoctor]);
+  }, [appointments, appointmentsLoaded, navigationHandoff, patients, patientsLoaded, profileDoctor]);
 
   useEffect(() => {
     if (!selectedPatientId) return;
@@ -625,6 +738,257 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
     () => appointments.find((appointment) => appointment.id === selectedAppointmentId) ?? null,
     [appointments, selectedAppointmentId],
   );
+
+  function markDraftDirty() {
+    if (draftCompletionRef.current || !selectedPatientId) return;
+    draftRestoreEpochRef.current += 1;
+    draftRevisionRef.current += 1;
+    setDraftRevision(draftRevisionRef.current);
+    setDraftStatus("dirty");
+  }
+
+  function confirmConsultationSwitch() {
+    if (completedDraftCleanup) {
+      setError("This consultation is saved, but its temporary draft still needs secure cleanup. Use Retry draft cleanup before opening another patient.");
+      return false;
+    }
+    if (["dirty", "saving"].includes(draftStatus)) {
+      setError("Please wait until the consultation shows Draft saved before changing the patient, queue date, or doctor.");
+      return false;
+    }
+    if (draftStatus === "error") {
+      setError("Draft autosave needs attention. Retry the save before changing the patient, queue date, or doctor.");
+      return false;
+    }
+    return true;
+  }
+
+  async function deleteSecureDraft(patientId: string, appointmentId: string) {
+    const idToken = await user.getIdToken();
+    const response = await fetch("/api/staff/consultation-draft", {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+        "Content-Type": "application/json",
+      },
+      credentials: "same-origin",
+      body: JSON.stringify({ patientId, appointmentId }),
+    });
+    if (!response.ok) throw new Error("Completed consultation draft cleanup failed.");
+  }
+
+  async function retryCompletedDraftCleanup() {
+    const cleanup = completedDraftCleanup;
+    if (!cleanup) return;
+    setDraftStatus("saving");
+    try {
+      await deleteSecureDraft(cleanup.patientId, cleanup.appointmentId);
+      setCompletedDraftCleanup(null);
+      draftExistsRef.current = false;
+      setDraftStatus("clean");
+      setDraftSavedAt("");
+      setNotice("The signed consultation is safe and its temporary draft has now been removed.");
+      setError("");
+    } catch (cleanupError) {
+      console.error(cleanupError);
+      setDraftStatus("error");
+      setError("The consultation is already saved, but the temporary draft could not be removed. Keep this page open and retry cleanup.");
+    }
+  }
+
+  useEffect(() => {
+    if (draftAutosaveTimerRef.current !== null) {
+      window.clearTimeout(draftAutosaveTimerRef.current);
+      draftAutosaveTimerRef.current = null;
+    }
+    draftCompletionRef.current = false;
+    draftExistsRef.current = false;
+    draftRevisionRef.current = 0;
+    draftRestoreEpochRef.current += 1;
+    const restoreEpoch = draftRestoreEpochRef.current;
+    const contextKey = selectedPatientId && user?.uid
+      ? `${selectedPatientId}/${consultationDraftId(user.uid, selectedAppointmentId)}`
+      : "";
+    draftContextRef.current = contextKey;
+    let active = true;
+    let restoreFrame = 0;
+    queueMicrotask(() => {
+      if (!active) return;
+      setDraftRevision(0);
+      setDraftSavedAt("");
+      setDraftStatus(selectedPatientId && user?.uid ? "loading" : "idle");
+    });
+
+    if (!selectedPatientId || !user?.uid) {
+      return () => {
+        active = false;
+      };
+    }
+
+    void user.getIdToken()
+      .then((idToken) => fetch("/api/staff/consultation-draft", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+          "Content-Type": "application/json",
+        },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          action: "load",
+          patientId: selectedPatientId,
+          appointmentId: selectedAppointmentId,
+        }),
+      }))
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result?.error || "Consultation draft could not be loaded.");
+        return result?.draft as ConsultationDraft | null;
+      })
+      .then((draft) => {
+        if (!active || restoreEpoch !== draftRestoreEpochRef.current) return;
+        if (!draft) {
+          setDraftStatus("clean");
+          return;
+        }
+
+        const restoredMedicines = Array.isArray(draft.medicines)
+          ? draft.medicines.slice(0, 20).map((medicine) => ({
+              id: crypto.randomUUID(),
+              name: String(medicine?.name || ""),
+              dose: String(medicine?.dose || ""),
+              frequency: String(medicine?.frequency || ""),
+              duration: String(medicine?.duration || ""),
+              instructions: String(medicine?.instructions || ""),
+            }))
+          : [];
+        restoreFrame = window.requestAnimationFrame(() => {
+          const formElement = consultationFormRef.current;
+          if (
+            active
+            && restoreEpoch === draftRestoreEpochRef.current
+            && draftRevisionRef.current === 0
+            && formElement
+            && draft.fields
+          ) {
+            restoreDraftFields(formElement, draft.fields);
+            setMedicines(restoredMedicines.length > 0 ? restoredMedicines : [emptyMedicine()]);
+            setLabTests(Array.isArray(draft.labTests) ? draft.labTests.slice(0, 20).map(String) : []);
+            draftExistsRef.current = true;
+            setDraftSavedAt(draftTime(draft.updatedAt));
+            setDraftStatus("saved");
+          }
+        });
+      })
+      .catch((loadError) => {
+        console.error("Consultation draft could not be loaded", loadError);
+        if (active) setDraftStatus("error");
+      });
+
+    return () => {
+      active = false;
+      if (restoreFrame) window.cancelAnimationFrame(restoreFrame);
+    };
+  }, [db, selectedAppointmentId, selectedPatientId, user]);
+
+  useEffect(() => {
+    if (draftRevision === 0 || !selectedPatientId || !user?.uid || draftCompletionRef.current) return;
+    if (draftAutosaveTimerRef.current !== null) window.clearTimeout(draftAutosaveTimerRef.current);
+
+    const revision = draftRevision;
+    draftAutosaveTimerRef.current = window.setTimeout(() => {
+      draftAutosaveTimerRef.current = null;
+      const formElement = consultationFormRef.current;
+      if (!formElement || draftCompletionRef.current) return;
+
+      const doctorName = profileDoctor
+        || (DOCTORS.includes(selectedPatient?.doctorName as DoctorName) ? selectedPatient?.doctorName : "")
+        || (selectedAppointment ? doctorFromAppointment(selectedAppointment.doctorId) : "");
+      const cleanDraftMedicines = medicines.map((medicine) => ({
+        name: medicine.name.trim(),
+        dose: medicine.dose.trim(),
+        frequency: medicine.frequency.trim(),
+        duration: medicine.duration.trim(),
+        instructions: medicine.instructions.trim(),
+      }));
+      const draftPayload = {
+        patientId: selectedPatientId,
+        appointmentId: selectedAppointmentId,
+        doctorName: DOCTORS.includes(doctorName as DoctorName) ? doctorName : "",
+        fields: formDraftFields(formElement),
+        medicines: cleanDraftMedicines,
+        labTests,
+      };
+
+      setDraftStatus("saving");
+      const previousSave = draftSavePromiseRef.current;
+      const savePromise = (previousSave ? previousSave.catch(() => undefined) : Promise.resolve())
+        .then(() => user.getIdToken())
+        .then((idToken) => fetch("/api/staff/consultation-draft", {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${idToken}`,
+            "Content-Type": "application/json",
+          },
+          credentials: "same-origin",
+          body: JSON.stringify(draftPayload),
+        }))
+        .then(async (response) => {
+          const result = await response.json();
+          if (!response.ok) throw new Error(result?.error || "Consultation draft could not be saved.");
+          return result;
+        })
+        .then((result) => {
+          if (draftContextRef.current !== `${selectedPatientId}/${consultationDraftId(user.uid, selectedAppointmentId)}`) return;
+          draftExistsRef.current = true;
+          if (draftRevisionRef.current === revision && !draftCompletionRef.current) {
+            setDraftSavedAt(draftTime(result?.savedAt) || draftTime(new Date().toISOString()));
+            setDraftStatus("saved");
+          }
+        })
+        .catch((saveError) => {
+          console.error("Consultation draft could not be saved", saveError);
+          if (draftContextRef.current !== `${selectedPatientId}/${consultationDraftId(user.uid, selectedAppointmentId)}`) return;
+          if (draftRevisionRef.current === revision && !draftCompletionRef.current) setDraftStatus("error");
+        });
+      draftSavePromiseRef.current = savePromise;
+      void savePromise.finally(() => {
+        if (draftSavePromiseRef.current === savePromise) draftSavePromiseRef.current = null;
+      });
+    }, 1200);
+
+    return () => {
+      if (draftAutosaveTimerRef.current !== null) {
+        window.clearTimeout(draftAutosaveTimerRef.current);
+        draftAutosaveTimerRef.current = null;
+      }
+    };
+  }, [db, draftRevision, labTests, medicines, profile.displayName, profileDoctor, selectedAppointment, selectedAppointmentId, selectedPatient, selectedPatientId, user]);
+
+  useEffect(() => {
+    const draftNeedsAttention = draftStatus === "dirty" || draftStatus === "saving" || draftStatus === "error";
+    if (!draftNeedsAttention) return;
+
+    const warning = "This consultation has changes that have not been safely saved yet.";
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = warning;
+    };
+    const guardLinkNavigation = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const anchor = target.closest("a[href]");
+      if (!(anchor instanceof HTMLAnchorElement) || anchor.hash || anchor.target === "_blank") return;
+      if (window.confirm(`${warning} Leave this page anyway?`)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    document.addEventListener("click", guardLinkNavigation, true);
+    return () => {
+      window.removeEventListener("beforeunload", beforeUnload);
+      document.removeEventListener("click", guardLinkNavigation, true);
+    };
+  }, [draftStatus]);
 
   const visiblePatients = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -760,6 +1124,10 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       setError(selectionError);
       return;
     }
+    if (
+      (patientId !== selectedPatientId || entry.appointmentId !== selectedAppointmentId)
+      && !confirmConsultationSwitch()
+    ) return;
     if (entry.status === "in_consultation") {
       choosePatient(patientId, entry.appointmentId, explicitlyConfirmed);
       return;
@@ -789,6 +1157,10 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   }
 
   function choosePatient(patientId: string, appointmentId = "", explicitlyConfirmed = false) {
+    if (
+      (patientId !== selectedPatientId || appointmentId !== selectedAppointmentId)
+      && !confirmConsultationSwitch()
+    ) return;
     if (!patients.some((patient) => patient.id === patientId && isActivePatient(patient))) {
       setError("This patient chart is archived or unavailable. Restore it from the patient register before starting a consultation.");
       return;
@@ -824,17 +1196,28 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
 
   function updateMedicine(id: string, field: keyof Omit<Medicine, "id">, value: string) {
     setMedicines((current) => current.map((medicine) => medicine.id === id ? { ...medicine, [field]: value } : medicine));
+    markDraftDirty();
   }
 
   function toggleLab(test: string) {
+    if (!labTests.includes(test) && labTests.length >= 20) {
+      setError("A consultation can include up to 20 lab tests.");
+      return;
+    }
     setLabTests((current) => current.includes(test) ? current.filter((item) => item !== test) : [...current, test]);
+    markDraftDirty();
   }
 
   function addCustomLab() {
     const test = customTest.trim();
     if (!test || labTests.includes(test)) return;
+    if (labTests.length >= 20) {
+      setError("A consultation can include up to 20 lab tests.");
+      return;
+    }
     setLabTests((current) => [...current, test]);
     setCustomTest("");
+    markDraftDirty();
   }
 
   async function completeConsultation(event: FormEvent<HTMLFormElement>) {
@@ -907,8 +1290,14 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
     setError("");
     setNotice("");
     setSavedPrescription(null);
+    draftCompletionRef.current = true;
+    if (draftAutosaveTimerRef.current !== null) {
+      window.clearTimeout(draftAutosaveTimerRef.current);
+      draftAutosaveTimerRef.current = null;
+    }
 
     try {
+      await draftSavePromiseRef.current;
       const batch = writeBatch(db);
       batch.set(visitRef, {
         consultationId,
@@ -1010,6 +1399,19 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       });
 
       await batch.commit();
+      let draftCleanupFailed = false;
+      if (draftExistsRef.current) {
+        try {
+          await deleteSecureDraft(selectedPatient.id, selectedAppointmentId);
+        } catch (cleanupError) {
+          console.error(cleanupError);
+          draftCleanupFailed = true;
+          setCompletedDraftCleanup({
+            patientId: selectedPatient.id,
+            appointmentId: selectedAppointmentId,
+          });
+        }
+      }
       const prescriptionDocument = prescriptionRef ? {
         id: prescriptionRef.id,
         prescribedDate: selectedDate,
@@ -1025,10 +1427,22 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       setMedicines([emptyMedicine()]);
       setLabTests([]);
       setCustomTest("");
+      draftExistsRef.current = draftCleanupFailed;
+      draftRevisionRef.current = 0;
+      setDraftRevision(0);
+      setDraftSavedAt("");
+      setDraftStatus(draftCleanupFailed ? "error" : "clean");
+      if (draftCleanupFailed) {
+        setError("The signed consultation is safe, but its temporary draft could not be removed. Retry draft cleanup before leaving this patient.");
+      }
     } catch (saveError) {
       console.error(saveError);
       setError("The consultation could not be completed. No partial clinical record was saved. Please check access and try again.");
+      draftRevisionRef.current += 1;
+      setDraftRevision(draftRevisionRef.current);
+      setDraftStatus("dirty");
     } finally {
+      draftCompletionRef.current = false;
       setSaving(false);
     }
   }
@@ -1064,8 +1478,8 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
           <p className="mt-3 max-w-3xl text-slate-600">Complete the clinical visit, prescription, lab orders and follow-up from one secure screen.</p>
         </div>
         <div className="staff-page-actions flex flex-col gap-3 sm:flex-row">
-          <label className="text-xs font-bold uppercase tracking-wider text-slate-500">Queue date<input type="date" value={selectedDate} onChange={(event) => { setAppointmentsLoaded(false); setSelectedDate(event.target.value); }} className="mt-1 block min-h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-[#233A59]" /></label>
-          {profile.role === "admin" ? <label className="text-xs font-bold uppercase tracking-wider text-slate-500">Doctor<select value={doctorFilter} onChange={(event) => setDoctorFilter(event.target.value as "all" | DoctorName)} className="mt-1 block min-h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-[#233A59]"><option value="all">All doctors</option>{DOCTORS.map((doctor) => <option key={doctor}>{doctor}</option>)}</select></label> : null}
+          <label className="text-xs font-bold uppercase tracking-wider text-slate-500">Queue date<input type="date" value={selectedDate} onChange={(event) => { if (!confirmConsultationSwitch()) return; setAppointmentsLoaded(false); setSelectedDate(event.target.value); }} className="mt-1 block min-h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-[#233A59]" /></label>
+          {profile.role === "admin" ? <label className="text-xs font-bold uppercase tracking-wider text-slate-500">Doctor<select value={doctorFilter} onChange={(event) => { if (!confirmConsultationSwitch()) return; setDoctorFilter(event.target.value as "all" | DoctorName); }} className="mt-1 block min-h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-[#233A59]"><option value="all">All doctors</option>{DOCTORS.map((doctor) => <option key={doctor}>{doctor}</option>)}</select></label> : null}
         </div>
       </div>
 
@@ -1189,7 +1603,40 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
                 </div>
               </section>
 
-              <form key={`${selectedPatient.id}-${selectedAppointmentId}`} onSubmit={completeConsultation} className="space-y-6">
+              <form
+                ref={consultationFormRef}
+                key={`${selectedPatient.id}-${selectedAppointmentId}`}
+                onInput={markDraftDirty}
+                onSubmit={completeConsultation}
+                className="space-y-6"
+              >
+                <div
+                  aria-live="polite"
+                  className={`flex flex-wrap items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-sm font-semibold ${
+                    draftStatus === "error"
+                      ? "border-red-200 bg-red-50 text-red-700"
+                      : draftStatus === "dirty" || draftStatus === "saving"
+                        ? "border-amber-200 bg-amber-50 text-amber-800"
+                        : "border-emerald-200 bg-emerald-50 text-emerald-800"
+                  }`}
+                >
+                  <span className="inline-flex items-center gap-2">
+                    {draftStatus === "loading" || draftStatus === "saving" ? <LoaderCircle size={17} className="animate-spin" /> : draftStatus === "error" ? <AlertCircle size={17} /> : <CheckCircle2 size={17} />}
+                    {draftStatus === "loading"
+                      ? "Checking for a secure draft…"
+                      : draftStatus === "dirty"
+                        ? "Changes detected — saving shortly…"
+                        : draftStatus === "saving"
+                          ? "Saving secure clinic draft…"
+                          : draftStatus === "saved"
+                            ? `Draft saved securely${draftSavedAt ? ` at ${draftSavedAt}` : ""}.`
+                            : draftStatus === "error"
+                              ? "Draft autosave needs attention. Keep this page open and retry."
+                              : "Secure autosave is ready."}
+                  </span>
+                  {draftStatus === "error" || completedDraftCleanup ? <button type="button" onClick={completedDraftCleanup ? retryCompletedDraftCleanup : markDraftDirty} className="rounded-lg bg-red-700 px-3 py-1.5 text-xs font-bold text-white">{completedDraftCleanup ? "Retry draft cleanup" : "Retry now"}</button> : <span className="text-xs opacity-75">Draft access expires after 7 days</span>}
+                </div>
+                <fieldset disabled={draftStatus === "loading" || Boolean(completedDraftCleanup)} className="space-y-6 disabled:opacity-60">
                 <section className={cardClass}>
                   <SectionTitle icon={Stethoscope} title="Clinical consultation" subtitle="Vitals, examination, diagnosis and care plan" />
                   <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
@@ -1208,9 +1655,9 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
                 </section>
 
                 <section className={cardClass}>
-                  <div className="flex flex-wrap items-start justify-between gap-3"><SectionTitle icon={Pill} title="Prescription" subtitle="Add one or more medicines; leave empty when none are prescribed" /><button type="button" onClick={() => setMedicines((current) => [...current, emptyMedicine()])} className="inline-flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-2 text-sm font-bold text-blue-800"><Plus size={16} />Add medicine</button></div>
+                  <div className="flex flex-wrap items-start justify-between gap-3"><SectionTitle icon={Pill} title="Prescription" subtitle="Add one or more medicines; leave empty when none are prescribed" /><button type="button" disabled={medicines.length >= 20} onClick={() => { setMedicines((current) => [...current, emptyMedicine()]); markDraftDirty(); }} className="inline-flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-2 text-sm font-bold text-blue-800 disabled:cursor-not-allowed disabled:opacity-50"><Plus size={16} />{medicines.length >= 20 ? "20 medicine limit" : "Add medicine"}</button></div>
                   <div className="mt-5 space-y-4">
-                    {medicines.map((medicine, index) => <div key={medicine.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><div className="flex items-center justify-between"><p className="text-sm font-bold text-[#233A59]">Medicine {index + 1}</p>{medicines.length > 1 ? <button type="button" onClick={() => setMedicines((current) => current.filter((item) => item.id !== medicine.id))} aria-label={`Remove medicine ${index + 1}`} className="rounded-lg p-2 text-red-600 hover:bg-red-50"><Trash2 size={16} /></button> : null}</div><div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5"><label className={`${labelClass} sm:col-span-2 xl:col-span-1`}>Medicine<input value={medicine.name} onChange={(event) => updateMedicine(medicine.id, "name", event.target.value)} placeholder="Name and strength" className={inputClass} /></label><label className={labelClass}>Dose<input value={medicine.dose} onChange={(event) => updateMedicine(medicine.id, "dose", event.target.value)} placeholder="5 ml" className={inputClass} /></label><label className={labelClass}>Frequency<input value={medicine.frequency} onChange={(event) => updateMedicine(medicine.id, "frequency", event.target.value)} placeholder="Twice daily" className={inputClass} /></label><label className={labelClass}>Duration<input value={medicine.duration} onChange={(event) => updateMedicine(medicine.id, "duration", event.target.value)} placeholder="5 days" className={inputClass} /></label><label className={labelClass}>Instructions<input value={medicine.instructions} onChange={(event) => updateMedicine(medicine.id, "instructions", event.target.value)} placeholder="After food" className={inputClass} /></label></div></div>)}
+                    {medicines.map((medicine, index) => <div key={medicine.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><div className="flex items-center justify-between"><p className="text-sm font-bold text-[#233A59]">Medicine {index + 1}</p>{medicines.length > 1 ? <button type="button" onClick={() => { setMedicines((current) => current.filter((item) => item.id !== medicine.id)); markDraftDirty(); }} aria-label={`Remove medicine ${index + 1}`} className="rounded-lg p-2 text-red-600 hover:bg-red-50"><Trash2 size={16} /></button> : null}</div><div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5"><label className={`${labelClass} sm:col-span-2 xl:col-span-1`}>Medicine<input value={medicine.name} onChange={(event) => updateMedicine(medicine.id, "name", event.target.value)} placeholder="Name and strength" className={inputClass} /></label><label className={labelClass}>Dose<input value={medicine.dose} onChange={(event) => updateMedicine(medicine.id, "dose", event.target.value)} placeholder="5 ml" className={inputClass} /></label><label className={labelClass}>Frequency<input value={medicine.frequency} onChange={(event) => updateMedicine(medicine.id, "frequency", event.target.value)} placeholder="Twice daily" className={inputClass} /></label><label className={labelClass}>Duration<input value={medicine.duration} onChange={(event) => updateMedicine(medicine.id, "duration", event.target.value)} placeholder="5 days" className={inputClass} /></label><label className={labelClass}>Instructions<input value={medicine.instructions} onChange={(event) => updateMedicine(medicine.id, "instructions", event.target.value)} placeholder="After food" className={inputClass} /></label></div></div>)}
                   </div>
                   <label className={`${labelClass} mt-4 block`}>Advice to patient<textarea name="advice" rows={3} placeholder="Hydration, diet, warning signs and other advice" className={inputClass} /></label>
                 </section>
@@ -1231,6 +1678,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
                   <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between"><div><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-[#D4B678]"><ShieldCheck size={16} /> Atomic clinical save</div><h2 className="mt-2 text-2xl font-bold">Complete this consultation</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-white/70">The visit, prescription, lab order, follow-up and audit entry are saved together. If any part fails, none of the records are committed.</p></div><button disabled={saving} className="inline-flex min-h-12 shrink-0 items-center justify-center gap-2 rounded-xl bg-white px-6 py-3 font-bold text-[#233A59] transition hover:bg-[#F8F4EA] disabled:cursor-not-allowed disabled:opacity-60">{saving ? <LoaderCircle className="animate-spin" size={19} /> : <Check size={19} />}Complete consultation</button></div>
                   {savedPrescription ? <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-white/15 pt-5"><p className="mr-auto text-sm font-semibold text-emerald-200">Prescription is ready.</p><button type="button" disabled={documentAction !== null} onClick={() => void preparePrescription("print")} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-white/10 px-4 py-2 text-sm font-bold hover:bg-white/20 disabled:opacity-60">{documentAction === "print" ? <LoaderCircle className="animate-spin" size={16} /> : <Printer size={16} />}Print</button><button type="button" disabled={documentAction !== null} onClick={() => void preparePrescription("download")} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-[#A8864A] px-4 py-2 text-sm font-bold hover:bg-[#92713b] disabled:opacity-60">{documentAction === "download" ? <LoaderCircle className="animate-spin" size={16} /> : <Download size={16} />}Download</button></div> : null}
                 </section>
+                </fieldset>
               </form>
             </div>
           )}

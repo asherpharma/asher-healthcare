@@ -1,4 +1,9 @@
 import { HttpError } from "../razorpay/http.js";
+import {
+  DEFAULT_RECEPTION_SERVICE_CATALOG,
+  normalizeReceptionServiceCatalog,
+  receptionServiceForSelection,
+} from "./service-catalog.js";
 
 export const RECEPTION_DOCTORS = Object.freeze({
   pediatrics: Object.freeze({
@@ -68,7 +73,11 @@ export function clinicClock(now = new Date()) {
   };
 }
 
-export function validateReceptionRegistration(body, now = new Date()) {
+export function validateReceptionRegistration(
+  body,
+  now = new Date(),
+  serviceCatalogValue = DEFAULT_RECEPTION_SERVICE_CATALOG,
+) {
   const clinicNow = clinicClock(now);
   const requestId = cleanText(body?.requestId, 64).toLowerCase();
   const patientId = cleanText(body?.patientId, 128);
@@ -81,6 +90,7 @@ export function validateReceptionRegistration(body, now = new Date()) {
   const caseType = cleanText(body?.caseType, 20).toLowerCase();
   const doctorId = cleanText(body?.doctorId, 30).toLowerCase();
   const specialty = cleanText(body?.specialty, 30).toLowerCase();
+  const clientServiceId = cleanText(body?.serviceId, 30).toLowerCase();
   const clientFee = Number(body?.fee);
   const doctor = RECEPTION_DOCTORS[doctorId];
 
@@ -113,8 +123,15 @@ export function validateReceptionRegistration(body, now = new Date()) {
     throw new HttpError(400, "General consultations must not include a specialist department.");
   }
 
-  const fee = caseType === "general" ? 250 : 500;
-  if (clientFee !== fee) {
+  const service = receptionServiceForSelection(
+    normalizeReceptionServiceCatalog(serviceCatalogValue),
+    caseType,
+    expectedSpecialty,
+  );
+  if (clientServiceId && clientServiceId !== service.serviceId) {
+    throw new HttpError(409, "The selected consultation service changed. Review the visit and try again.");
+  }
+  if (clientFee !== service.fee) {
     throw new HttpError(409, "The consultation fee changed. Review the visit and try again.");
   }
 
@@ -128,11 +145,12 @@ export function validateReceptionRegistration(body, now = new Date()) {
     dateOfBirth,
     gender,
     caseType,
+    serviceId: service.serviceId,
     specialty: expectedSpecialty,
     doctorId,
     doctorName: doctor.name,
-    consultationLabel: caseType === "general" ? "General consultation" : doctor.specialistLabel,
-    fee,
+    consultationLabel: service.label,
+    fee: service.fee,
     duplicateAcknowledged: body?.duplicateAcknowledged === true,
     clinicDate: clinicNow.date,
     clinicTime: clinicNow.time,
@@ -157,6 +175,39 @@ export function receptionRequestMaterial(actorUid, requestId) {
   ].join("\n");
 }
 
+/**
+ * Stable client intent used only to replay an already committed reception
+ * request. It deliberately excludes the server-authoritative fee and label,
+ * so a lost successful response remains replayable after an administrator
+ * later changes the catalogue. The full registration validator still runs
+ * before any new arrival is written.
+ */
+export function receptionRequestIntent(body) {
+  const requestId = cleanText(body?.requestId, 64).toLowerCase();
+  if (!REQUEST_ID_PATTERN.test(requestId)) {
+    throw new HttpError(400, "Start a fresh reception request and try again.");
+  }
+  const patientId = cleanText(body?.patientId, 128);
+  if (patientId && !/^[A-Za-z0-9_-]{1,128}$/u.test(patientId)) {
+    throw new HttpError(400, "Select the patient record again.");
+  }
+  return {
+    requestId,
+    material: JSON.stringify({
+      patientId,
+      normalizedName: normalizeReceptionName(body?.fullName),
+      normalizedPhone: normalizeReceptionPhone(body?.phone) || "",
+      dateOfBirth: cleanText(body?.dateOfBirth, 10),
+      gender: cleanText(body?.gender, 12).toLowerCase(),
+      caseType: cleanText(body?.caseType, 20).toLowerCase(),
+      serviceId: cleanText(body?.serviceId, 30).toLowerCase(),
+      specialty: cleanText(body?.specialty, 30).toLowerCase(),
+      doctorId: cleanText(body?.doctorId, 30).toLowerCase(),
+      duplicateAcknowledged: body?.duplicateAcknowledged === true,
+    }),
+  };
+}
+
 export function receptionPayloadMaterial(registration) {
   return JSON.stringify({
     patientId: registration.patientId,
@@ -165,6 +216,7 @@ export function receptionPayloadMaterial(registration) {
     dateOfBirth: registration.dateOfBirth,
     gender: registration.gender,
     caseType: registration.caseType,
+    serviceId: registration.serviceId,
     specialty: registration.specialty,
     doctorId: registration.doctorId,
     fee: registration.fee,

@@ -1,6 +1,7 @@
 import {
   commitWrites,
   createDocumentWrite,
+  documentName,
   getDocument,
   requireActiveStaff,
   updateDocumentWrite,
@@ -18,16 +19,34 @@ import {
   patientsForDateOfBirth,
 } from "../../../server/reception/firestore-query.js";
 import {
+  createPatientSearchPrefixes,
+  patientSearchDoctorKey,
+} from "../../../server/patients/search-index.js";
+import {
   createReceptionInvoiceNumber,
   exactReceptionPatientIdentity,
   queueTokenLabel,
   receptionIdentityMaterial,
   receptionPayloadMaterial,
+  receptionRequestIntent,
   receptionRequestMaterial,
   validateReceptionRegistration,
 } from "../../../server/reception/workflow.js";
 
 const MAX_COUNTER_ATTEMPTS = 5;
+
+export function verifyServiceCatalogWrite(env, serviceCatalogDocument) {
+  return serviceCatalogDocument
+    ? verifyDocumentWrite(
+        env,
+        "clinicSettings/serviceCatalog",
+        serviceCatalogDocument.updateTime,
+      )
+    : {
+        verify: documentName(env, "clinicSettings/serviceCatalog"),
+        currentDocument: { exists: false },
+      };
+}
 
 async function sha256Hex(value) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
@@ -46,9 +65,12 @@ function patientResponse(patientId, patientNumber, registration) {
   };
 }
 
-function replayableResult(requestDocument, requestFingerprint) {
+function replayableResult(requestDocument, requestFingerprint, requestIntentFingerprint = "") {
   if (!requestDocument) return null;
-  if (requestDocument.data.requestFingerprint !== requestFingerprint) {
+  const fingerprintMatches = requestIntentFingerprint
+    ? requestDocument.data.requestIntentFingerprint === requestIntentFingerprint
+    : requestDocument.data.requestFingerprint === requestFingerprint;
+  if (!fingerprintMatches) {
     throw new HttpError(409, "This reception request was already used for different patient details. Start a new request.");
   }
   if (requestDocument.data.status !== "committed" || !requestDocument.data.result) {
@@ -57,10 +79,16 @@ function replayableResult(requestDocument, requestFingerprint) {
   return requestDocument.data.result;
 }
 
-async function replayResponse(env, requestPath, requestFingerprint) {
+async function replayResponse(
+  env,
+  requestPath,
+  requestFingerprint,
+  requestIntentFingerprint = "",
+) {
   const result = replayableResult(
     await getDocument(env, requestPath),
     requestFingerprint,
+    requestIntentFingerprint,
   );
   return result ? json({ ...result, replayed: true }) : null;
 }
@@ -102,9 +130,30 @@ export async function onRequestPost(context) {
 
     const body = await readJson(context.request);
     const now = new Date();
-    const registration = validateReceptionRegistration(body, now);
-    const requestKey = await sha256Hex(receptionRequestMaterial(staff.uid, registration.requestId));
+    const requestIntent = receptionRequestIntent(body);
+    const requestKey = await sha256Hex(
+      receptionRequestMaterial(staff.uid, requestIntent.requestId),
+    );
     const requestPath = `receptionRequests/${requestKey}`;
+    const requestIntentFingerprint = await sha256Hex(requestIntent.material);
+    const existingRequest = await getDocument(context.env, requestPath);
+    if (existingRequest?.data?.requestIntentFingerprint) {
+      const replay = replayableResult(
+        existingRequest,
+        "",
+        requestIntentFingerprint,
+      );
+      if (replay) return json({ ...replay, replayed: true });
+    }
+    const serviceCatalogDocument = await getDocument(
+      context.env,
+      "clinicSettings/serviceCatalog",
+    );
+    const registration = validateReceptionRegistration(
+      body,
+      now,
+      serviceCatalogDocument?.data,
+    );
     const requestFingerprint = await sha256Hex(receptionPayloadMaterial(registration));
     const replay = await replayResponse(context.env, requestPath, requestFingerprint);
     if (replay) return replay;
@@ -228,6 +277,11 @@ export async function onRequestPost(context) {
       };
       const writes = [];
 
+      // The invoice must be committed against the exact fee catalogue that
+      // was validated above. A concurrent fee or availability change aborts
+      // the whole arrival instead of recording a stale charge.
+      writes.push(verifyServiceCatalogWrite(context.env, serviceCatalogDocument));
+
       if (isNewPatient) {
         writes.push(
           createDocumentWrite(context.env, `patients/${patientId}`, {
@@ -241,6 +295,7 @@ export async function onRequestPost(context) {
             doctorId: registration.doctorId,
             doctorName: registration.doctorName,
             caseType: registration.caseType,
+            serviceId: registration.serviceId,
             specialty: registration.specialty,
             consultationFee: registration.fee,
             registrationInvoiceId: invoiceId,
@@ -248,6 +303,12 @@ export async function onRequestPost(context) {
             lastInvoiceId: invoiceId,
             lastInvoiceNumber: invoiceNumber,
             lastVisitAt: now,
+            searchPrefixes: createPatientSearchPrefixes({
+              patientNumber,
+              fullName: registration.fullName,
+              phone: registration.phone,
+            }),
+            searchDoctorKey: patientSearchDoctorKey({ doctorId: registration.doctorId }),
             address: "",
             allergies: "",
             medicalHistory: "",
@@ -272,11 +333,17 @@ export async function onRequestPost(context) {
             doctorId: registration.doctorId,
             doctorName: registration.doctorName,
             caseType: registration.caseType,
+            serviceId: registration.serviceId,
             specialty: registration.specialty,
             consultationFee: registration.fee,
             lastInvoiceId: invoiceId,
             lastInvoiceNumber: invoiceNumber,
             lastVisitAt: now,
+            searchPrefixes: createPatientSearchPrefixes({
+              ...patientDocument.data,
+              patientNumber,
+            }),
+            searchDoctorKey: patientSearchDoctorKey({ doctorId: registration.doctorId }),
             updatedAt: now,
           },
           [
@@ -284,11 +351,14 @@ export async function onRequestPost(context) {
             "doctorId",
             "doctorName",
             "caseType",
+            "serviceId",
             "specialty",
             "consultationFee",
             "lastInvoiceId",
             "lastInvoiceNumber",
             "lastVisitAt",
+            "searchPrefixes",
+            "searchDoctorKey",
             "updatedAt",
           ],
           patientDocument.updateTime,
@@ -417,6 +487,7 @@ export async function onRequestPost(context) {
           doctorId: registration.doctorId,
           doctorName: registration.doctorName,
           caseType: registration.caseType,
+          serviceId: registration.serviceId,
           fee: registration.fee,
           actorUid: staff.uid,
           actorName: staff.displayName,
@@ -427,6 +498,7 @@ export async function onRequestPost(context) {
           status: "committed",
           requestId: registration.requestId,
           requestFingerprint,
+          requestIntentFingerprint,
           actorUid: staff.uid,
           result,
           createdAt: now,
@@ -441,8 +513,20 @@ export async function onRequestPost(context) {
         if (!(error instanceof HttpError) || error.status !== 409) {
           throw error;
         }
-        const committedReplay = await replayResponse(context.env, requestPath, requestFingerprint);
+        const committedReplay = await replayResponse(
+          context.env,
+          requestPath,
+          requestFingerprint,
+          requestIntentFingerprint,
+        );
         if (committedReplay) return committedReplay;
+        const latestServiceCatalog = await getDocument(
+          context.env,
+          "clinicSettings/serviceCatalog",
+        );
+        if ((latestServiceCatalog?.updateTime || null) !== (serviceCatalogDocument?.updateTime || null)) {
+          throw new HttpError(409, "The consultation service or fee changed. Review the visit and try again.");
+        }
         if (attempt === MAX_COUNTER_ATTEMPTS) throw error;
 
         const identityAfterConflict = await getDocument(context.env, identityPath);

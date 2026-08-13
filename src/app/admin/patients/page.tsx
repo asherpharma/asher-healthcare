@@ -3,6 +3,10 @@
 import PatientQuickActions from "@/components/admin/PatientQuickActions";
 import { useStaff } from "@/components/admin/StaffGuard";
 import { firestore, storage } from "@/firebase/config";
+import {
+  ADMIN_NAVIGATION_HANDOFF_EVENT,
+  consumeAdminNavigationHandoff,
+} from "@/lib/admin-navigation-handoff";
 import { fetchPatientDirectory } from "@/lib/patient-directory";
 import {
   MAX_REPORT_FILE_BYTES,
@@ -247,7 +251,7 @@ function PatientRegister() {
   const [archiveReason, setArchiveReason] = useState("");
   const [lifecycleActionId, setLifecycleActionId] = useState<string | null>(null);
   const [patientView, setPatientView] = useState<"active" | "archived">("active");
-  const deepLinkedPatient = useRef("");
+  const [handoffPatientId, setHandoffPatientId] = useState("");
   const selectedPatientIdRef = useRef<string | null>(null);
   const reportAccessAbortRef = useRef<AbortController | null>(null);
   const canEditDemographics = profile.role === "admin" || profile.role === "reception";
@@ -292,20 +296,21 @@ function PatientRegister() {
 
   useEffect(() => {
     const openRegistration = () => router.push("/admin/reception");
-    const openPatient = (event: Event) => {
-      const patientId = (event as CustomEvent<{ patientId?: string }>).detail?.patientId;
-      if (patientId) selectPatient(patientId);
+    const consumePatientHandoff = () => {
+      const handoff = consumeAdminNavigationHandoff("/admin/patients");
+      if (handoff?.intent === "open-patient") setHandoffPatientId(handoff.patientId);
     };
     window.addEventListener("asher:new-patient", openRegistration);
-    window.addEventListener("asher:open-patient", openPatient);
+    window.addEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumePatientHandoff);
+    consumePatientHandoff();
     if (new URLSearchParams(window.location.search).get("new") === "1") {
       router.replace("/admin/reception");
     }
     return () => {
       window.removeEventListener("asher:new-patient", openRegistration);
-      window.removeEventListener("asher:open-patient", openPatient);
+      window.removeEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumePatientHandoff);
     };
-  }, [router, selectPatient]);
+  }, [router]);
 
   useEffect(() => {
     let active = true;
@@ -339,12 +344,11 @@ function PatientRegister() {
   }, [archivedRegistry, recentPatients]);
 
   useEffect(() => {
-    const patientId = new URLSearchParams(window.location.search).get("patient") ?? "";
-    if (!patientId || deepLinkedPatient.current === patientId) return;
-    const patient = patients.find((candidate) => candidate.id === patientId);
+    if (!handoffPatientId) return;
+    const patient = patients.find((candidate) => candidate.id === handoffPatientId);
     if (patient) {
-      deepLinkedPatient.current = patientId;
       window.setTimeout(() => {
+        setHandoffPatientId("");
         if (patient.archived === true) {
           if (profile.role !== "admin") {
             setMessage("This patient record is archived and can only be opened by an administrator.");
@@ -354,10 +358,10 @@ function PatientRegister() {
         } else {
           setPatientView("active");
         }
-        selectPatient(patientId);
+        selectPatient(handoffPatientId);
       }, 0);
     }
-  }, [patients, profile.role, selectPatient]);
+  }, [handoffPatientId, patients, profile.role, selectPatient]);
 
   const activePatients = useMemo(
     () => patients.filter((patient) => patient.archived !== true),

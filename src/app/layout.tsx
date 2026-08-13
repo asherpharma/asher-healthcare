@@ -1,17 +1,6 @@
 import { PwaRegister } from "@/components/pwa/PwaRegister";
 import type { Metadata, Viewport } from "next";
-import { Geist, Playfair_Display } from "next/font/google";
 import "./globals.css";
-
-const geist = Geist({
-  variable: "--font-sans",
-  subsets: ["latin"],
-});
-
-const playfair = Playfair_Display({
-  variable: "--font-display",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://asherhealthcare.in"),
@@ -91,10 +80,7 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body
-        id="top"
-        className={`${geist.variable} ${playfair.variable}`}
-      >
+      <body id="top">
         <a className="skip-link" href="#main-content">Skip to main content</a>
         <PwaRegister />
         {children}

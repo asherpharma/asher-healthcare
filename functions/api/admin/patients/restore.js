@@ -20,6 +20,10 @@ import {
   normalizeReceptionPhone,
   receptionIdentityMaterial,
 } from "../../../../server/reception/workflow.js";
+import {
+  createPatientSearchPrefixes,
+  patientSearchDoctorKey,
+} from "../../../../server/patients/search-index.js";
 
 function validPatientId(value) {
   return /^[A-Za-z0-9_-]{1,128}$/u.test(value);
@@ -159,6 +163,8 @@ export async function onRequestPost(context) {
           restoredAt: now,
           restoredBy: administrator.uid,
           restoreReason: reason,
+          searchPrefixes: createPatientSearchPrefixes(patient.data),
+          searchDoctorKey: patientSearchDoctorKey(patient.data),
           updatedAt: now,
         },
         [
@@ -169,6 +175,8 @@ export async function onRequestPost(context) {
           "restoredAt",
           "restoredBy",
           "restoreReason",
+          "searchPrefixes",
+          "searchDoctorKey",
           "updatedAt",
         ],
         patient.updateTime,

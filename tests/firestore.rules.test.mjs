@@ -106,6 +106,66 @@ function invoice({ patientId = "patient-1", invoiceNumber = "ASH-20260807-TEST01
   };
 }
 
+function serviceCatalog() {
+  return {
+    schemaVersion: 1,
+    services: {
+      general: { label: "General consultation", fee: 250, active: true },
+      pediatrics: { label: "Pediatric consultation", fee: 500, active: true },
+      obg: { label: "Obstetrics & Gynaecology consultation", fee: 500, active: true },
+    },
+    updatedBy: staff.admin.uid,
+    updatedAt: serverTimestamp(),
+  };
+}
+
+function consultationDraft({
+  patientId = "draft-patient",
+  appointmentKey = "walkin",
+  ownerUid = staff.pediatrics.uid,
+  ownerName = staff.pediatrics.record.displayName,
+  doctorName = staff.pediatrics.record.doctorName,
+  expiresAt = Timestamp.fromMillis(Date.now() + 7 * 24 * 60 * 60 * 1000),
+} = {}) {
+  return {
+    schemaVersion: 1,
+    patientId,
+    appointmentKey,
+    doctorName,
+    ownerUid,
+    ownerName,
+    fields: {
+      temperature: "98.6",
+      pulse: "82",
+      bloodPressure: "120/80",
+      spo2: "99",
+      weight: "24",
+      chiefComplaint: "Fever for two days",
+      examinationFindings: "Alert and hydrated",
+      diagnosis: "Viral fever",
+      treatment: "Supportive care",
+      clinicalNotes: "Review warning signs",
+      advice: "Fluids and rest",
+      labPriority: "routine",
+      labNotes: "",
+      followUpDate: "2026-08-18",
+      followUpTime: "18:00",
+      followUpPriority: "medium",
+    },
+    medicines: [{
+      name: "Paracetamol",
+      dose: "5 ml",
+      frequency: "Three times daily",
+      duration: "3 days",
+      instructions: "After food",
+    }],
+    labTests: ["Complete Blood Count (CBC)"],
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    expiresAt,
+  };
+}
+
 before(async () => {
   testEnv = await initializeTestEnvironment({
     projectId: PROJECT_ID,
@@ -206,6 +266,51 @@ test("admin browser management still permits non-privileged staff profile change
   await assertFails(updateDoc(doc(database, "staff/profile-maintenance"), {
     active: false,
   }));
+});
+
+test("service catalogue is staff-readable but all browser mutations are denied", async () => {
+  await seedDocuments([["clinicSettings/serviceCatalog", serviceCatalog()]]);
+  const admin = staffDb("admin");
+  const reference = doc(admin, "clinicSettings/serviceCatalog");
+
+  for (const key of ["admin", "reception", "pediatrics", "obg"]) {
+    await assertSucceeds(getDoc(doc(staffDb(key), "clinicSettings/serviceCatalog")));
+  }
+  await assertFails(getDoc(doc(
+    testEnv.unauthenticatedContext().firestore(),
+    "clinicSettings/serviceCatalog",
+  )));
+  await assertFails(updateDoc(
+    doc(staffDb("reception"), "clinicSettings/serviceCatalog"),
+    { "services.general.fee": 300, updatedAt: serverTimestamp() },
+  ));
+  await assertFails(updateDoc(reference, {
+    "services.general.fee": 300,
+    updatedAt: serverTimestamp(),
+  }));
+  await assertFails(updateDoc(reference, {
+    "services.general.fee": 250.5,
+    updatedAt: serverTimestamp(),
+  }));
+  await assertFails(updateDoc(reference, {
+    unexpected: true,
+    updatedAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(reference, {
+    ...serviceCatalog(),
+    services: {
+      general: { label: "General consultation", fee: 250, active: false },
+      pediatrics: { label: "Pediatric consultation", fee: 500, active: false },
+      obg: { label: "Obstetrics & Gynaecology consultation", fee: 500, active: false },
+    },
+  }));
+  await assertFails(deleteDoc(reference));
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await deleteDoc(doc(context.firestore(), "clinicSettings/serviceCatalog"));
+  });
+  await assertFails(setDoc(reference, serviceCatalog()));
+  await assertFails(setDoc(doc(staffDb("reception"), "clinicSettings/serviceCatalog"), serviceCatalog()));
 });
 
 test("reception check-in requires the atomic nested queue counter", async () => {
@@ -430,6 +535,23 @@ test("clinical history is append-only for doctors and administrators", async () 
     doc(staffDb("admin"), "patients/immutable-chart/prescriptions/prescription-1"),
     { advice: "Rewritten advice", updatedAt: serverTimestamp() },
   ));
+});
+
+test("consultation draft PHI is unavailable to every browser role", async () => {
+  await seedDocuments([["patients/draft-patient", {
+    fullName: "Draft Patient",
+    doctorName: "Dr. Lt Col Shafi Ahamad",
+    archived: false,
+  }]]);
+
+  const draftPath = `patients/draft-patient/consultationDrafts/${staff.pediatrics.uid}--walkin`;
+  await seedDocuments([[draftPath, consultationDraft()]]);
+  for (const role of ["admin", "reception", "pediatrics", "obg"]) {
+    const reference = doc(staffDb(role), draftPath);
+    await assertFails(getDoc(reference));
+    await assertFails(setDoc(reference, consultationDraft(), { merge: true }));
+    await assertFails(deleteDoc(reference));
+  }
 });
 
 test("retention rules prevent browser deletion and clinical-history rewrites", async () => {

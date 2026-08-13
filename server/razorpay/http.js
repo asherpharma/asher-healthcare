@@ -35,13 +35,13 @@ export function assertSameOrigin(request) {
   }
 }
 
-export async function readJson(request) {
+export async function readJson(request, maximumBytes = 20_000) {
   if (!request.headers.get("Content-Type")?.toLowerCase().includes("application/json")) {
     throw new HttpError(415, "Send this request as JSON.");
   }
 
   const body = await request.text();
-  if (!body || body.length > 20_000) {
+  if (!body || body.length > maximumBytes) {
     throw new HttpError(400, "The payment request is empty or too large.");
   }
 

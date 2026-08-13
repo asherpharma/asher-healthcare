@@ -708,6 +708,14 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /clinicSettings/serviceCatalog {
+      allow read: if isStaff();
+      // The protected administrator API performs strict validation, exact
+      // document preconditions, and an atomic immutable audit write. Browser
+      // clients can observe live fees but can never bypass that path.
+      allow create, update, delete: if false;
+    }
+
     // External laboratory identifiers are correlated by protected Cloudflare
     // Functions. They are intentionally invisible to browser Firebase clients,
     // including administrators, so a future provider credential can never be
@@ -882,6 +890,13 @@ service cloud.firestore {
         // Clinical history is append-only. Corrections create a new signed
         // entry instead of silently changing a previous clinician's record.
         allow update, delete: if false;
+      }
+
+      // Unsigned consultation drafts contain PHI and are available only through
+      // protected Cloudflare Functions that re-authorize the actor, validate
+      // the complete payload and use optimistic write preconditions.
+      match /consultationDrafts/{draftId} {
+        allow read, create, update, delete: if false;
       }
 
       match /prescriptions/{prescriptionId} {

@@ -3,6 +3,11 @@
 import { useStaff } from "@/components/admin/StaffGuard";
 import { firebaseAuth, firestore } from "@/firebase/config";
 import { useAppointmentSchedule } from "@/hooks/useAppointmentSchedule";
+import {
+  ADMIN_NAVIGATION_HANDOFF_EVENT,
+  consumeAdminNavigationHandoff,
+  stageAdminNavigationHandoff,
+} from "@/lib/admin-navigation-handoff";
 import { fetchPatientDirectory } from "@/lib/patient-directory";
 import {
   clinicDate,
@@ -228,8 +233,12 @@ function AppointmentDesk() {
       }
     }, 0);
 
-    const patientId = params.get("patient")?.trim();
-    if (params.get("new") === "1" && patientId) {
+    const consumePatientHandoff = () => {
+      const handoff = consumeAdminNavigationHandoff("/admin/appointments");
+      if (!handoff || handoff.intent !== "create-appointment") return;
+
+      setShowCreate(true);
+      const patientId = handoff.patientId;
       const user = firebaseAuth?.currentUser;
       const directoryRequest = user
         ? fetchPatientDirectory(user, { includeArchived: profile.role === "admin" })
@@ -256,11 +265,15 @@ function AppointmentDesk() {
         .catch(() => {
           if (active) setBookingError("Patient details could not be prefilled. You can still enter them manually.");
         });
-    }
+    };
+    window.addEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumePatientHandoff);
+    consumePatientHandoff();
+
     return () => {
       active = false;
       window.clearTimeout(routeTimer);
       window.removeEventListener("asher:new-appointment", openAppointment);
+      window.removeEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumePatientHandoff);
     };
   }, [profile.role, today]);
 
@@ -590,14 +603,26 @@ function AppointmentDesk() {
     if (item.status === "in_consultation") {
       try {
         await verifyPatientIsActive(item.patientId);
-        router.push(`/admin/consultations?appointment=${encodeURIComponent(item.id)}`);
+        stageAdminNavigationHandoff({
+          destination: "/admin/consultations",
+          intent: "open-appointment-consultation",
+          appointmentId: item.id,
+        });
+        router.push("/admin/consultations");
       } catch (verificationError) {
         setError(verificationError instanceof Error ? verificationError.message : "Patient status could not be verified.");
       }
       return;
     }
     const updated = await changeStatus(item.id, "in_consultation");
-    if (updated) router.push(`/admin/consultations?appointment=${encodeURIComponent(item.id)}`);
+    if (updated) {
+      stageAdminNavigationHandoff({
+        destination: "/admin/consultations",
+        intent: "open-appointment-consultation",
+        appointmentId: item.id,
+      });
+      router.push("/admin/consultations");
+    }
   }
 
   async function createAppointment(event: FormEvent<HTMLFormElement>) {

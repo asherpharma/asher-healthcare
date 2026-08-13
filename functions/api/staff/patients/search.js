@@ -1,7 +1,4 @@
-import {
-  linkAyusLabNumber,
-  readAyusLabLink,
-} from "../../../../server/labs/ayus-link.js";
+import { searchPatientsForStaff } from "../../../../server/patients/search.js";
 import { requireActiveStaff } from "../../../../server/razorpay/firebase.js";
 import {
   assertSameOrigin,
@@ -14,44 +11,38 @@ const defaultDependencies = {
   assertSameOrigin,
   errorResponse,
   json,
-  linkAyusLabNumber,
-  readAyusLabLink,
   readJson,
   requireActiveStaff,
+  searchPatientsForStaff,
 };
 
-export function createAyusLinkHandlers(dependencies = defaultDependencies) {
+export function createPatientSearchHandlers(dependencies = defaultDependencies) {
   return {
     async post(context) {
       try {
         dependencies.assertSameOrigin(context.request);
         const staff = await dependencies.requireActiveStaff(context.request, context.env);
         const body = await dependencies.readJson(context.request, 4_000);
-
-        if (body?.action === "read") {
-          return dependencies.json(await dependencies.readAyusLabLink(
-            context.env,
-            body.labOrderId,
-            staff,
-          ));
-        }
-
-        const result = await dependencies.linkAyusLabNumber(context.env, body, staff);
-        return dependencies.json(result, result.alreadyLinked ? 200 : 201);
+        const result = await dependencies.searchPatientsForStaff(context.env, staff, {
+          search: body?.search,
+          cursor: body?.cursor,
+          pageSize: body?.pageSize,
+        });
+        return dependencies.json(result);
       } catch (error) {
         return dependencies.errorResponse(error);
       }
     },
     async get() {
       return dependencies.json(
-        { error: "AyusLab links accept secure requests only." },
+        { error: "Patient search accepts secure requests only." },
         405,
       );
     },
   };
 }
 
-const handlers = createAyusLinkHandlers();
+const handlers = createPatientSearchHandlers();
 
 export async function onRequestPost(context) {
   return handlers.post(context);
