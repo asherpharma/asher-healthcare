@@ -197,7 +197,8 @@ export default function PatientPortalAccessManager() {
     setSaving(true);
     setError("");
     setMessage("");
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     try {
       const result = await portalRequest({
         action: "provision",
@@ -218,7 +219,7 @@ export default function PatientPortalAccessManager() {
       const instruction = "A secure password setup email has been sent. Access stays pending until the account holder signs in and accepts it.";
       setMessage(`Family portal invitation prepared for ${result.displayName}. ${instruction}`);
       setGrants([]);
-      event.currentTarget.reset();
+      formElement.reset();
       await loadAccounts();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Patient portal access could not be created.");
