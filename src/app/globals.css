@@ -439,7 +439,9 @@ img { object-fit: cover; }
     grid-template-columns: minmax(0, 1fr) !important;
   }
 
-  .staff-app-content form [class*="col-span"] {
+  .staff-app-content form [class*="col-span"],
+  .staff-app-content form [class*="col-start"],
+  .staff-app-content form [class*="col-end"] {
     grid-column: auto !important;
   }
 
