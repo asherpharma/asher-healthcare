@@ -14,6 +14,7 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
+import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
 type PatientSearchResult = {
@@ -54,12 +55,41 @@ type PortalAccount = {
 
 const inputClass = "mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-900 outline-none focus:border-[#233A59] focus:ring-2 focus:ring-[#233A59]/10";
 
+function patientSearchReady(value: string) {
+  const cleaned = value.trim().slice(0, 100);
+  if (!cleaned) return false;
+
+  const patientNumber = cleaned
+    .toLocaleUpperCase("en-IN")
+    .replace(/[^A-Z0-9-]+/gu, "");
+  const knownClinicNumber = /^(?:ASH|AHC)-[A-Z0-9-]{1,24}$/u.test(patientNumber);
+  const otherNumberWithDigit = /^[A-Z]{2,8}-(?=[A-Z0-9-]*\d)[A-Z0-9-]{1,24}$/u.test(patientNumber);
+  if (knownClinicNumber || otherNumberWithDigit) return true;
+
+  const digits = cleaned.replace(/\D/gu, "");
+  let national = digits;
+  if (national.startsWith("0091")) national = national.slice(4);
+  else if (national.length > 10 && national.startsWith("91")) national = national.slice(2);
+  if (national.length === 11 && national.startsWith("0")) national = national.slice(1);
+  if (/^[6-9]\d{5,9}$/u.test(national)) return true;
+
+  const normalizedName = cleaned
+    .normalize("NFKD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .replace(/\s+/gu, " ");
+  return normalizedName.length >= 3;
+}
+
 export default function PatientPortalAccessManager() {
   const { user } = useStaff();
   const [accounts, setAccounts] = useState<PortalAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [searchAttempted, setSearchAttempted] = useState(false);
+  const [searchError, setSearchError] = useState("");
   const [search, setSearch] = useState("");
   const [results, setResults] = useState<PatientSearchResult[]>([]);
   const [grants, setGrants] = useState<GrantDraft[]>([]);
@@ -100,9 +130,10 @@ export default function PatientPortalAccessManager() {
 
   async function searchPatients(event: FormEvent) {
     event.preventDefault();
-    if (search.trim().length < 2) return;
+    if (!patientSearchReady(search)) return;
     setSearching(true);
-    setError("");
+    setSearchAttempted(false);
+    setSearchError("");
     try {
       const idToken = await user.getIdToken();
       const response = await fetch("/api/staff/patients/search", {
@@ -115,8 +146,9 @@ export default function PatientPortalAccessManager() {
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Patient search could not be completed.");
       setResults(Array.isArray(result.patients) ? result.patients : []);
+      setSearchAttempted(true);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Patient search could not be completed.");
+      setSearchError(requestError instanceof Error ? requestError.message : "Patient search could not be completed.");
     } finally {
       setSearching(false);
     }
@@ -134,6 +166,8 @@ export default function PatientPortalAccessManager() {
       scopes: ["profile", "appointments"],
     }]);
     setResults([]);
+    setSearchAttempted(false);
+    setSearchError("");
     setSearch("");
   }
 
@@ -249,13 +283,24 @@ export default function PatientPortalAccessManager() {
 
       <section className="rounded-[28px] bg-white p-5 shadow-sm ring-1 ring-slate-200 sm:p-7">
         <div className="flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-2xl bg-blue-50 text-blue-700"><UserRoundPlus size={22} /></span><div><h2 className="text-xl font-bold text-[#233A59]">Invite a family account</h2><p className="text-sm text-slate-600">Access remains pending until the intended email owner signs in and accepts it.</p></div></div>
-        <form onSubmit={searchPatients} className="mt-6 flex gap-2">
-          <label className="relative flex-1"><span className="sr-only">Search patient</span><Search className="pointer-events-none absolute left-3 top-3.5 text-slate-400" size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} minLength={2} placeholder="Search exact patient name, mobile or ID" className="h-12 w-full rounded-xl border border-slate-200 pl-10 pr-4 text-sm font-semibold outline-none focus:border-[#233A59]" /></label>
-          <button disabled={searching} className="inline-flex h-12 items-center gap-2 rounded-xl bg-[#233A59] px-4 text-sm font-bold text-white disabled:opacity-60">{searching ? <LoaderCircle className="animate-spin" size={17} /> : <Search size={17} />}Find</button>
+        <div className="mt-6 rounded-2xl bg-slate-50 p-4 sm:p-5">
+          <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#A8864A]">Step 1 · Attach a patient chart</p>
+          <p className="mt-1 text-sm leading-6 text-slate-600">Search by the patient&apos;s registered name, 10-digit mobile number or patient ID, then tap the matching result.</p>
+        <form onSubmit={searchPatients} className="mt-4 flex gap-2">
+          <label className="relative flex-1"><span className="sr-only">Search patient</span><Search className="pointer-events-none absolute left-3 top-3.5 text-slate-400" size={18} /><input value={search} onChange={(event) => { setSearch(event.target.value); setSearchAttempted(false); setSearchError(""); setResults([]); }} placeholder="Patient name, mobile or ID" className="h-12 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-4 text-sm font-semibold outline-none focus:border-[#233A59]" /></label>
+          <button disabled={searching || !patientSearchReady(search)} className="inline-flex h-12 items-center gap-2 rounded-xl bg-[#233A59] px-4 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60">{searching ? <LoaderCircle className="animate-spin" size={17} /> : <Search size={17} />}Find</button>
         </form>
-        {results.length > 0 ? <div className="mt-3 divide-y divide-slate-100 rounded-2xl border border-slate-200">{results.map((patient) => <button type="button" key={patient.id} onClick={() => addPatient(patient)} className="flex w-full items-center justify-between gap-4 p-4 text-left hover:bg-slate-50"><span><strong className="block text-[#233A59]">{patient.fullName}</strong><span className="mt-1 block text-xs text-slate-500">{patient.patientNumber} · {patient.phone} · DOB {patient.dateOfBirth}</span></span><Link2 className="shrink-0 text-[#A8864A]" size={18} /></button>)}</div> : null}
+        {search && !patientSearchReady(search) ? <p className="mt-2 text-xs font-semibold text-slate-500">Enter at least 3 name letters, 6 mobile digits, or a complete patient ID.</p> : null}
+        {searchError ? <p role="alert" className="mt-3 rounded-xl bg-red-50 p-3 text-sm font-semibold text-red-700">{searchError}</p> : null}
+        {results.length > 0 ? <div className="mt-3 divide-y divide-slate-100 rounded-2xl border border-slate-200">{results.map((patient) => <button type="button" key={patient.id} onClick={() => addPatient(patient)} className="flex w-full items-center justify-between gap-4 p-4 text-left hover:bg-slate-50"><span><strong className="block text-[#233A59]">{patient.fullName}</strong><span className="mt-1 block text-xs text-slate-500">{patient.patientNumber} · {patient.phone} · DOB {patient.dateOfBirth}</span></span><span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-bold text-[#A8864A]"><Link2 size={18} />Attach</span></button>)}</div> : null}
+        {searchAttempted && !searching && results.length === 0 ? <div role="status" className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950"><strong className="block">No matching patient record found.</strong><span>Try the exact registered mobile number or patient ID. If this is a new patient, </span><Link href="/admin/reception" className="font-bold underline underline-offset-2">register the patient first</Link><span>, then return here.</span></div> : null}
+        </div>
 
         <form onSubmit={provision} className="mt-6 grid gap-4 sm:grid-cols-2">
+          <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 sm:col-span-2">
+            <p className="text-xs font-bold uppercase tracking-[0.14em] text-blue-800">Step 2 · Account holder and consent</p>
+            <p className="mt-1 text-sm leading-6 text-blue-950">Use a separate patient or family email address. An email already used for an Asher Staff login cannot be reused for the patient portal.</p>
+          </div>
           <label className="text-sm font-bold text-slate-700">Account holder name<input name="displayName" required minLength={2} maxLength={100} className={inputClass} /></label>
           <label className="text-sm font-bold text-slate-700">Account email<input name="email" type="email" required maxLength={254} className={inputClass} /></label>
           <label className="text-sm font-bold text-slate-700 sm:col-start-2">Re-enter account email<input name="confirmEmail" type="email" required maxLength={254} autoComplete="off" className={inputClass} /></label>
@@ -272,9 +317,9 @@ export default function PatientPortalAccessManager() {
               <fieldset className="mt-4"><legend className="text-xs font-bold uppercase tracking-wide text-slate-500">Portal permissions</legend><div className="mt-2 flex flex-wrap gap-2">{[["profile", "Basic patient identity (required)"], ["appointments", "Appointments"], ["prescriptions", "Prescriptions"], ["reports", "Reports"], ["billing", "Receipts"]].map(([scope, label]) => <label key={scope} className={(grant.scopes.includes(scope) ? "border-blue-200 bg-blue-50 text-blue-900" : "border-slate-200 bg-white text-slate-600") + " inline-flex min-h-10 items-center gap-2 rounded-xl border px-3 text-xs font-bold"}><input type="checkbox" disabled={scope === "profile"} checked={grant.scopes.includes(scope)} onChange={(event) => updateGrant(grant.id, { scopes: event.target.checked ? [...grant.scopes, scope] : grant.scopes.filter((item) => item !== scope) })} />{label}</label>)}</div></fieldset>
               <label className="mt-4 flex items-start gap-3 rounded-xl bg-amber-50 p-3 text-xs font-semibold leading-5 text-amber-950"><input type="checkbox" required checked={grant.consentAttested} onChange={(event) => updateGrant(grant.id, { consentAttested: event.target.checked })} className="mt-1" />I verified this exact patient, relationship, permission scope and evidence. The reference above identifies the clinic-held consent or guardianship record.</label>
             </article>)}
-            {grants.length === 0 ? <div className="rounded-2xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">Search and add the exact patient record before inviting access.</div> : null}
+            {grants.length === 0 ? <div id="portal-invitation-requirement" className="rounded-2xl border border-dashed border-amber-300 bg-amber-50 p-5 text-center text-sm font-semibold leading-6 text-amber-950"><strong className="block">Invitation locked: no patient chart attached.</strong>Complete Step 1 above and tap the correct patient result. The invitation button will then unlock.</div> : null}
           </div>
-          <div className="sm:col-span-2"><button disabled={saving || grants.length < 1} className="inline-flex min-h-12 items-center gap-2 rounded-xl bg-[#A8864A] px-5 text-sm font-bold text-white disabled:opacity-50">{saving ? <LoaderCircle className="animate-spin" size={17} /> : <KeyRound size={17} />}{saving ? "Preparing secure access…" : "Create pending invitation"}</button></div>
+          <div className="sm:col-span-2"><button aria-describedby={grants.length < 1 ? "portal-invitation-requirement" : undefined} disabled={saving || grants.length < 1} className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#A8864A] px-5 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto">{saving ? <LoaderCircle className="animate-spin" size={17} /> : <KeyRound size={17} />}{saving ? "Preparing secure access…" : grants.length < 1 ? "Attach a patient first" : "Create pending invitation"}</button></div>
         </form>
       </section>
 
