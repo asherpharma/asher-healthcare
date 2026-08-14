@@ -160,15 +160,25 @@ function openPrintPage() {
   return printWindow;
 }
 
-export async function downloadReceiptPdf(invoice: ReceiptInvoice, requestedFileName?: string) {
+export async function downloadReceiptPdf(
+  invoice: ReceiptInvoice,
+  requestedFileName?: string,
+  canPresent: () => boolean = () => true,
+) {
   const pdf = await createReceiptPdf(invoice);
+  if (!canPresent()) return;
   pdf.save(requestedFileName || invoice.invoiceNumber + "-receipt.pdf");
 }
 
-export async function printReceiptPdf(invoice: ReceiptInvoice, existingPrintWindow?: Window) {
+export async function printReceiptPdf(
+  invoice: ReceiptInvoice,
+  existingPrintWindow?: Window,
+  canPresent: () => boolean = () => true,
+) {
   const printWindow = existingPrintWindow || openPrintPage();
   try {
     const pdf = await createReceiptPdf(invoice);
+    if (!canPresent()) { printWindow.close(); return; }
     const pdfUrl = String(pdf.output("bloburl"));
     printWindow.location.replace(pdfUrl);
     window.setTimeout(() => URL.revokeObjectURL(pdfUrl), 5 * 60_000);

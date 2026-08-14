@@ -27,6 +27,20 @@ const CONSENT_ATTESTATION = Object.freeze({
   version: "1.0",
   text: "I verified this exact patient, relationship, permission scope and clinic-held authorization evidence before granting portal access.",
 });
+const REVERIFICATION_ATTESTATION = Object.freeze({
+  id: "asher-portal-grant-reverification-v1",
+  version: "1.0",
+  text: "I re-verified the account holder's identity, this exact patient relationship, permission scope and new clinic-held authorization evidence before renewing portal access.",
+});
+const IDENTITY_VERIFICATION_METHODS = new Set(["in_person", "registered_phone", "photo_id"]);
+const REVERIFICATION_REASONS = new Set([
+  "scheduled_review",
+  "expired_access",
+  "relationship_change",
+  "scope_change",
+  "identity_update",
+]);
+const REVIEW_WARNING_DAYS = 30;
 
 const DEFAULT_DATABASE = {
   commitWrites,
@@ -84,6 +98,70 @@ function futureTimestamp(value, now) {
   return Number.isFinite(parsed) && parsed > now.getTime();
 }
 
+function requiredUpdateTime(value) {
+  const updateTime = cleanText(value, 100);
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/u.test(updateTime)
+    || !Number.isFinite(Date.parse(updateTime))
+  ) {
+    throw new HttpError(400, "Refresh the family access list before renewing this permission.");
+  }
+  return updateTime;
+}
+
+function referenceCode(value, message) {
+  const reference = cleanText(value, 100);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{2,79}$/u.test(reference)) {
+    throw new HttpError(400, message);
+  }
+  return reference;
+}
+
+function parsedDeadline(value) {
+  const text = timestampText(value);
+  if (!text) return { text: "", time: null, valid: true };
+  const time = Date.parse(text);
+  return { text, time: Number.isFinite(time) ? time : null, valid: Number.isFinite(time) };
+}
+
+export function portalGrantLifecycle(grant = {}, now = new Date()) {
+  const status = cleanText(grant?.status, 20);
+  if (status === "revoked") return { state: "revoked", nextActionAt: "", daysUntilAction: null };
+
+  const review = parsedDeadline(grant?.reviewAt);
+  const expiry = parsedDeadline(grant?.expiresAt);
+  if (!review.valid || !expiry.valid) {
+    return { state: "review_due", nextActionAt: "", daysUntilAction: 0 };
+  }
+
+  const nowTime = now instanceof Date ? now.getTime() : Number.NaN;
+  if (!Number.isFinite(nowTime)) throw new HttpError(500, "A portal review date could not be evaluated safely.");
+  if (expiry.time !== null && expiry.time <= nowTime) {
+    return { state: "expired", nextActionAt: expiry.text, daysUntilAction: 0 };
+  }
+  if (review.time !== null && review.time <= nowTime) {
+    return { state: "review_due", nextActionAt: review.text, daysUntilAction: 0 };
+  }
+
+  const deadlines = [
+    ...(review.time === null ? [] : [{ kind: "review", text: review.text, time: review.time }]),
+    ...(expiry.time === null ? [] : [{ kind: "expiry", text: expiry.text, time: expiry.time }]),
+  ].sort((left, right) => left.time - right.time);
+  const next = deadlines[0];
+  if (next) {
+    const daysUntilAction = Math.max(0, Math.ceil((next.time - nowTime) / (24 * 60 * 60 * 1000)));
+    if (daysUntilAction <= REVIEW_WARNING_DAYS) {
+      return {
+        state: next.kind === "expiry" ? "expiring_soon" : "review_soon",
+        nextActionAt: next.text,
+        daysUntilAction,
+      };
+    }
+    return { state: status === "pending" ? "pending" : "current", nextActionAt: next.text, daysUntilAction };
+  }
+  return { state: status === "pending" ? "pending" : "current", nextActionAt: "", daysUntilAction: null };
+}
+
 function strictScopes(value) {
   if (!Array.isArray(value) || value.length < 1 || value.length > SCOPES.size) {
     throw new HttpError(400, "Choose valid patient portal permissions.");
@@ -96,6 +174,18 @@ function strictScopes(value) {
     throw new HttpError(400, "Basic patient identity permission is required for every family portal grant.");
   }
   return result;
+}
+
+function samePortalScopes(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right)) return false;
+  const leftScopes = [...new Set(left.map((scope) => cleanText(scope, 40)))].sort();
+  const rightScopes = [...new Set(right.map((scope) => cleanText(scope, 40)))].sort();
+  return leftScopes.length === left.length
+    && rightScopes.length === right.length
+    && leftScopes.every((scope) => SCOPES.has(scope))
+    && rightScopes.every((scope) => SCOPES.has(scope))
+    && leftScopes.length === rightScopes.length
+    && leftScopes.every((scope, index) => scope === rightScopes[index]);
 }
 
 function patientAgeOn(dateOfBirth, now) {
@@ -802,6 +892,7 @@ export async function adminPortalDirectory(env, authenticatedAdministrator, data
   const adminDocument = await database.getDocument(env, adminPath);
   const administrator = currentAdministrator(authenticatedAdministrator, adminDocument);
   const accounts = await list(env, "patientAccounts", MAX_ACCOUNTS);
+  const now = new Date();
   const result = await Promise.all(accounts.map(async (account) => {
     const grants = await list(env, `patientAccounts/${account.id}/grants`, MAX_GRANTS_PER_ACCOUNT);
     return {
@@ -813,17 +904,25 @@ export async function adminPortalDirectory(env, authenticatedAdministrator, data
       claimedAt: timestampText(account.data.claimedAt),
       grants: await Promise.all(grants.map(async (grant) => {
         const patient = await database.getDocument(env, `patients/${grant.data.patientId}`);
+        const lifecycle = portalGrantLifecycle(grant.data, now);
         return {
           grantId: grant.id,
+          grantVersion: cleanText(grant.updateTime, 100),
           patientId: cleanText(grant.data.patientId, 128),
           patientName: cleanText(patient?.data?.fullName, 100) || "Patient record",
           relationship: cleanText(grant.data.relationship, 30),
           status: cleanText(grant.data.status, 20),
+          scopes: Array.isArray(grant.data.scopes) ? grant.data.scopes.filter((scope) => SCOPES.has(scope)) : [],
+          reviewAt: timestampText(grant.data.reviewAt),
+          expiresAt: timestampText(grant.data.expiresAt),
+          reviewPolicy: cleanText(grant.data.reviewPolicy, 100),
+          lifecycle: lifecycle.state,
+          nextActionAt: lifecycle.nextActionAt,
+          daysUntilAction: lifecycle.daysUntilAction,
         };
       })),
     };
   }));
-  const now = new Date();
   await database.commitWrites(env, [
     database.verifyDocumentWrite(env, adminPath, adminDocument.updateTime),
     database.createDocumentWrite(env, `patientAccessAudit/${crypto.randomUUID()}`, {
@@ -859,6 +958,216 @@ export async function resendPortalInvitation(env, body, authenticatedAdministrat
   ]);
   await auth.sendPasswordResetEmail(env, canonicalEmail(accountDocument.data.email), PORTAL_CONTINUE_URL);
   return { accepted: true };
+}
+
+export function normalizePortalRenewRequest(body = {}) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new HttpError(400, "Enter valid family access re-verification details.");
+  }
+  const accountUid = cleanText(body.accountUid, 128);
+  const grantId = cleanText(body.grantId, 128);
+  if (!validDocumentId(accountUid) || !validDocumentId(grantId)) {
+    throw new HttpError(400, "Choose valid family access to renew.");
+  }
+  const identityVerificationMethod = cleanText(body.identityVerificationMethod, 40);
+  if (body.identityAttested !== true || !IDENTITY_VERIFICATION_METHODS.has(identityVerificationMethod)) {
+    throw new HttpError(400, "Verify the family account holder's identity before renewing access.");
+  }
+  const identityVerificationReference = referenceCode(
+    body.identityVerificationReference,
+    "Record a valid clinic filing reference for the identity verification.",
+  );
+  const consentRecordId = referenceCode(
+    body.consentRecordId,
+    "Record the new clinic consent or guardianship filing reference.",
+  );
+  if (identityVerificationReference.toLocaleUpperCase("en-IN") === consentRecordId.toLocaleUpperCase("en-IN")) {
+    throw new HttpError(400, "Identity verification and consent must use separate clinic filing references.");
+  }
+  const reverificationReason = cleanText(body.reverificationReason, 40);
+  if (!REVERIFICATION_REASONS.has(reverificationReason)) {
+    throw new HttpError(400, "Choose why this family permission is being re-verified.");
+  }
+  return {
+    accountUid,
+    grantId,
+    grantVersion: requiredUpdateTime(body.grantVersion),
+    relationship: cleanText(body.relationship, 30),
+    scopes: strictScopes(body.scopes),
+    consentRecordId,
+    consentMethod: cleanText(body.consentMethod, 30),
+    evidenceType: cleanText(body.evidenceType, 40),
+    consentAttested: body.consentAttested === true,
+    identityAttested: true,
+    identityVerificationMethod,
+    identityVerificationReference,
+    reverificationReason,
+  };
+}
+
+export async function renewPortalGrant(env, body, authenticatedAdministrator, database = DEFAULT_DATABASE) {
+  const input = normalizePortalRenewRequest(body);
+  const adminPath = `staff/${authenticatedAdministrator?.uid || "invalid"}`;
+  const adminDocument = validDocumentId(authenticatedAdministrator?.uid)
+    ? await database.getDocument(env, adminPath)
+    : null;
+  const administrator = currentAdministrator(authenticatedAdministrator, adminDocument);
+  const accountPath = `patientAccounts/${input.accountUid}`;
+  const grantPath = `${accountPath}/grants/${input.grantId}`;
+  const reverseGrantPath = `patientAccessGrants/${input.grantId}`;
+  const [accountDocument, grantDocument, reverseGrantDocument] = await Promise.all([
+    database.getDocument(env, accountPath),
+    database.getDocument(env, grantPath),
+    database.getDocument(env, reverseGrantPath),
+  ]);
+  if (!accountDocument || !["pending", "active"].includes(cleanText(accountDocument.data.status, 20))) {
+    throw new HttpError(409, "This family portal account cannot be renewed.");
+  }
+  if (!grantDocument || !reverseGrantDocument || grantDocument.updateTime !== input.grantVersion) {
+    throw new HttpError(409, "This family permission changed. Refresh and verify the latest record.");
+  }
+  const status = cleanText(grantDocument.data.status, 20);
+  if (
+    !["pending", "active"].includes(status)
+    || cleanText(reverseGrantDocument.data.status, 20) !== status
+    || reverseGrantDocument.data.accountUid !== input.accountUid
+    || reverseGrantDocument.data.patientId !== grantDocument.data.patientId
+    || cleanText(reverseGrantDocument.data.relationship, 30) !== cleanText(grantDocument.data.relationship, 30)
+    || cleanText(reverseGrantDocument.data.consentRecordId, 128) !== cleanText(grantDocument.data.consentRecordId, 128)
+    || !samePortalScopes(reverseGrantDocument.data.scopes, grantDocument.data.scopes)
+  ) {
+    throw new HttpError(409, "This family permission cannot be renewed. Refresh and review its current status.");
+  }
+  const patientId = cleanText(grantDocument.data.patientId, 128);
+  const previousConsentId = cleanText(grantDocument.data.consentRecordId, 128);
+  if (!validDocumentId(patientId) || !validDocumentId(previousConsentId)) {
+    throw new HttpError(409, "This family permission is missing its prior authorization record and cannot be renewed.");
+  }
+  const patientPath = `patients/${patientId}`;
+  const previousConsentPath = `patientAccessConsents/${previousConsentId}`;
+  const [patientDocument, previousConsentDocument] = await Promise.all([
+    database.getDocument(env, patientPath),
+    database.getDocument(env, previousConsentPath),
+  ]);
+  if (!patientDocument || patientDocument.data.archived === true) {
+    throw new HttpError(409, "This patient chart is unavailable for family access renewal.");
+  }
+  if (
+    !previousConsentDocument
+    || previousConsentDocument.data.accountUid !== input.accountUid
+    || previousConsentDocument.data.patientId !== patientId
+    || previousConsentDocument.data.grantId !== input.grantId
+  ) {
+    throw new HttpError(409, "The prior authorization record does not match this family permission.");
+  }
+  if (
+    cleanText(previousConsentDocument.data.clinicReference, 100).toLocaleUpperCase("en-IN")
+    === input.consentRecordId.toLocaleUpperCase("en-IN")
+  ) {
+    throw new HttpError(409, "Record a new clinic consent or guardianship filing reference before renewing access.");
+  }
+
+  const now = new Date();
+  const renewed = validateGrantRequest({ ...input, patientId }, patientDocument.data, now);
+  const newConsentId = crypto.randomUUID().replaceAll("-", "");
+  const renewalCount = Number.isSafeInteger(grantDocument.data.renewalCount)
+    ? Math.max(0, grantDocument.data.renewalCount) + 1
+    : 1;
+  const sharedGrantUpdate = {
+    relationship: renewed.relationship,
+    authorizationBasis: renewed.authorizationBasis,
+    scopes: renewed.scopes,
+    verifiedBy: administrator.uid,
+    verifiedAt: now,
+    consentRecordId: newConsentId,
+    reviewAt: renewed.reviewAt,
+    reviewPolicy: renewed.reviewPolicy,
+    expiresAt: renewed.expiresAt,
+    renewalCount,
+    lastReverifiedAt: now,
+    lastReverifiedBy: administrator.uid,
+    updatedAt: now,
+  };
+  const sharedFields = [
+    "relationship", "authorizationBasis", "scopes", "verifiedBy", "verifiedAt", "consentRecordId",
+    "reviewAt", "reviewPolicy", "expiresAt", "renewalCount", "lastReverifiedAt", "lastReverifiedBy", "updatedAt",
+  ];
+  const previousLifecycle = portalGrantLifecycle(grantDocument.data, now).state;
+  await database.commitWrites(env, [
+    database.verifyDocumentWrite(env, adminPath, adminDocument.updateTime),
+    database.verifyDocumentWrite(env, accountPath, accountDocument.updateTime),
+    database.verifyDocumentWrite(env, patientPath, patientDocument.updateTime),
+    database.verifyDocumentWrite(env, previousConsentPath, previousConsentDocument.updateTime),
+    database.updateDocumentWrite(env, grantPath, sharedGrantUpdate, sharedFields, grantDocument.updateTime),
+    database.updateDocumentWrite(env, reverseGrantPath, sharedGrantUpdate, sharedFields, reverseGrantDocument.updateTime),
+    database.createDocumentWrite(env, `patientAccessConsents/${newConsentId}`, {
+      consentRecordId: newConsentId,
+      clinicReference: renewed.consentEvidence.recordId,
+      version: renewed.consentEvidence.version,
+      lifecycleEvent: "reverification",
+      supersedesConsentRecordId: previousConsentId,
+      accountUid: input.accountUid,
+      patientId,
+      grantId: input.grantId,
+      relationship: renewed.relationship,
+      authorizationBasis: renewed.authorizationBasis,
+      accountHolderName: cleanText(accountDocument.data.displayName, 100),
+      accountHolderEmail: canonicalEmail(accountDocument.data.email),
+      scopes: [...renewed.scopes].sort(),
+      scopeSemantics: "current_and_future_records_until_expiry_or_revocation",
+      scopeSemanticsVersion: "1.0",
+      subject: renewed.consentEvidence.subject,
+      reviewAt: renewed.reviewAt,
+      expiresAt: renewed.expiresAt,
+      method: renewed.consentEvidence.method,
+      evidenceType: renewed.consentEvidence.evidenceType,
+      reviewPolicy: renewed.reviewPolicy,
+      staffAttested: true,
+      attestationId: REVERIFICATION_ATTESTATION.id,
+      attestationVersion: REVERIFICATION_ATTESTATION.version,
+      attestationText: REVERIFICATION_ATTESTATION.text,
+      identityVerified: true,
+      identityVerificationMethod: input.identityVerificationMethod,
+      identityVerificationReference: input.identityVerificationReference,
+      identityVerifiedBy: administrator.uid,
+      identityVerifiedAt: now,
+      reverificationReason: input.reverificationReason,
+      verifiedBy: administrator.uid,
+      verifiedAt: now,
+      createdAt: now,
+    }),
+    database.createDocumentWrite(env, `patientAccessAudit/${crypto.randomUUID()}`, {
+      eventType: "patient_portal.grant_reverified",
+      category: "patient_access",
+      actorUid: administrator.uid,
+      actorRole: administrator.role,
+      accountUid: input.accountUid,
+      grantId: input.grantId,
+      patientId,
+      previousConsentRecordId: previousConsentId,
+      newConsentRecordId: newConsentId,
+      previousLifecycle,
+      previousRelationship: cleanText(grantDocument.data.relationship, 30),
+      renewedRelationship: renewed.relationship,
+      previousScopes: Array.isArray(grantDocument.data.scopes) ? grantDocument.data.scopes : [],
+      renewedScopes: renewed.scopes,
+      identityVerified: true,
+      identityVerificationMethod: input.identityVerificationMethod,
+      identityVerificationReference: input.identityVerificationReference,
+      reverificationReason: input.reverificationReason,
+      outcome: "authorized",
+      createdAt: now,
+    }),
+  ]);
+  return {
+    changed: true,
+    accountUid: input.accountUid,
+    grantId: input.grantId,
+    status,
+    consentRecordId: newConsentId,
+    reviewAt: timestampText(renewed.reviewAt),
+    expiresAt: timestampText(renewed.expiresAt),
+  };
 }
 
 export function normalizePortalRevokeRequest(body = {}) {

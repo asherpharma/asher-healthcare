@@ -3,7 +3,8 @@
 import type { StaffRole } from "@/components/admin/StaffGuard";
 import { firebaseAuth } from "@/firebase/config";
 import { stageAdminNavigationHandoff } from "@/lib/admin-navigation-handoff";
-import { fetchPatientDirectory } from "@/lib/patient-directory";
+import { searchPatientDirectory } from "@/lib/patient-directory";
+import { patientSearchReady } from "@/lib/patient-search-readiness";
 import {
   ArrowRight,
   CalendarPlus,
@@ -105,33 +106,59 @@ export default function StaffCommandCenter({ role }: { role: StaffRole }) {
   const router = useRouter();
   const pathname = usePathname();
   const inputRef = useRef<HTMLInputElement>(null);
-  const loadingRef = useRef(false);
+  const searchTimerRef = useRef<number | null>(null);
+  const searchSequenceRef = useRef(0);
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [patients, setPatients] = useState<PatientSearchRecord[]>([]);
   const [loading, setLoading] = useState(false);
-  const [loaded, setLoaded] = useState(false);
+  const [searched, setSearched] = useState(false);
   const [error, setError] = useState("");
   const actions = useMemo(() => actionsFor(role), [role]);
 
-  const loadPatients = useCallback(async () => {
-    if (loadingRef.current) return;
-    loadingRef.current = true;
-    setLoading(true);
-    setError("");
+  const runPatientSearch = useCallback(async (term: string, sequence: number) => {
     try {
       const user = firebaseAuth?.currentUser;
       if (!user) throw new Error("Staff session missing");
-      const directory = await fetchPatientDirectory(user);
-      setPatients(directory as PatientSearchRecord[]);
-      setLoaded(true);
-    } catch (loadError) {
-      console.error("Staff patient search could not be loaded", loadError);
+      const result = await searchPatientDirectory(user, term, { pageSize: 8 });
+      if (sequence !== searchSequenceRef.current) return;
+      setPatients(result.patients as PatientSearchRecord[]);
+      setSearched(true);
+    } catch {
+      if (sequence !== searchSequenceRef.current) return;
+      console.error("Staff patient search could not be loaded");
       setError("Patient search could not be loaded. Check the connection and try again.");
     } finally {
-      loadingRef.current = false;
-      setLoading(false);
+      if (sequence === searchSequenceRef.current) setLoading(false);
     }
+  }, []);
+
+  const schedulePatientSearch = useCallback((value: string) => {
+    if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current);
+    const sequence = ++searchSequenceRef.current;
+    setSearch(value);
+    setPatients([]);
+    setSearched(false);
+    setError("");
+    if (!patientSearchReady(value)) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    searchTimerRef.current = window.setTimeout(() => {
+      void runPatientSearch(value.trim(), sequence);
+    }, 280);
+  }, [runPatientSearch]);
+
+  const close = useCallback(() => {
+    if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current);
+    searchSequenceRef.current += 1;
+    setOpen(false);
+    setSearch("");
+    setPatients([]);
+    setSearched(false);
+    setLoading(false);
+    setError("");
   }, []);
 
   useEffect(() => {
@@ -140,11 +167,11 @@ export default function StaffCommandCenter({ role }: { role: StaffRole }) {
         event.preventDefault();
         setOpen(true);
       }
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") close();
     }
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, []);
+  }, [close]);
 
   useEffect(() => {
     if (!open) return;
@@ -154,29 +181,17 @@ export default function StaffCommandCenter({ role }: { role: StaffRole }) {
       // Opening the software keyboard immediately can collapse the usable
       // viewport on phones. Desktop keeps the fast keyboard-first workflow.
       if (window.innerWidth >= 1024) inputRef.current?.focus();
-      if (!loaded) void loadPatients();
     }, 80);
     return () => {
       window.clearTimeout(focusTimer);
       document.body.style.overflow = previousOverflow;
     };
-  }, [loadPatients, loaded, open]);
+  }, [open]);
 
-  const visiblePatients = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    const matches = term
-      ? patients.filter((patient) =>
-          [patient.fullName, patient.phone, patient.patientNumber ?? ""]
-            .some((value) => value.toLowerCase().includes(term)),
-        )
-      : patients;
-    return matches.slice(0, 8);
-  }, [patients, search]);
-
-  function close() {
-    setOpen(false);
-    setSearch("");
-  }
+  useEffect(() => () => {
+    if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current);
+    searchSequenceRef.current += 1;
+  }, [close]);
 
   function navigate(href: string) {
     if (href === "/admin/appointments?new=1" && pathname === "/admin/appointments") {
@@ -237,7 +252,7 @@ export default function StaffCommandCenter({ role }: { role: StaffRole }) {
                 <input
                   ref={inputRef}
                   value={search}
-                  onChange={(event) => setSearch(event.target.value)}
+                  onChange={(event) => schedulePatientSearch(event.target.value)}
                   placeholder="Patient name, mobile or ID"
                   aria-label="Search patients and clinic actions"
                   className="h-12 min-w-0 flex-1 bg-transparent text-base font-semibold text-slate-900 outline-none placeholder:font-normal placeholder:text-slate-400 lg:text-lg"
@@ -268,20 +283,20 @@ export default function StaffCommandCenter({ role }: { role: StaffRole }) {
 
               <section className={search.trim() ? "" : "mt-7"}>
                 <div className="flex items-center justify-between gap-3">
-                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#A8864A]">{search.trim() ? "Search results" : "Recent patients"}</p>
+                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#A8864A]">{search.trim() ? "Search results" : "Find a patient"}</p>
                   {loading ? <span className="flex items-center gap-2 text-xs font-semibold text-slate-500"><LoaderCircle className="animate-spin" size={15} />Loading</span> : null}
                 </div>
 
                 {error ? (
                   <div className="mt-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
                     <p>{error}</p>
-                    <button type="button" onClick={() => void loadPatients()} className="mt-2 font-bold underline">Try again</button>
+                    <button type="button" onClick={() => schedulePatientSearch(search)} className="mt-2 font-bold underline">Try again</button>
                   </div>
                 ) : null}
 
-                {!loading && !error && visiblePatients.length ? (
+                {!loading && !error && patients.length ? (
                   <div className="mt-3 divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200">
-                    {visiblePatients.map((patient) => (
+                    {patients.map((patient) => (
                       <button key={patient.id} type="button" onClick={() => openPatient(patient.id)} className="flex w-full items-center gap-3 bg-white p-3 text-left transition hover:bg-slate-50 lg:p-4">
                         <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-blue-50 text-[#233A59]"><UserRound size={20} /></span>
                         <span className="min-w-0 flex-1">
@@ -294,12 +309,24 @@ export default function StaffCommandCenter({ role }: { role: StaffRole }) {
                   </div>
                 ) : null}
 
-                {!loading && !error && loaded && visiblePatients.length === 0 ? (
+                {!loading && !error && searched && patients.length === 0 ? (
                   <div className="mt-3 rounded-2xl bg-slate-50 px-4 py-8 text-center">
                     <UsersRound className="mx-auto text-slate-300" size={30} />
                     <p className="mt-3 font-bold text-slate-700">No patient found</p>
                     <p className="mt-1 text-sm text-slate-500">Try another name, mobile number or patient ID.</p>
                   </div>
+                ) : null}
+
+                {!loading && !error && !searched && search.trim() && !patientSearchReady(search) ? (
+                  <p className="mt-3 rounded-2xl bg-blue-50 px-4 py-3 text-sm font-semibold leading-6 text-blue-900">
+                    Enter at least 3 letters of a name, 6 mobile digits, or a complete patient ID.
+                  </p>
+                ) : null}
+
+                {!loading && !error && !search.trim() ? (
+                  <p className="mt-3 rounded-2xl bg-slate-50 px-4 py-4 text-sm leading-6 text-slate-600">
+                    Start typing a patient name, mobile number, or patient ID. Search runs securely without loading the full patient register.
+                  </p>
                 ) : null}
               </section>
             </div>

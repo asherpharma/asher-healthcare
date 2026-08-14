@@ -1,6 +1,7 @@
 import {
   adminPortalDirectory,
   provisionPortalAccount,
+  renewPortalGrant,
   resendPortalInvitation,
   revokePortalAccess,
 } from "../../../server/patients/portal-access.js";
@@ -30,6 +31,9 @@ export async function onRequestPost(context) {
     }
     if (action === "resend") {
       return json(await resendPortalInvitation(context.env, body, administrator));
+    }
+    if (action === "renew") {
+      return json(await renewPortalGrant(context.env, body, administrator));
     }
     throw new HttpError(400, "Choose a valid patient portal access action.");
   } catch (error) {

@@ -1,17 +1,35 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { HttpError } from "../server/razorpay/http.js";
-import { claimPortalInvitation, enforcePortalQueryLimit, normalizePortalProvisionRequest, patientTokenAuthenticationTime, portalDashboard, projectGrantDashboard, provisionPortalAccount, resendPortalInvitation, PATIENT_PORTAL } from "../server/patients/portal-access.js";
+import { claimPortalInvitation, enforcePortalQueryLimit, normalizePortalProvisionRequest, normalizePortalRenewRequest, patientTokenAuthenticationTime, portalDashboard, portalGrantLifecycle, projectGrantDashboard, provisionPortalAccount, renewPortalGrant, resendPortalInvitation, PATIENT_PORTAL } from "../server/patients/portal-access.js";
 
 const env = { FIREBASE_PROJECT_ID: "test", FIREBASE_WEB_API_KEY: "test" };
 const updateTime = "2026-08-13T10:00:00.000000Z";
 const doc = (data) => ({ data, updateTime });
 function db(documents = {}) {
   const commits = [];
-  return { commits, async getDocument(_e, path) { return documents[path] || null; }, verifyDocumentWrite(_e, path) { return { verify: path }; }, createDocumentWrite(_e, path, data) { return { create: path, data }; }, updateDocumentWrite(_e, path, data) { return { update: path, data }; }, async commitWrites(_e, writes) { commits.push(writes); } };
+  return { commits, async getDocument(_e, path) { return documents[path] || null; }, verifyDocumentWrite(_e, path, version) { return { verify: path, currentDocument: { updateTime: version } }; }, createDocumentWrite(_e, path, data) { return { create: path, data, currentDocument: { exists: false } }; }, updateDocumentWrite(_e, path, data, fieldPaths, version) { return { update: path, data, updateMask: { fieldPaths }, currentDocument: { updateTime: version } }; }, async commitWrites(_e, writes) { commits.push(writes); } };
 }
 function body(overrides = {}) {
   return { displayName: "Patient Account", email: "patient@example.test", confirmEmail: "patient@example.test", accountEmailAttested: true, grants: [{ patientId: "patient-1", relationship: "self", consentRecordId: "FORM-1", consentMethod: "signed_form", evidenceType: "patient_authorization", consentAttested: true, scopes: ["profile", "appointments"] }], ...overrides };
+}
+function renewalBody(overrides = {}) {
+  return {
+    accountUid: "account-1",
+    grantId: "grant-1",
+    grantVersion: updateTime,
+    relationship: "parent",
+    scopes: ["profile", "appointments"],
+    consentRecordId: "CONSENT-NEW-1",
+    consentMethod: "signed_form",
+    evidenceType: "parent_attestation",
+    consentAttested: true,
+    identityVerificationMethod: "registered_phone",
+    identityVerificationReference: "CALL-NEW-1",
+    identityAttested: true,
+    reverificationReason: "expired_access",
+    ...overrides,
+  };
 }
 
 test("account email requires exact re-entry and owner attestation", () => {
@@ -77,6 +95,100 @@ test("active account password recovery is admin-attested, atomic, audited, and c
   await resendPortalInvitation(env, { accountUid: "account-1", identityAttested: true, identityVerificationMethod: "registered_phone", identityVerificationReference: "CALL-1" }, { uid: "admin-1" }, database, { async sendPasswordResetEmail() { sent = true; } });
   assert.equal(sent, true);
   assert.equal(database.commits[0].at(-1).data.eventType, "patient_portal.password_reset_authorized");
+});
+
+test("grant lifecycle clearly separates review due, expiry, warning, pending, and current states", () => {
+  const now = new Date("2026-08-15T00:00:00.000Z");
+  assert.equal(portalGrantLifecycle({ status: "active", reviewAt: "2026-08-14T00:00:00.000Z" }, now).state, "review_due");
+  assert.equal(portalGrantLifecycle({ status: "active", expiresAt: "2026-08-14T00:00:00.000Z" }, now).state, "expired");
+  assert.deepEqual(portalGrantLifecycle({ status: "active", reviewAt: "2026-08-30T00:00:00.000Z" }, now), { state: "review_soon", nextActionAt: "2026-08-30T00:00:00.000Z", daysUntilAction: 15 });
+  assert.equal(portalGrantLifecycle({ status: "active", expiresAt: "2026-09-01T00:00:00.000Z" }, now).state, "expiring_soon");
+  assert.equal(portalGrantLifecycle({ status: "pending", reviewAt: "2027-08-15T00:00:00.000Z" }, now).state, "pending");
+  assert.equal(portalGrantLifecycle({ status: "active", reviewAt: "not-a-date" }, now).state, "review_due");
+});
+
+test("grant re-verification requires separate identity and consent evidence", () => {
+  assert.throws(() => normalizePortalRenewRequest(renewalBody({ identityAttested: false })), (error) => error instanceof HttpError && error.status === 400);
+  assert.throws(() => normalizePortalRenewRequest(renewalBody({ identityVerificationReference: "Patient name and ID" })), (error) => error instanceof HttpError && error.status === 400);
+  assert.throws(() => normalizePortalRenewRequest(renewalBody({ consentRecordId: "Patient consent form" })), (error) => error instanceof HttpError && error.status === 400);
+  assert.throws(() => normalizePortalRenewRequest(renewalBody({ identityVerificationReference: "CONSENT-NEW-1" })), (error) => error instanceof HttpError && error.status === 400);
+  assert.throws(() => normalizePortalRenewRequest(renewalBody({ grantVersion: "stale-client-value" })), (error) => error instanceof HttpError && error.status === 400);
+});
+
+test("admin re-verification atomically renews both grant indexes, appends consent, and preserves prior consent", async () => {
+  const previousConsent = { accountUid: "account-1", patientId: "patient-1", grantId: "grant-1", clinicReference: "CONSENT-OLD-1" };
+  const database = db({
+    "staff/admin-1": doc({ active: true, role: "admin" }),
+    "patientAccounts/account-1": doc({ status: "active", displayName: "Parent Account", email: "parent@example.test" }),
+    "patientAccounts/account-1/grants/grant-1": doc({ patientId: "patient-1", status: "active", relationship: "parent", scopes: ["profile"], consentRecordId: "consent-old-1", reviewAt: "2026-01-01T00:00:00.000Z", renewalCount: 1 }),
+    "patientAccessGrants/grant-1": doc({ accountUid: "account-1", patientId: "patient-1", status: "active", relationship: "parent", scopes: ["profile"], consentRecordId: "consent-old-1" }),
+    "patients/patient-1": doc({ fullName: "Child", dateOfBirth: "2020-01-01" }),
+    "patientAccessConsents/consent-old-1": doc(previousConsent),
+  });
+  const result = await renewPortalGrant(env, renewalBody(), { uid: "admin-1" }, database);
+  assert.equal(result.changed, true);
+  assert.equal(database.commits.length, 1);
+  const writes = database.commits[0];
+  const nested = writes.find((write) => write.update === "patientAccounts/account-1/grants/grant-1");
+  const reverse = writes.find((write) => write.update === "patientAccessGrants/grant-1");
+  const oldConsentVerification = writes.find((write) => write.verify === "patientAccessConsents/consent-old-1");
+  const newConsent = writes.find((write) => String(write.create || "").startsWith("patientAccessConsents/") && write.create !== "patientAccessConsents/consent-old-1");
+  const audit = writes.find((write) => String(write.create || "").startsWith("patientAccessAudit/"));
+  assert.equal(nested.currentDocument.updateTime, updateTime);
+  assert.equal(reverse.currentDocument.updateTime, updateTime);
+  assert.equal(nested.data.consentRecordId, newConsent.data.consentRecordId);
+  assert.equal(reverse.data.consentRecordId, newConsent.data.consentRecordId);
+  assert.equal(oldConsentVerification.currentDocument.updateTime, updateTime);
+  assert.equal(writes.some((write) => write.update === "patientAccessConsents/consent-old-1"), false);
+  assert.deepEqual(previousConsent, { accountUid: "account-1", patientId: "patient-1", grantId: "grant-1", clinicReference: "CONSENT-OLD-1" });
+  assert.equal(newConsent.data.supersedesConsentRecordId, "consent-old-1");
+  assert.equal(newConsent.data.lifecycleEvent, "reverification");
+  assert.equal(newConsent.data.identityVerified, true);
+  assert.equal(newConsent.data.attestationId, "asher-portal-grant-reverification-v1");
+  assert.equal(audit.data.eventType, "patient_portal.grant_reverified");
+  assert.equal(audit.data.previousConsentRecordId, "consent-old-1");
+  assert.equal(audit.data.newConsentRecordId, newConsent.data.consentRecordId);
+  assert.equal(nested.data.renewalCount, 2);
+});
+
+test("grant re-verification rejects non-admin, stale, revoked, and mismatched reverse records without writes", async () => {
+  const baseDocuments = {
+    "staff/admin-1": doc({ active: true, role: "admin" }),
+    "patientAccounts/account-1": doc({ status: "active", displayName: "Parent Account", email: "parent@example.test" }),
+    "patientAccounts/account-1/grants/grant-1": doc({ patientId: "patient-1", status: "active", relationship: "parent", scopes: ["profile"], consentRecordId: "consent-old-1" }),
+    "patientAccessGrants/grant-1": doc({ accountUid: "account-1", patientId: "patient-1", status: "active", relationship: "parent", scopes: ["profile"], consentRecordId: "consent-old-1" }),
+    "patients/patient-1": doc({ dateOfBirth: "2020-01-01" }),
+    "patientAccessConsents/consent-old-1": doc({ accountUid: "account-1", patientId: "patient-1", grantId: "grant-1" }),
+  };
+  const nonAdmin = db({ ...baseDocuments, "staff/admin-1": doc({ active: true, role: "reception" }) });
+  await assert.rejects(renewPortalGrant(env, renewalBody(), { uid: "admin-1" }, nonAdmin), (error) => error instanceof HttpError && error.status === 403);
+  assert.equal(nonAdmin.commits.length, 0);
+
+  for (const [documents, request] of [
+    [baseDocuments, renewalBody({ grantVersion: "2026-08-13T09:00:00.000000Z" })],
+    [{ ...baseDocuments, "patientAccounts/account-1/grants/grant-1": doc({ ...baseDocuments["patientAccounts/account-1/grants/grant-1"].data, status: "revoked" }) }, renewalBody()],
+    [{ ...baseDocuments, "patientAccessGrants/grant-1": doc({ accountUid: "account-1", patientId: "patient-B", status: "active", relationship: "parent", scopes: ["profile"], consentRecordId: "consent-old-1" }) }, renewalBody()],
+  ]) {
+    const database = db(documents);
+    await assert.rejects(renewPortalGrant(env, request, { uid: "admin-1" }, database), (error) => error instanceof HttpError && error.status === 409);
+    assert.equal(database.commits.length, 0);
+  }
+});
+
+test("grant re-verification requires a new consent filing reference", async () => {
+  const database = db({
+    "staff/admin-1": doc({ active: true, role: "admin" }),
+    "patientAccounts/account-1": doc({ status: "active", displayName: "Parent Account", email: "parent@example.test" }),
+    "patientAccounts/account-1/grants/grant-1": doc({ patientId: "patient-1", status: "active", relationship: "parent", scopes: ["profile"], consentRecordId: "consent-old-1" }),
+    "patientAccessGrants/grant-1": doc({ accountUid: "account-1", patientId: "patient-1", status: "active", relationship: "parent", scopes: ["profile"], consentRecordId: "consent-old-1" }),
+    "patients/patient-1": doc({ dateOfBirth: "2020-01-01" }),
+    "patientAccessConsents/consent-old-1": doc({ accountUid: "account-1", patientId: "patient-1", grantId: "grant-1", clinicReference: "CONSENT-NEW-1" }),
+  });
+  await assert.rejects(
+    renewPortalGrant(env, renewalBody(), { uid: "admin-1" }, database),
+    (error) => error instanceof HttpError && error.status === 409,
+  );
+  assert.equal(database.commits.length, 0);
 });
 
 test("unknown DOB and contradictory relationship evidence fail before creating identity", async () => {

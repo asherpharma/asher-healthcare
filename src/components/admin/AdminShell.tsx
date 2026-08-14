@@ -90,7 +90,10 @@ function StaffChrome({ children }: { children: ReactNode }) {
             <div className="min-w-0"><p className="truncate font-bold text-[#233A59]"><span className="xl:hidden">Asher Staff</span><span className="hidden xl:inline">Asher Healthcare</span></p><p className="hidden text-xs text-slate-500 xl:block">Secure clinic workspace</p></div>
           </Link>
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2 xl:gap-3">
-            <StaffCommandCenter role={profile.role} />
+            <StaffCommandCenter
+              key={`${profile.uid}:${profile.role}:${profile.doctorName || "unassigned"}`}
+              role={profile.role}
+            />
             <NetworkStatus />
             <span className="staff-role-chip rounded-full bg-[#233A59] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white xl:hidden">V2 {profile.role}</span>
             <div className="hidden xl:block"><InstallAppButton compact /></div>

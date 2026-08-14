@@ -262,8 +262,10 @@ export async function downloadPrescriptionPdf(
   patient: PrescriptionPdfPatient,
   prescription: PrescriptionPdfRecord,
   requestedFileName?: string,
+  canPresent: () => boolean = () => true,
 ) {
   const pdf = await createPrescriptionPdf(patient, prescription);
+  if (!canPresent()) return;
   const fileName =
     "prescription-" +
     safePdfName(patient.fullName) +
@@ -311,10 +313,12 @@ export async function printPrescriptionPdf(
   patient: PrescriptionPdfPatient,
   prescription: PrescriptionPdfRecord,
   existingPrintWindow?: Window,
+  canPresent: () => boolean = () => true,
 ) {
   const printWindow = existingPrintWindow || openPrintPage("Print prescription");
   try {
     const pdf = await createPrescriptionPdf(patient, prescription);
+    if (!canPresent()) { printWindow.close(); return; }
     showPdfInPrintPage(pdf, printWindow);
   } catch (error) {
     printWindow.close();
