@@ -19,7 +19,7 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type PatientSearchResult = {
   id: string;
@@ -77,6 +77,8 @@ type RecoveryDraft = {
   identityVerificationReference: string;
   identityAttested: boolean;
 };
+
+type AccountFilter = "all" | "active" | "pending" | "attention" | "revoked";
 
 type RenewalDraft = {
   accountUid: string;
@@ -137,6 +139,10 @@ function resendAvailability(account: PortalAccount, now: number) {
   return { ready: false, label: `Available in ${minutes} min` };
 }
 
+function accountNeedsAttention(account: PortalAccount) {
+  return account.grants.some((grant) => ["review_soon", "expiring_soon", "review_due", "expired"].includes(grant.lifecycle));
+}
+
 function lifecyclePresentation(grant: PortalGrant) {
   const deadline = formatPortalDate(grant.nextActionAt);
   switch (grant.lifecycle) {
@@ -166,6 +172,8 @@ export default function PatientPortalAccessManager() {
   const [renewal, setRenewal] = useState<RenewalDraft | null>(null);
   const [recovery, setRecovery] = useState<RecoveryDraft | null>(null);
   const [currentTime, setCurrentTime] = useState(() => Date.now());
+  const [accountSearch, setAccountSearch] = useState("");
+  const [accountFilter, setAccountFilter] = useState<AccountFilter>("all");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -457,6 +465,36 @@ export default function PatientPortalAccessManager() {
   const accessAttentionCount = accounts.flatMap((account) => account.grants)
     .filter((grant) => ["review_soon", "expiring_soon", "review_due", "expired"].includes(grant.lifecycle)).length;
 
+  const accountSummary = useMemo(() => ({
+    total: accounts.length,
+    active: accounts.filter((account) => account.status === "active").length,
+    pending: accounts.filter((account) => account.status === "pending").length,
+    linkedPatients: accounts.reduce((total, account) => total + account.grants.filter((grant) => grant.status !== "revoked").length, 0),
+  }), [accounts]);
+
+  const visibleAccounts = useMemo(() => {
+    const term = accountSearch.trim().toLocaleLowerCase("en-IN");
+    return accounts
+      .filter((account) => {
+        const matchesFilter = accountFilter === "all"
+          || (accountFilter === "attention" ? accountNeedsAttention(account) : account.status === accountFilter);
+        if (!matchesFilter) return false;
+        if (!term) return true;
+        const searchMaterial = [
+          account.displayName,
+          account.email,
+          ...account.grants.flatMap((grant) => [grant.patientName, grant.patientId]),
+        ].join(" ").toLocaleLowerCase("en-IN");
+        return searchMaterial.includes(term);
+      })
+      .sort((left, right) => {
+        const attentionDifference = Number(accountNeedsAttention(right)) - Number(accountNeedsAttention(left));
+        if (attentionDifference !== 0) return attentionDifference;
+        const pendingDifference = Number(right.status === "pending") - Number(left.status === "pending");
+        return pendingDifference || left.displayName.localeCompare(right.displayName, "en-IN");
+      });
+  }, [accountFilter, accountSearch, accounts]);
+
   return (
     <div className="space-y-6">
       <section className="rounded-[28px] bg-[#233A59] p-6 text-white sm:p-8">
@@ -520,8 +558,22 @@ export default function PatientPortalAccessManager() {
           <div className="flex items-center gap-3"><UsersRound className="text-[#A8864A]" /><div><h2 className="text-xl font-bold text-[#233A59]">Existing family access</h2><p className="text-sm text-slate-600">Renew permissions before they pause at their review or expiry date.</p></div></div>
           {accessAttentionCount > 0 ? <span className="inline-flex items-center gap-2 rounded-full bg-amber-100 px-3 py-2 text-xs font-bold text-amber-900"><AlertTriangle size={15} />{accessAttentionCount} permission{accessAttentionCount === 1 ? "" : "s"} need attention</span> : null}
         </div>
+        {!loading && accounts.length > 0 ? <>
+          <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {[
+              ["Family accounts", accountSummary.total, "bg-slate-50 text-slate-700"],
+              ["Active", accountSummary.active, "bg-emerald-50 text-emerald-800"],
+              ["Pending", accountSummary.pending, "bg-amber-50 text-amber-900"],
+              ["Linked patients", accountSummary.linkedPatients, "bg-blue-50 text-blue-800"],
+            ].map(([label, value, tone]) => <div key={String(label)} className={`${tone} rounded-2xl p-4`}><p className="text-2xl font-bold">{value}</p><p className="mt-1 text-xs font-bold uppercase tracking-wide opacity-80">{label}</p></div>)}
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_220px]">
+            <label className="relative min-w-0"><span className="sr-only">Search family access</span><Search className="pointer-events-none absolute left-3 top-3.5 text-slate-400" size={18} /><input value={accountSearch} onChange={(event) => setAccountSearch(event.target.value)} placeholder="Search account, email, patient or ID" className="h-12 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-4 text-sm font-semibold outline-none focus:border-[#233A59]" /></label>
+            <label><span className="sr-only">Filter family access</span><select value={accountFilter} onChange={(event) => setAccountFilter(event.target.value as AccountFilter)} className="h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 outline-none focus:border-[#233A59]"><option value="all">All accounts</option><option value="active">Active accounts</option><option value="pending">Pending acceptance</option><option value="attention">Needs attention</option><option value="revoked">Revoked accounts</option></select></label>
+          </div>
+        </> : null}
         {loading ? <p className="mt-6 flex items-center gap-2 text-sm font-semibold text-slate-600"><LoaderCircle className="animate-spin" size={18} />Loading secure access…</p> : null}
-        <div className="mt-5 space-y-4">{accounts.map((account) => {
+        <div className="mt-5 space-y-4">{visibleAccounts.map((account) => {
           const availability = resendAvailability(account, currentTime);
           const recoveryOpen = recovery?.accountUid === account.uid;
           return <article key={account.uid} className="rounded-2xl border border-slate-200 p-4 sm:p-5">
@@ -588,6 +640,7 @@ export default function PatientPortalAccessManager() {
         </article>;
         })}</div>
         {!loading && accounts.length === 0 ? <div className="mt-5 rounded-2xl border border-dashed border-slate-300 p-8 text-center"><ShieldCheck className="mx-auto text-[#A8864A]" size={30} /><p className="mt-3 font-bold text-[#233A59]">No family accounts created yet</p></div> : null}
+        {!loading && accounts.length > 0 && visibleAccounts.length === 0 ? <div className="mt-5 rounded-2xl border border-dashed border-slate-300 p-7 text-center"><Search className="mx-auto text-slate-400" size={28} /><p className="mt-3 font-bold text-[#233A59]">No access records match this view</p><button type="button" onClick={() => { setAccountSearch(""); setAccountFilter("all"); }} className="mt-3 min-h-10 rounded-xl bg-slate-100 px-4 text-sm font-bold text-slate-700">Clear search and filters</button></div> : null}
       </section>
     </div>
   );
