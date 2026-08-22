@@ -41,6 +41,7 @@ const REVERIFICATION_REASONS = new Set([
   "identity_update",
 ]);
 const REVIEW_WARNING_DAYS = 30;
+const INVITATION_RESEND_COOLDOWN_MS = 10 * 60 * 1000;
 
 const DEFAULT_DATABASE = {
   commitWrites,
@@ -160,6 +161,23 @@ export function portalGrantLifecycle(grant = {}, now = new Date()) {
     return { state: status === "pending" ? "pending" : "current", nextActionAt: next.text, daysUntilAction };
   }
   return { state: status === "pending" ? "pending" : "current", nextActionAt: "", daysUntilAction: null };
+}
+
+export function portalInvitationCooldown(value, now = new Date()) {
+  const nowTime = now instanceof Date ? now.getTime() : Number.NaN;
+  if (!Number.isFinite(nowTime)) throw new HttpError(500, "The invitation cooldown could not be evaluated safely.");
+  const lastSentAt = timestampText(value);
+  const lastSentTime = Date.parse(lastSentAt);
+  if (!Number.isFinite(lastSentTime)) {
+    return { available: true, availableAt: "", remainingSeconds: 0 };
+  }
+  const availableTime = lastSentTime + INVITATION_RESEND_COOLDOWN_MS;
+  const remainingSeconds = Math.max(0, Math.ceil((availableTime - nowTime) / 1000));
+  return {
+    available: remainingSeconds === 0,
+    availableAt: new Date(availableTime).toISOString(),
+    remainingSeconds,
+  };
 }
 
 function strictScopes(value) {
@@ -895,6 +913,7 @@ export async function adminPortalDirectory(env, authenticatedAdministrator, data
   const now = new Date();
   const result = await Promise.all(accounts.map(async (account) => {
     const grants = await list(env, `patientAccounts/${account.id}/grants`, MAX_GRANTS_PER_ACCOUNT);
+    const invitationCooldown = portalInvitationCooldown(account.data.inviteLastSentAt, now);
     return {
       uid: account.id,
       displayName: cleanText(account.data.displayName, 100),
@@ -902,6 +921,9 @@ export async function adminPortalDirectory(env, authenticatedAdministrator, data
       status: cleanText(account.data.status, 20),
       invitedAt: timestampText(account.data.invitedAt),
       claimedAt: timestampText(account.data.claimedAt),
+      inviteLastSentAt: timestampText(account.data.inviteLastSentAt),
+      resendAvailableAt: invitationCooldown.availableAt,
+      resendAvailableInSeconds: invitationCooldown.remainingSeconds,
       grants: await Promise.all(grants.map(async (grant) => {
         const patient = await database.getDocument(env, `patients/${grant.data.patientId}`);
         const lifecycle = portalGrantLifecycle(grant.data, now);
@@ -949,8 +971,8 @@ export async function resendPortalInvitation(env, body, authenticatedAdministrat
   const administrator = currentAdministrator(authenticatedAdministrator, adminDocument);
   if (!accountDocument || !["pending", "active"].includes(accountDocument.data.status)) throw new HttpError(409, "A password link cannot be sent for this family account.");
   const now = new Date();
-  const lastSent = Date.parse(timestampText(accountDocument.data.inviteLastSentAt));
-  if (Number.isFinite(lastSent) && now.getTime() - lastSent < 10 * 60 * 1000) throw new HttpError(429, "Please wait 10 minutes before resending this invitation.");
+  const invitationCooldown = portalInvitationCooldown(accountDocument.data.inviteLastSentAt, now);
+  if (!invitationCooldown.available) throw new HttpError(429, "Please wait 10 minutes before resending this invitation.");
   await database.commitWrites(env, [
     database.verifyDocumentWrite(env, adminPath, adminDocument.updateTime),
     database.updateDocumentWrite(env, accountPath, { inviteLastSentAt: now, inviteLastSentBy: administrator.uid, updatedAt: now }, ["inviteLastSentAt", "inviteLastSentBy", "updatedAt"], accountDocument.updateTime),

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { HttpError } from "../server/razorpay/http.js";
-import { claimPortalInvitation, enforcePortalQueryLimit, normalizePortalProvisionRequest, normalizePortalRenewRequest, patientTokenAuthenticationTime, portalDashboard, portalGrantLifecycle, projectGrantDashboard, provisionPortalAccount, renewPortalGrant, resendPortalInvitation, PATIENT_PORTAL } from "../server/patients/portal-access.js";
+import { claimPortalInvitation, enforcePortalQueryLimit, normalizePortalProvisionRequest, normalizePortalRenewRequest, patientTokenAuthenticationTime, portalDashboard, portalGrantLifecycle, portalInvitationCooldown, projectGrantDashboard, provisionPortalAccount, renewPortalGrant, resendPortalInvitation, PATIENT_PORTAL } from "../server/patients/portal-access.js";
 
 const env = { FIREBASE_PROJECT_ID: "test", FIREBASE_WEB_API_KEY: "test" };
 const updateTime = "2026-08-13T10:00:00.000000Z";
@@ -95,6 +95,21 @@ test("active account password recovery is admin-attested, atomic, audited, and c
   await resendPortalInvitation(env, { accountUid: "account-1", identityAttested: true, identityVerificationMethod: "registered_phone", identityVerificationReference: "CALL-1" }, { uid: "admin-1" }, database, { async sendPasswordResetEmail() { sent = true; } });
   assert.equal(sent, true);
   assert.equal(database.commits[0].at(-1).data.eventType, "patient_portal.password_reset_authorized");
+});
+
+test("invitation resend cooldown exposes a deterministic administrator countdown", () => {
+  const now = new Date("2026-08-22T12:00:00.000Z");
+  assert.deepEqual(portalInvitationCooldown("", now), { available: true, availableAt: "", remainingSeconds: 0 });
+  assert.deepEqual(portalInvitationCooldown("2026-08-22T11:55:30.000Z", now), {
+    available: false,
+    availableAt: "2026-08-22T12:05:30.000Z",
+    remainingSeconds: 330,
+  });
+  assert.deepEqual(portalInvitationCooldown("2026-08-22T11:49:59.000Z", now), {
+    available: true,
+    availableAt: "2026-08-22T11:59:59.000Z",
+    remainingSeconds: 0,
+  });
 });
 
 test("grant lifecycle clearly separates review due, expiry, warning, pending, and current states", () => {

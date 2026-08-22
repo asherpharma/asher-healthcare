@@ -62,7 +62,20 @@ type PortalAccount = {
   status: string;
   invitedAt: string;
   claimedAt: string;
+  inviteLastSentAt: string;
+  resendAvailableAt: string;
+  resendAvailableInSeconds: number;
   grants: PortalGrant[];
+};
+
+type RecoveryDraft = {
+  accountUid: string;
+  accountName: string;
+  accountEmail: string;
+  accountStatus: string;
+  identityVerificationMethod: "in_person" | "registered_phone" | "photo_id";
+  identityVerificationReference: string;
+  identityAttested: boolean;
 };
 
 type RenewalDraft = {
@@ -105,6 +118,25 @@ function formatPortalDate(value: string) {
     : new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", year: "numeric" }).format(date);
 }
 
+function formatPortalDateTime(value: string) {
+  if (!value) return "Not yet";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "Administrator review required"
+    : new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" }).format(date);
+}
+
+function resendAvailability(account: PortalAccount, now: number) {
+  if (!now && account.resendAvailableInSeconds > 0) {
+    return { ready: false, label: `Available in ${Math.max(1, Math.ceil(account.resendAvailableInSeconds / 60))} min` };
+  }
+  const availableTime = Date.parse(account.resendAvailableAt);
+  const remainingMilliseconds = Number.isFinite(availableTime) ? availableTime - now : 0;
+  if (remainingMilliseconds <= 0) return { ready: true, label: account.status === "pending" ? "Resend setup" : "Reset password" };
+  const minutes = Math.max(1, Math.ceil(remainingMilliseconds / 60_000));
+  return { ready: false, label: `Available in ${minutes} min` };
+}
+
 function lifecyclePresentation(grant: PortalGrant) {
   const deadline = formatPortalDate(grant.nextActionAt);
   switch (grant.lifecycle) {
@@ -132,6 +164,8 @@ export default function PatientPortalAccessManager() {
   const [results, setResults] = useState<PatientSearchResult[]>([]);
   const [grants, setGrants] = useState<GrantDraft[]>([]);
   const [renewal, setRenewal] = useState<RenewalDraft | null>(null);
+  const [recovery, setRecovery] = useState<RecoveryDraft | null>(null);
+  const [currentTime, setCurrentTime] = useState(() => Date.now());
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -166,6 +200,11 @@ export default function PatientPortalAccessManager() {
     const timer = window.setTimeout(() => void loadAccounts(), 0);
     return () => window.clearTimeout(timer);
   }, [loadAccounts]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setCurrentTime(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   async function searchPatients(event: FormEvent) {
     event.preventDefault();
@@ -305,6 +344,7 @@ export default function PatientPortalAccessManager() {
       reverificationReason: grant.lifecycle === "expired" ? "expired_access" : "scheduled_review",
       scopes: grant.scopes.includes("profile") ? grant.scopes : ["profile", ...grant.scopes],
     });
+    setRecovery(null);
     setMessage("");
     setError("");
   }
@@ -366,16 +406,41 @@ export default function PatientPortalAccessManager() {
     }
   }
 
-  async function resend(accountUid: string) {
-    if (!window.confirm("I verified the account holder's identity. Send a secure password setup/reset link now?")) return;
-    const method = window.prompt("Verification method: in_person, registered_phone, or photo_id", "registered_phone")?.trim() || "";
-    const reference = window.prompt("Enter the clinic filing/reference code (letters, numbers, dot, slash, dash only)", "VERIFY-1")?.trim() || "";
-    if (!method || !reference) return;
+  function startRecovery(account: PortalAccount) {
+    const availability = resendAvailability(account, currentTime);
+    if (!availability.ready) return;
+    setRecovery({
+      accountUid: account.uid,
+      accountName: account.displayName,
+      accountEmail: account.email,
+      accountStatus: account.status,
+      identityVerificationMethod: "registered_phone",
+      identityVerificationReference: "",
+      identityAttested: false,
+    });
+    setRenewal(null);
+    setMessage("");
+    setError("");
+  }
+
+  async function submitRecovery(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!recovery) return;
     setSaving(true);
     setError("");
+    setRecovery(null);
+    setMessage("");
     try {
-      await portalRequest({ action: "resend", accountUid, identityAttested: true, identityVerificationMethod: method, identityVerificationReference: reference });
+      await portalRequest({
+        action: "resend",
+        accountUid: recovery.accountUid,
+        identityAttested: recovery.identityAttested,
+        identityVerificationMethod: recovery.identityVerificationMethod,
+        identityVerificationReference: recovery.identityVerificationReference,
+      });
       setMessage("A fresh password setup link was sent. Another resend is available after 10 minutes.");
+      setRecovery(null);
+      setCurrentTime(Date.now());
       await loadAccounts();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "The invitation could not be resent.");
@@ -456,8 +521,38 @@ export default function PatientPortalAccessManager() {
           {accessAttentionCount > 0 ? <span className="inline-flex items-center gap-2 rounded-full bg-amber-100 px-3 py-2 text-xs font-bold text-amber-900"><AlertTriangle size={15} />{accessAttentionCount} permission{accessAttentionCount === 1 ? "" : "s"} need attention</span> : null}
         </div>
         {loading ? <p className="mt-6 flex items-center gap-2 text-sm font-semibold text-slate-600"><LoaderCircle className="animate-spin" size={18} />Loading secure access…</p> : null}
-        <div className="mt-5 space-y-4">{accounts.map((account) => <article key={account.uid} className="rounded-2xl border border-slate-200 p-4 sm:p-5">
-          <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-bold text-[#233A59]">{account.displayName}</p><p className="mt-1 break-all text-sm text-slate-600">{account.email}</p><span className={(account.status === "active" ? "bg-emerald-50 text-emerald-700" : account.status === "pending" ? "bg-amber-50 text-amber-800" : "bg-red-50 text-red-700") + " mt-2 inline-flex rounded-full px-2.5 py-1 text-xs font-bold capitalize"}>{account.status}</span></div><div className="flex flex-wrap gap-2">{account.status !== "revoked" ? <button type="button" disabled={saving} onClick={() => void resend(account.uid)} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-blue-200 px-3 text-xs font-bold text-blue-800"><KeyRound size={16} />{account.status === "pending" ? "Resend setup" : "Reset password"}</button> : null}{account.status !== "revoked" ? <button type="button" disabled={saving} onClick={() => void revoke(account.uid)} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-red-200 px-3 text-xs font-bold text-red-700"><ShieldOff size={16} />Revoke account</button> : null}</div></div>
+        <div className="mt-5 space-y-4">{accounts.map((account) => {
+          const availability = resendAvailability(account, currentTime);
+          const recoveryOpen = recovery?.accountUid === account.uid;
+          return <article key={account.uid} className="rounded-2xl border border-slate-200 p-4 sm:p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="font-bold text-[#233A59]">{account.displayName}</p>
+              <p className="mt-1 break-all text-sm text-slate-600">{account.email}</p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className={(account.status === "active" ? "bg-emerald-50 text-emerald-700" : account.status === "pending" ? "bg-amber-50 text-amber-800" : "bg-red-50 text-red-700") + " inline-flex rounded-full px-2.5 py-1 text-xs font-bold capitalize"}>{account.status}</span>
+                <span className="text-xs font-semibold text-slate-500">Invited {formatPortalDateTime(account.invitedAt)}</span>
+                {account.claimedAt ? <span className="text-xs font-semibold text-slate-500">· Activated {formatPortalDateTime(account.claimedAt)}</span> : null}
+              </div>
+            </div>
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap">
+              {account.status !== "revoked" ? <button type="button" disabled={saving || !availability.ready} onClick={() => startRecovery(account)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-blue-200 px-3 text-xs font-bold text-blue-800 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-500"><KeyRound size={16} />{availability.label}</button> : null}
+              {account.status !== "revoked" ? <button type="button" disabled={saving} onClick={() => void revoke(account.uid)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-red-200 px-3 text-xs font-bold text-red-700"><ShieldOff size={16} />Revoke account</button> : null}
+            </div>
+          </div>
+
+          {recoveryOpen && recovery ? <form onSubmit={submitRecovery} className="mt-4 rounded-2xl border border-blue-200 bg-blue-50/60 p-4 sm:p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div><p className="text-xs font-bold uppercase tracking-[0.14em] text-blue-800">Secure account recovery</p><h3 className="mt-1 font-bold text-[#233A59]">{recovery.accountStatus === "pending" ? "Resend setup link" : "Send password reset"}</h3><p className="mt-1 break-all text-xs leading-5 text-slate-600">For {recovery.accountName} · {recovery.accountEmail}</p></div>
+              <button type="button" aria-label="Close account recovery" onClick={() => setRecovery(null)} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white text-slate-600"><X size={16} /></button>
+            </div>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <label className="text-xs font-bold text-slate-600">Identity verification method<select value={recovery.identityVerificationMethod} onChange={(event) => setRecovery({ ...recovery, identityVerificationMethod: event.target.value as RecoveryDraft["identityVerificationMethod"], identityAttested: false })} className={inputClass}><option value="registered_phone">Called registered phone</option><option value="in_person">Verified in person</option><option value="photo_id">Checked photo ID</option></select></label>
+              <label className="text-xs font-bold text-slate-600">Verification filing code<input value={recovery.identityVerificationReference} onChange={(event) => setRecovery({ ...recovery, identityVerificationReference: event.target.value, identityAttested: false })} required minLength={3} maxLength={80} pattern="[A-Za-z0-9][A-Za-z0-9._/-]{2,79}" placeholder="IDVERIFY-2026-001 (no names or ID numbers)" className={inputClass} /></label>
+            </div>
+            <label className="mt-4 flex items-start gap-3 rounded-xl bg-white p-3 text-xs font-semibold leading-5 text-blue-950"><input type="checkbox" required checked={recovery.identityAttested} onChange={(event) => setRecovery({ ...recovery, identityAttested: event.target.checked })} className="mt-1" />I verified that this is the authorized account holder. The filing code above identifies the clinic-held verification record and contains no patient identity details.</label>
+            <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><button type="button" disabled={saving} onClick={() => setRecovery(null)} className="min-h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700">Cancel</button><button disabled={saving || !recovery.identityAttested} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#233A59] px-4 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60">{saving ? <LoaderCircle className="animate-spin" size={16} /> : <KeyRound size={16} />}{saving ? "Sending secure link…" : "Verify and send link"}</button></div>
+          </form> : null}
           <div className="mt-4 space-y-3">{account.grants.map((grant) => {
             const lifecycle = lifecyclePresentation(grant);
             const renewalOpen = renewal?.accountUid === account.uid && renewal.grantId === grant.grantId;
@@ -490,7 +585,8 @@ export default function PatientPortalAccessManager() {
               </form> : null}
             </div>;
           })}</div>
-        </article>)}</div>
+        </article>;
+        })}</div>
         {!loading && accounts.length === 0 ? <div className="mt-5 rounded-2xl border border-dashed border-slate-300 p-8 text-center"><ShieldCheck className="mx-auto text-[#A8864A]" size={30} /><p className="mt-3 font-bold text-[#233A59]">No family accounts created yet</p></div> : null}
       </section>
     </div>
