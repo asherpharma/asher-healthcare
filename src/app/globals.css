@@ -130,11 +130,10 @@ img { object-fit: cover; }
 .doctors-section { background: linear-gradient(180deg, #f3f8f7 0%, #fffefb 100%); }
 .doctor-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 22px; }
 .doctor-card { display: grid; grid-template-columns: 210px 1fr; min-height: 360px; overflow: hidden; border: 1px solid #dbe5e6; border-radius: 24px; background: white; box-shadow: 0 16px 40px rgba(25,60,76,.08); }
-.doctor-portrait { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: linear-gradient(160deg, #e6f1f0, #c7dfdc); }
+.doctor-portrait { position: relative; min-height: 360px; overflow: hidden; background: linear-gradient(160deg, #e6f1f0, #c7dfdc); }
 .doctor-rose .doctor-portrait { background: linear-gradient(160deg, #f5e8e7, #e5c9c8); }
-.doctor-portrait span { width: 116px; height: 116px; display: grid; place-items: center; color: white; border: 5px solid rgba(255,255,255,.65); border-radius: 50%; background: var(--teal); font-family: var(--font-display); font-size: 2.2rem; box-shadow: 0 18px 35px rgba(24,75,79,.2); }
-.doctor-rose .doctor-portrait span { background: var(--rose); }
-.doctor-portrait small { color: #537475; font-size: .67rem; text-transform: uppercase; letter-spacing: .12em; }
+.doctor-photo { object-fit: cover; transition: transform .7s ease; }
+.doctor-card:hover .doctor-photo { transform: scale(1.025); }
 .doctor-details { padding: 34px 28px; }
 .doctor-specialty { display: flex; align-items: center; gap: 8px; color: var(--teal); font-size: .72rem; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; }
 .doctor-specialty svg { width: 17px; }
@@ -350,7 +349,7 @@ img { object-fit: cover; }
   .abstract-card { min-height: 440px; border-radius: 120px 120px 24px 24px; }
   .care-quote { right: -4px; max-width: 260px; }
   .doctor-card { grid-template-columns: 1fr; }
-  .doctor-portrait { min-height: 220px; }
+  .doctor-portrait { min-height: 430px; }
   .doctor-details { padding: 28px 22px; }
   .gallery-main { min-height: 410px; }
   .gallery-note { grid-template-columns: 1fr; }

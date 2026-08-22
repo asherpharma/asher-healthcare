@@ -1,21 +1,24 @@
+import Image from "next/image";
 import { Baby, CalendarDays, HeartPulse, Stethoscope } from "lucide-react";
 
 const doctors = [
   {
-    initials: "SA",
     name: "Dr. Lt Col Shafi Ahamad",
     qualifications: "MBBS, MD (Pediatrics)",
     role: "Consultant Pediatrician",
     focus: "Pediatric Allergy & Asthma Specialist",
+    image: "/images/dr-shafi-ahamad.jpg",
+    imagePosition: "center 24%",
     icon: Baby,
     accent: "doctor-blue",
   },
   {
-    initials: "SR",
     name: "Dr. Shaik Reshma",
     qualifications: "MBBS, MS (OBG)",
     role: "Consultant Obstetrician & Gynaecologist",
     focus: "Laparoscopic Surgeon & Infertility Specialist",
+    image: "/images/dr-shaik-reshma.jpg",
+    imagePosition: "center 20%",
     icon: HeartPulse,
     accent: "doctor-rose",
   },
@@ -35,7 +38,16 @@ export default function Doctors() {
             const Icon = doctor.icon;
             return (
               <article className={"doctor-card " + doctor.accent} key={doctor.name}>
-                <div className="doctor-portrait" aria-label="Doctor photograph will be added soon"><span>{doctor.initials}</span><small>Photo coming soon</small></div>
+                <div className="doctor-portrait">
+                  <Image
+                    src={doctor.image}
+                    alt={`${doctor.name}, ${doctor.role} at Asher Women and Child Healthcare`}
+                    fill
+                    sizes="(max-width: 540px) calc(100vw - 28px), (max-width: 800px) 210px, (max-width: 1050px) 160px, 210px"
+                    style={{ objectPosition: doctor.imagePosition }}
+                    className="doctor-photo"
+                  />
+                </div>
                 <div className="doctor-details">
                   <div className="doctor-specialty"><Icon /> {doctor.role}</div>
                   <h3>{doctor.name}</h3>

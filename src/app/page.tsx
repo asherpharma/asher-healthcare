@@ -36,12 +36,14 @@ const clinicSchema = {
     {
       "@type": "Person",
       name: "Dr. Lt Col Shafi Ahamad",
+      image: "https://asherhealthcare.in/images/dr-shafi-ahamad.jpg",
       jobTitle: "Consultant Pediatrician",
       knowsAbout: ["Pediatrics", "Newborn care", "Child allergy", "Childhood asthma"],
     },
     {
       "@type": "Person",
       name: "Dr. Shaik Reshma",
+      image: "https://asherhealthcare.in/images/dr-shaik-reshma.jpg",
       jobTitle: "Consultant Obstetrician and Gynaecologist",
       knowsAbout: ["Obstetrics", "Gynaecology", "Fertility care", "Laparoscopic surgery"],
     },
