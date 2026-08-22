@@ -3,6 +3,7 @@
 import { useStaff } from "@/components/admin/StaffGuard";
 import { firestore } from "@/firebase/config";
 import { formatAppointmentTime } from "@/lib/appointments";
+import { clinicQueueHealth } from "@/lib/clinic-queue";
 import {
   APPOINTMENT_STATUSES,
   APPOINTMENT_STATUS_OPTIONS,
@@ -71,6 +72,12 @@ type AppointmentRecord = {
   preferredTime: string;
   status: AppointmentStatus;
   queueToken?: number;
+  checkedInAt?: Timestamp;
+  waitingAt?: Timestamp;
+  consultationStartedAt?: Timestamp;
+  completedAt?: Timestamp;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
 };
 
 const ACTIVE_APPOINTMENT_STATUSES = new Set<AppointmentStatus>([
@@ -621,6 +628,17 @@ type MobileAdminMetrics = {
   urgentLabs: number;
   outstandingInvoices: number;
   totalOutstanding: number;
+  queueHealth: {
+    waiting: number;
+    waitingWithTimestamp: number;
+    consulting: number;
+    delayed: number;
+    averageWaitMinutes: number;
+    longestWaitMinutes: number;
+    averageConsultationMinutes: number;
+    completedWithDuration: number;
+    delayThresholdMinutes: number;
+  };
   nextAppointment: {
     id: string;
     patientName: string;
@@ -744,6 +762,30 @@ function MobileAdminDashboard({
             <CheckCircle2 className="shrink-0" size={20} />No upcoming appointment remains today.
           </div>
         )}
+
+        <Link
+          href="/admin/appointments?date=today"
+          prefetch={false}
+          className={`mt-3 block rounded-2xl p-4 ring-1 transition active:scale-[0.99] ${metrics.queueHealth.delayed > 0 ? "bg-red-50 text-red-950 ring-red-200" : "bg-emerald-50 text-emerald-950 ring-emerald-200"}`}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-[0.14em] opacity-65">Live queue health</p>
+              <p className="mt-1 text-sm font-bold">
+                {metrics.queueHealth.delayed > 0
+                  ? `${number(metrics.queueHealth.delayed)} patient${metrics.queueHealth.delayed === 1 ? "" : "s"} waiting over ${metrics.queueHealth.delayThresholdMinutes} min`
+                  : "Queue is within the attention threshold"}
+              </p>
+            </div>
+            <ArrowRight className="mt-1 shrink-0 opacity-45" size={18} />
+          </div>
+          <div className="mt-4 grid grid-cols-3 gap-2">
+            <div className="rounded-xl bg-white/75 p-3"><p className="text-xl font-black">{loading ? "—" : number(metrics.queueHealth.waiting)}</p><p className="mt-1 text-[10px] font-bold opacity-60">Waiting now</p></div>
+            <div className="rounded-xl bg-white/75 p-3"><p className="text-xl font-black">{loading ? "—" : `${number(metrics.queueHealth.longestWaitMinutes)}m`}</p><p className="mt-1 text-[10px] font-bold opacity-60">Longest wait</p></div>
+            <div className="rounded-xl bg-white/75 p-3"><p className="text-xl font-black">{loading ? "—" : number(metrics.queueHealth.consulting)}</p><p className="mt-1 text-[10px] font-bold opacity-60">With doctor</p></div>
+          </div>
+          {metrics.queueHealth.waiting > metrics.queueHealth.waitingWithTimestamp ? <p className="mt-3 text-[11px] font-semibold opacity-65">Some legacy queue entries do not have a check-in timestamp; counts remain accurate.</p> : null}
+        </Link>
 
         <div className="mt-3 grid grid-cols-2 gap-3">
           {priorities.map((priority) => {
@@ -967,6 +1009,10 @@ function AdminDashboard() {
       ?? todayActiveAppointments[0]
       ?? null;
     const todayAppointments = data.appointments.filter((appointment) => appointment.preferredDate === today);
+    const queueHealth = clinicQueueHealth(todayAppointments, {
+      now: new Date(),
+      delayThresholdMinutes: 30,
+    });
     const outstandingInvoices = data.outstandingInvoices;
 
     return {
@@ -995,6 +1041,7 @@ function AdminDashboard() {
       urgentLabs: activeLabs.filter((lab) => lab.priority === "urgent").length,
       outstandingInvoices: outstandingInvoices.length,
       totalOutstanding: outstandingInvoices.reduce((sum, invoice) => sum + Number(invoice.balance || 0), 0),
+      queueHealth,
       nextAppointment: nextAppointmentRecord ? {
         id: nextAppointmentRecord.id,
         patientName: nextAppointmentRecord.patientName,
@@ -1046,6 +1093,7 @@ function AdminDashboard() {
           urgentLabs: analytics.urgentLabs,
           outstandingInvoices: analytics.outstandingInvoices,
           totalOutstanding: analytics.totalOutstanding,
+          queueHealth: analytics.queueHealth,
           nextAppointment: analytics.nextAppointment,
           doctorMetrics: analytics.doctorMetrics,
         }}
@@ -1163,6 +1211,17 @@ function AdminDashboard() {
             <div className="rounded-2xl bg-white/10 p-4"><p className="text-3xl font-bold">{number(analytics.completedToday)}</p><p className="mt-1 text-xs font-semibold text-white/70">Completed today</p></div>
             <div className="rounded-2xl bg-white/10 p-4"><p className="text-3xl font-bold">{number(analytics.activeLabs)}</p><p className="mt-1 text-xs font-semibold text-white/70">Active lab orders</p></div>
           </div>
+          <Link href="/admin/appointments?date=today" prefetch={false} className={`mt-4 block rounded-2xl p-4 ring-1 transition hover:bg-white/15 ${analytics.queueHealth.delayed > 0 ? "bg-red-400/15 ring-red-300/30" : "bg-white/10 ring-white/10"}`}>
+            <div className="flex items-center justify-between gap-3">
+              <div><p className="text-xs font-bold uppercase tracking-[0.14em] text-[#D4B678]">Live queue health</p><p className="mt-1 text-sm font-semibold text-white/75">{analytics.queueHealth.delayed > 0 ? `${analytics.queueHealth.delayed} waiting beyond ${analytics.queueHealth.delayThresholdMinutes} minutes` : "No delayed patients detected"}</p></div>
+              <Clock3 className="shrink-0 text-[#D4B678]" size={22} />
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-xl bg-black/10 p-3"><p className="text-xl font-bold">{number(analytics.queueHealth.waiting)}</p><p className="mt-1 text-[10px] font-semibold text-white/60">Waiting</p></div>
+              <div className="rounded-xl bg-black/10 p-3"><p className="text-xl font-bold">{number(analytics.queueHealth.longestWaitMinutes)}m</p><p className="mt-1 text-[10px] font-semibold text-white/60">Longest</p></div>
+              <div className="rounded-xl bg-black/10 p-3"><p className="text-xl font-bold">{number(analytics.queueHealth.averageConsultationMinutes)}m</p><p className="mt-1 text-[10px] font-semibold text-white/60">Avg consult</p></div>
+            </div>
+          </Link>
           <div className="mt-5 space-y-2 text-sm">
             {analytics.urgentLabs > 0 ? <p className="flex items-center gap-2 rounded-xl bg-red-400/15 px-3 py-2 font-semibold text-red-100"><AlertCircle size={16} />{analytics.urgentLabs} urgent lab order{analytics.urgentLabs === 1 ? "" : "s"}</p> : null}
             {analytics.urgentTasks > 0 ? <p className="flex items-center gap-2 rounded-xl bg-amber-300/15 px-3 py-2 font-semibold text-amber-100"><Clock3 size={16} />{analytics.urgentTasks} urgent staff task{analytics.urgentTasks === 1 ? "" : "s"}</p> : null}
