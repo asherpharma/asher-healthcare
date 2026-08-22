@@ -121,6 +121,7 @@ function lifecyclePresentation(grant: PortalGrant) {
 export default function PatientPortalAccessManager() {
   const { user } = useStaff();
   const patientSearchEpoch = useRef(0);
+  const invitationFormRef = useRef<HTMLFormElement | null>(null);
   const [accounts, setAccounts] = useState<PortalAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -241,13 +242,26 @@ export default function PatientPortalAccessManager() {
     setError("");
     setMessage("");
     const formElement = event.currentTarget;
-    const form = new FormData(formElement);
+    const safeForm = (formElement as HTMLFormElement | null) ?? invitationFormRef.current;
+    if (!safeForm) {
+      setError("Unable to read the form state. Please refresh and try again.");
+      setSaving(false);
+      return;
+    }
+    const form = new FormData(safeForm);
+    const email = String(form.get("email") || "").trim();
+    const confirmEmail = String(form.get("confirmEmail") || "").trim();
+    if (email.toLowerCase() !== confirmEmail.toLowerCase()) {
+      setError("The email and re-entered email must match.");
+      setSaving(false);
+      return;
+    }
     try {
       const result = await portalRequest({
         action: "provision",
         displayName: String(form.get("displayName") || ""),
-        email: String(form.get("email") || ""),
-        confirmEmail: String(form.get("confirmEmail") || ""),
+        email,
+        confirmEmail,
         accountEmailAttested: form.get("accountEmailAttested") === "on",
         grants: grants.map((grant) => ({
           patientId: grant.id,
@@ -262,7 +276,7 @@ export default function PatientPortalAccessManager() {
       const instruction = "A secure password setup email has been sent. Access stays pending until the account holder signs in and accepts it.";
       setMessage(`Family portal invitation prepared for ${result.displayName}. ${instruction}`);
       setGrants([]);
-      formElement.reset();
+      safeForm.reset();
       await loadAccounts();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Patient portal access could not be created.");
@@ -409,14 +423,14 @@ export default function PatientPortalAccessManager() {
         {searchAttempted && !searching && results.length === 0 ? <div role="status" className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950"><strong className="block">No matching patient record found.</strong><span>Try the exact registered mobile number or patient ID. If this is a new patient, </span><Link href="/admin/reception" className="font-bold underline underline-offset-2">register the patient first</Link><span>, then return here.</span></div> : null}
         </div>
 
-        <form onSubmit={provision} className="mt-6 grid gap-4 sm:grid-cols-2">
+        <form ref={invitationFormRef} onSubmit={provision} className="mt-6 grid gap-4 sm:grid-cols-2">
           <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 sm:col-span-2">
             <p className="text-xs font-bold uppercase tracking-[0.14em] text-blue-800">Step 2 · Account holder and consent</p>
             <p className="mt-1 text-sm leading-6 text-blue-950">Use a separate patient or family email address. An email already used for an Asher Staff login cannot be reused for the patient portal.</p>
           </div>
           <label className="text-sm font-bold text-slate-700">Account holder name<input name="displayName" required minLength={2} maxLength={100} className={inputClass} /></label>
           <label className="text-sm font-bold text-slate-700">Account email<input name="email" type="email" required maxLength={254} className={inputClass} /></label>
-          <label className="text-sm font-bold text-slate-700 sm:col-start-2">Re-enter account email<input name="confirmEmail" type="email" required maxLength={254} autoComplete="off" className={inputClass} /></label>
+          <label className="text-sm font-bold text-slate-700 lg:col-start-2">Re-enter account email<input name="confirmEmail" type="email" required maxLength={254} autoComplete="off" className={inputClass} /></label>
           <label className="flex items-start gap-3 rounded-2xl bg-blue-50 p-4 text-xs font-semibold leading-5 text-blue-950 sm:col-span-2"><input name="accountEmailAttested" type="checkbox" required className="mt-1" />I verified that this email belongs to the named, authorized account holder. I understand each selected permission covers current and future matching records until its review date, expiry or clinic revocation.</label>
           <div className="space-y-3 sm:col-span-2">
             {grants.map((grant) => <article key={grant.id} className="rounded-2xl border border-slate-200 p-4">
