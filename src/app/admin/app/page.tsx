@@ -1,6 +1,7 @@
 "use client";
 
 import { InstallAppButton } from "@/components/pwa/PwaRegister";
+import StaffPhoneOtpSetup from "@/components/admin/StaffPhoneOtpSetup";
 import {
   Apple,
   BellRing,
@@ -65,6 +66,8 @@ export default function StaffAppPage() {
             </div>
           </div>
         </section>
+
+        <StaffPhoneOtpSetup />
 
         <section className="grid gap-4 md:grid-cols-2">
           <article className="rounded-[28px] bg-white p-6 shadow-sm ring-1 ring-slate-200">

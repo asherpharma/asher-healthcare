@@ -587,7 +587,7 @@ export default function StaffAccessManager() {
 
       <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm leading-6 text-blue-900">
         <MailCheck className="mr-2 inline" size={17} aria-hidden="true" />
-        <strong>Access safety:</strong> every person receives a private password-setup link. Passwords are never shown to or shared by the administrator. Verified mobile OTP can be enabled later as an optional sign-in method.
+        <strong>Access safety:</strong> every person receives a private invitation and can use a one-tap email sign-in link. After entering the app, each staff member can privately link their own verified mobile number from <strong>Mobile app</strong>. Passwords and OTPs are never shown to the administrator.
       </div>
     </section>
   );
