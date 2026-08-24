@@ -8,7 +8,7 @@ export default function Footer() {
       <div className="site-shell footer-grid">
         <div className="footer-brand">
           <div className="brand footer-logo">
-            <span className="brand-mark"><Image src="/images/logo.png" alt="" width={56} height={56} /></span>
+            <span className="brand-mark"><Image src="/images/asher-logo-compact-v2.webp" alt="" width={56} height={56} /></span>
             <span><strong>Asher</strong><small>Women & Child Healthcare</small></span>
           </div>
           <p>Compassionate specialist care for women, children and families in North Bengaluru.</p>
@@ -21,10 +21,11 @@ export default function Footer() {
         <div>
           <h3>Explore</h3>
           <Link href="/#services">Services</Link>
+          <Link href="/#care">Care guide</Link>
+          <Link href="/care/pediatrics">Pediatrics</Link>
+          <Link href="/care/womens-health">Women&apos;s health</Link>
           <Link href="/#doctors">Doctors</Link>
-          <Link href="/#clinic">Clinic</Link>
           <Link href="/#appointment">Appointments</Link>
-          <Link href="/#faq">Patient FAQs</Link>
         </div>
         <div>
           <h3>Patient information</h3>

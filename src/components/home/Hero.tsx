@@ -8,25 +8,26 @@ export default function Hero() {
       <div className="hero-orb hero-orb-two" />
       <div className="site-shell hero-grid">
         <div className="hero-copy">
-          <div className="eyebrow"><Sparkles size={16} /> Specialist care, thoughtfully personal</div>
-          <h1>Healthcare that grows with <em>your family.</em></h1>
+          <div className="eyebrow"><Sparkles size={16} /> Two specialists. One connected care experience.</div>
+          <h1>Healthcare designed around <em>your family.</em></h1>
           <p className="hero-lead">
-            Complete pediatric, obstetric and gynaecological care from two dedicated specialists—delivered in a calm, modern clinic in RK Hegde Nagar.
+            Personal pediatric, obstetric and gynaecological care—supported by live booking,
+            digital records and a secure family portal in RK Hegde Nagar.
           </p>
           <div className="hero-actions">
             <a className="button button-primary" href="#appointment"><CalendarDays size={20} /> Book an appointment <ArrowRight size={18} /></a>
             <a className="button button-ghost" href="tel:+919019263709"><Phone size={19} /> Call the clinic</a>
           </div>
           <div className="hero-proof">
-            <span><CheckCircle2 /> Women & child specialists</span>
-            <span><CheckCircle2 /> Open every day</span>
-            <span><CheckCircle2 /> Easy directions & booking</span>
+            <span><CheckCircle2 /> Specialist slots Mon–Sat, 5–8 PM</span>
+            <span><CheckCircle2 /> Live 15-minute booking</span>
+            <span><CheckCircle2 /> Secure family portal</span>
           </div>
         </div>
 
         <div className="hero-visual" aria-label="Asher Women and Child Healthcare clinic">
           <div className="hero-image-wrap">
-            <Image src="/asher-hero-clinic.png" alt="A calm modern women and child healthcare clinic" fill priority sizes="(max-width: 900px) 92vw, 48vw" />
+            <Image src="/asher-hero-clinic-v2.webp" alt="Representative concept of a calm modern women and child healthcare clinic" fill priority sizes="(max-width: 900px) 92vw, 48vw" />
             <div className="image-shade" />
             <div className="image-caption">
               <span className="pulse-dot" />
@@ -39,7 +40,7 @@ export default function Hero() {
       </div>
 
       <div className="site-shell specialty-strip">
-        <span>Two specialist practices. One trusted clinic.</span>
+        <span>Choose the care that fits your visit.</span>
         <div><HeartPulse /> Obstetrics & Gynaecology</div>
         <div><Baby /> Pediatrics & Newborn Care</div>
         <a href="https://maps.app.goo.gl/cvFLUCkF6nRPAHUx5" target="_blank" rel="noreferrer"><MapPin /> Get directions</a>

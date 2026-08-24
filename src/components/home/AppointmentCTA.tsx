@@ -13,6 +13,7 @@ import {
   scheduleSummary,
   type DoctorId,
 } from "@/lib/appointments";
+import { CARE_SELECTION_EVENT } from "@/lib/public-clinic-content";
 import {
   collection,
   onSnapshot,
@@ -68,6 +69,7 @@ export default function AppointmentCTA() {
     error: false,
   });
   const [result, setResult] = useState<Result>(null);
+  const [carePrefillMessage, setCarePrefillMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [clinicClock, setClinicClock] = useState(currentClinicClock);
   const formStartedAt = useRef(0);
@@ -91,12 +93,36 @@ export default function AppointmentCTA() {
     () => availabilityError ? [] : allSlots.filter((slot) => !occupiedSlots.has(slot)),
     [allSlots, availabilityError, occupiedSlots],
   );
-  const selectedTime = availableSlots.includes(time) ? time : availableSlots[0] ?? "";
+  const selectedTime = availableSlots.includes(time) ? time : "";
 
   useEffect(() => {
     formStartedAt.current = Date.now();
     const timer = window.setInterval(() => setClinicClock(currentClinicClock()), 30_000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    function selectCare(nextDoctorId: DoctorId) {
+      setDoctorId(nextDoctorId);
+      setTime("");
+      setResult(null);
+      const doctor = DOCTORS.find((item) => item.id === nextDoctorId);
+      setCarePrefillMessage(
+        doctor ? `${doctor.specialty} selected. Choose your date and time below.` : "",
+      );
+    }
+
+    const careFromUrl = new URLSearchParams(window.location.search).get("care");
+    if (careFromUrl === "pediatrics" || careFromUrl === "obg") selectCare(careFromUrl);
+
+    const onCareSelection = (event: Event) => {
+      const doctorIdFromEvent = (event as CustomEvent<{ doctorId?: DoctorId }>).detail?.doctorId;
+      if (doctorIdFromEvent === "pediatrics" || doctorIdFromEvent === "obg") {
+        selectCare(doctorIdFromEvent);
+      }
+    };
+    window.addEventListener(CARE_SELECTION_EVENT, onCareSelection);
+    return () => window.removeEventListener(CARE_SELECTION_EVENT, onCareSelection);
   }, []);
 
   useEffect(() => {
@@ -238,6 +264,11 @@ export default function AppointmentCTA() {
             <span><CalendarCheck /></span>
             <div><small>Live appointment booking</small><h3>Reserve your preferred time</h3></div>
           </div>
+          {carePrefillMessage ? (
+            <p className="booking-care-selection" role="status" aria-live="polite">
+              <CheckCircle2 aria-hidden="true" /> {carePrefillMessage}
+            </p>
+          ) : null}
 
           <label>
             Patient name
@@ -252,10 +283,12 @@ export default function AppointmentCTA() {
             <select
               name="doctor"
               value={doctorId}
-              onChange={(event) => {
-                setDoctorId(event.target.value as DoctorId);
-                setResult(null);
-              }}
+                onChange={(event) => {
+                  setDoctorId(event.target.value as DoctorId);
+                  setTime("");
+                  setCarePrefillMessage("");
+                  setResult(null);
+                }}
               required
             >
               {DOCTORS.map((doctor) => (
@@ -275,6 +308,7 @@ export default function AppointmentCTA() {
                 value={date}
                 onChange={(event) => {
                   setDate(event.target.value);
+                  setTime("");
                   setResult(null);
                 }}
                 required

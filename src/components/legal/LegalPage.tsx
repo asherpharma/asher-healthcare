@@ -22,7 +22,7 @@ export default function LegalPage({
       <header className="legal-header">
         <div className="site-shell legal-header-inner">
           <Link href="/" className="brand" aria-label="Asher Healthcare home">
-            <span className="brand-mark"><Image src="/images/logo.png" alt="" width={54} height={54} priority /></span>
+            <span className="brand-mark"><Image src="/images/asher-logo-compact-v2.webp" alt="" width={54} height={54} priority /></span>
             <span><strong>Asher</strong><small>Women & Child Healthcare</small></span>
           </Link>
           <Link href="/" className="legal-back"><ArrowLeft size={17} /> Back to clinic website</Link>

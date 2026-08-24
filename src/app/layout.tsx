@@ -44,9 +44,9 @@ export const metadata: Metadata = {
     siteName: "Asher Healthcare",
     images: [
       {
-        url: "/asher-hero-clinic.png",
-        width: 1536,
-        height: 1024,
+        url: "/asher-hero-clinic-v2.webp",
+        width: 1600,
+        height: 900,
       },
     ],
     locale: "en_IN",
@@ -57,7 +57,7 @@ export const metadata: Metadata = {
     title: "Asher Women & Child Healthcare",
     description:
       "Specialist care for women and children in Bengaluru.",
-    images: ["/asher-hero-clinic.png"],
+    images: ["/asher-hero-clinic-v2.webp"],
   },
   alternates: {
     canonical: "/",

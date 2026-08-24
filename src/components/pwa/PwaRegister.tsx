@@ -83,7 +83,7 @@ export function PwaRegister() {
 
       const workerUrl = appContext === "staff"
         ? "/staff-v2-sw.js?v=asher-staff-20260802-3"
-        : "/sw.js?v=asher-public-20260802-3";
+        : "/sw.js?v=asher-public-20260825-1";
       const workerScope = appContext === "staff" ? "/admin" : "/";
 
       void navigator.serviceWorker

@@ -1,12 +1,15 @@
 import Navbar from "@/components/layout/Navbar";
 import Hero from "@/components/home/Hero";
 import Services from "@/components/home/Services";
+import CarePathways from "@/components/home/CarePathways";
 import WhyChooseUs from "@/components/home/WhyChooseUs";
 import Doctors from "@/components/home/Doctors";
+import PatientJourney from "@/components/home/PatientJourney";
 import Gallery from "@/components/home/Gallery";
 import AppointmentCTA from "@/components/home/AppointmentCTA";
 import Contact from "@/components/home/Contact";
 import FrequentlyAskedQuestions, { clinicFaqs } from "@/components/home/FrequentlyAskedQuestions";
+import MobileCareBar from "@/components/home/MobileCareBar";
 import Footer from "@/components/layout/Footer";
 
 const clinicSchema = {
@@ -15,7 +18,7 @@ const clinicSchema = {
   name: "Asher Women and Child Healthcare",
   url: "https://asherhealthcare.in",
   telephone: "+91 90192 63709",
-  image: "https://asherhealthcare.in/asher-hero-clinic.png",
+  image: "https://asherhealthcare.in/asher-hero-clinic-v2.webp",
   logo: "https://asherhealthcare.in/images/asher-logo-original.png",
   hasMap: "https://maps.app.goo.gl/cvFLUCkF6nRPAHUx5",
   areaServed: "North Bengaluru",
@@ -78,13 +81,16 @@ export default function Home() {
       <main id="main-content">
         <Hero />
         <Services />
+        <CarePathways />
         <WhyChooseUs />
         <Doctors />
+        <PatientJourney />
         <Gallery />
         <AppointmentCTA />
         <FrequentlyAskedQuestions />
         <Contact />
       </main>
+      <MobileCareBar />
       <Footer />
     </>
   );

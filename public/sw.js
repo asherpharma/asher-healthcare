@@ -1,11 +1,15 @@
-const APP_RELEASE = "2026.08.02.3-public-trust";
+const APP_RELEASE = "2026.08.25.1-care-experience";
 const CACHE_NAME = `asher-public-${APP_RELEASE}`;
 const PUBLIC_ASSETS = [
   "/",
   "/offline.html",
   "/public-offline.html",
   "/manifest.webmanifest",
-  "/images/logo.png",
+  "/images/asher-logo-compact-v2.webp",
+  "/asher-hero-clinic-v2.webp",
+  "/asher-abstract-care-v2.webp",
+  "/images/pediatric-care-consultation-v2.webp",
+  "/images/womens-care-consultation-v2.webp",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
 ];
