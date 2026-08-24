@@ -1,15 +1,17 @@
 "use client";
 
 import { InstallAppButton } from "@/components/pwa/PwaRegister";
-import StaffPhoneOtpSetup from "@/components/admin/StaffPhoneOtpSetup";
 import {
   Apple,
   BellRing,
   CheckCircle2,
+  KeyRound,
   LockKeyhole,
+  Mail,
   MonitorSmartphone,
   ScanLine,
   Share2,
+  ShieldCheck,
   Smartphone,
   Wifi,
 } from "lucide-react";
@@ -67,7 +69,21 @@ export default function StaffAppPage() {
           </div>
         </section>
 
-        <StaffPhoneOtpSetup />
+        <section className="rounded-[28px] bg-white p-6 shadow-sm ring-1 ring-slate-200 sm:p-7" aria-labelledby="staff-sign-in-title">
+          <div className="flex items-start gap-3">
+            <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-blue-50 text-[#233A59]"><KeyRound size={23} /></span>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.15em] text-[#A8864A]">Simple secure access</p>
+              <h2 id="staff-sign-in-title" className="mt-1 text-2xl font-bold text-[#233A59]">One setup email, then your password</h2>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">The clinic does not use SMS OTP for routine staff sign-in, so every login remains fast and creates no SMS charge.</p>
+            </div>
+          </div>
+          <ol className="mt-6 grid gap-3 md:grid-cols-3">
+            <li className="rounded-2xl bg-slate-50 p-4"><Mail className="text-[#A8864A]" size={21} /><strong className="mt-3 block text-sm text-[#233A59]">1. Open your invitation</strong><span className="mt-1 block text-xs leading-5 text-slate-600">Use the private setup link sent to your approved email.</span></li>
+            <li className="rounded-2xl bg-slate-50 p-4"><KeyRound className="text-[#A8864A]" size={21} /><strong className="mt-3 block text-sm text-[#233A59]">2. Choose your password</strong><span className="mt-1 block text-xs leading-5 text-slate-600">Create a personal password that the administrator cannot see.</span></li>
+            <li className="rounded-2xl bg-slate-50 p-4"><ShieldCheck className="text-[#A8864A]" size={21} /><strong className="mt-3 block text-sm text-[#233A59]">3. Sign in normally</strong><span className="mt-1 block text-xs leading-5 text-slate-600">Use your email and password. A forgotten password is recovered by email.</span></li>
+          </ol>
+        </section>
 
         <section className="grid gap-4 md:grid-cols-2">
           <article className="rounded-[28px] bg-white p-6 shadow-sm ring-1 ring-slate-200">

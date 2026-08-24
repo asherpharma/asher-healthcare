@@ -587,7 +587,7 @@ export default function StaffAccessManager() {
 
       <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm leading-6 text-blue-900">
         <MailCheck className="mr-2 inline" size={17} aria-hidden="true" />
-        <strong>Access safety:</strong> every person receives a private invitation and can use a one-tap email sign-in link. After entering the app, each staff member can privately link their own verified mobile number from <strong>Mobile app</strong>. Passwords and OTPs are never shown to the administrator.
+        <strong>Access safety:</strong> every person receives one private password-setup invitation. Future access uses their approved email and personal password. If it is forgotten, Firebase sends a private reset link; passwords are never shown to the administrator.
       </div>
     </section>
   );
