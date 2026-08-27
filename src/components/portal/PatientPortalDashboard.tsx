@@ -2,9 +2,9 @@
 
 import PatientPortalPwa from "@/components/portal/PatientPortalPwa";
 import { patientFirebaseAuth } from "@/firebase/config";
-import { downloadPrescriptionPdf, printPrescriptionPdf, type PrescriptionPdfRecord } from "@/lib/prescription-pdf";
+import type { PrescriptionPdfRecord } from "@/lib/prescription-pdf";
 import { PATIENT_PORTAL_IDLE_TIMEOUT_MS, patientPortalActivityTimestamp } from "@/lib/patient-portal-session";
-import { downloadReceiptPdf, printReceiptPdf, type ReceiptInvoice } from "@/lib/receipt-pdf";
+import type { ReceiptInvoice } from "@/lib/receipt-pdf";
 import { onAuthStateChanged } from "firebase/auth";
 import {
   CalendarDays,
@@ -262,6 +262,8 @@ export default function PatientPortalDashboard() {
       }
       if (documentType === "prescription") {
         const prescription = result.document as PrescriptionPdfRecord;
+        const { downloadPrescriptionPdf, printPrescriptionPdf } = await import("@/lib/prescription-pdf");
+        if (!canPresent()) { popup?.close(); return; }
         if (action === "print") await printPrescriptionPdf(patient, prescription, popup || undefined, canPresent);
         else await downloadPrescriptionPdf(patient, prescription, "prescription.pdf", canPresent);
       } else {
@@ -274,6 +276,8 @@ export default function PatientPortalDashboard() {
           notes: "",
           createdAt: data.createdAt ? { toDate: () => new Date(data.createdAt as string) } : undefined,
         };
+        const { downloadReceiptPdf, printReceiptPdf } = await import("@/lib/receipt-pdf");
+        if (!canPresent()) { popup?.close(); return; }
         if (action === "print") await printReceiptPdf(invoice, popup || undefined, canPresent);
         else await downloadReceiptPdf(invoice, "payment-receipt.pdf", canPresent);
       }

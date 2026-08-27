@@ -58,6 +58,10 @@ type LineItem = {
 
 type PaymentStatus = "unpaid" | "partial" | "paid";
 type InvoiceStatusFilter = "all" | PaymentStatus | "due";
+
+// Keep the gateway implementation available for a future controlled rollout,
+// while the live clinic workflow uses manual collection only.
+const AUTOMATED_PAYMENT_COLLECTION_ENABLED = false;
 type PaymentMethod = "cash" | "upi" | "card" | "bank_transfer" | "online";
 
 type Invoice = ReceiptInvoice & {
@@ -927,20 +931,27 @@ function BillingWorkspace() {
 
   return (
     <div>
-      <Script
-        src="https://checkout.razorpay.com/v1/checkout.js"
-        strategy="afterInteractive"
-        onLoad={() => setRazorpayReady(true)}
-        onError={() => setError("Secure Razorpay Checkout could not be loaded. Check the internet connection.")}
-      />
+      {AUTOMATED_PAYMENT_COLLECTION_ENABLED ? (
+        <Script
+          src="https://checkout.razorpay.com/v1/checkout.js"
+          strategy="afterInteractive"
+          onLoad={() => setRazorpayReady(true)}
+          onError={() => setError("Secure Razorpay Checkout could not be loaded. Check the internet connection.")}
+        />
+      ) : null}
       <div className="staff-page-heading flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="text-sm font-bold uppercase tracking-[0.16em] text-[#A8864A]">Billing & receipts</p>
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-[#233A59] sm:text-4xl">Clinic revenue desk</h1>
-          <p className="mt-3 text-slate-600">Create invoices, record partial or full payments, track balances, and issue receipts.</p>
+          <p className="mt-3 text-slate-600">Create invoices, record manual collections, track balances, and issue receipts.</p>
         </div>
         <button type="button" onClick={() => { setShowCreate((open) => !open); setError(""); }} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-[#233A59] px-5 py-3 text-sm font-bold text-white hover:bg-[#1b2e47]"><FilePlus2 size={18} /> {showCreate ? "Close invoice" : "New invoice"}</button>
       </div>
+
+      <section className="mt-6 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
+        <Banknote className="mt-0.5 shrink-0 text-amber-700" size={20} />
+        <div><strong>Manual collection is active.</strong> Collect cash or confirm the payment on the clinic&apos;s external UPI app, card/POS machine, or bank account, then record it here. Automatic QR and online checkout are currently off.</div>
+      </section>
 
       <div className="mt-7 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         {[
@@ -956,7 +967,7 @@ function BillingWorkspace() {
 
       {showCreate && (
         <section className="mt-6 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200 sm:p-7">
-          <div className="flex items-start justify-between gap-4"><div><h2 className="text-2xl font-bold text-[#233A59]">Create patient invoice</h2><p className="mt-1 text-sm text-slate-600">Every payment creates a permanent, traceable audit entry.</p></div><button type="button" onClick={() => setShowCreate(false)} aria-label="Close invoice form" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={19} /></button></div>
+          <div className="flex items-start justify-between gap-4"><div><h2 className="text-2xl font-bold text-[#233A59]">Create patient invoice</h2><p className="mt-1 text-sm text-slate-600">Every manually confirmed collection creates a permanent, traceable audit entry.</p></div><button type="button" onClick={() => setShowCreate(false)} aria-label="Close invoice form" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={19} /></button></div>
           <form onSubmit={createInvoice} className="mt-6 space-y-6">
             <div className="grid gap-4 md:grid-cols-2">
               <label className={labelClass}>Registered patient<select required value={selectedPatientId} onChange={(event) => { setSelectedPatientId(event.target.value); setInitialPaymentRequestId(crypto.randomUUID()); }} className={inputClass}><option value="">Select active patient</option>{activePatients.map((patient) => <option key={patient.id} value={patient.id}>{patient.patientNumber ? patient.patientNumber + " · " : ""}{patient.fullName} · {patient.phone}</option>)}</select></label>
@@ -981,8 +992,8 @@ function BillingWorkspace() {
             <div className="grid gap-4 rounded-2xl border border-slate-200 p-4 md:grid-cols-2 xl:grid-cols-4">
               <label className={labelClass}>Discount<input type="number" min="0" max={subtotal} step="0.01" value={discount} onChange={(event) => { setDiscount(Number(event.target.value)); setInitialPaymentRequestId(crypto.randomUUID()); }} className={inputClass} /></label>
               <label className={labelClass}>Amount received<input type="number" min="0" max={total} step="0.01" value={initialPayment} onChange={(event) => { setInitialPayment(Number(event.target.value)); setInitialPaymentRequestId(crypto.randomUUID()); }} className={inputClass} /></label>
-              <label className={labelClass}>Payment method<select value={paymentMethod} onChange={(event) => { setPaymentMethod(event.target.value as PaymentMethod); setInitialPaymentRequestId(crypto.randomUUID()); }} className={inputClass}><option value="cash">Cash</option><option value="upi">UPI</option><option value="card">Card</option><option value="bank_transfer">Bank transfer</option></select></label>
-              <label className={labelClass}>Reference<input value={paymentReference} maxLength={100} onChange={(event) => { setPaymentReference(event.target.value); setInitialPaymentRequestId(crypto.randomUUID()); }} placeholder="UPI / card / bank reference" className={inputClass} /></label>
+              <label className={labelClass}>Collection method<select value={paymentMethod} onChange={(event) => { setPaymentMethod(event.target.value as PaymentMethod); setInitialPaymentRequestId(crypto.randomUUID()); }} className={inputClass}><option value="cash">Cash</option><option value="upi">External UPI</option><option value="card">Card / POS</option><option value="bank_transfer">Bank transfer</option></select></label>
+              <label className={labelClass}>Reference<input value={paymentReference} maxLength={100} onChange={(event) => { setPaymentReference(event.target.value); setInitialPaymentRequestId(crypto.randomUUID()); }} placeholder="Optional UPI / POS / bank reference" className={inputClass} /></label>
             </div>
 
             <div className="flex flex-col gap-5 rounded-2xl bg-[#233A59] p-5 text-white sm:flex-row sm:items-center sm:justify-between">
@@ -995,23 +1006,25 @@ function BillingWorkspace() {
 
       {payingInvoice && (
         <section className="mt-6 rounded-3xl border border-emerald-200 bg-emerald-50 p-5 sm:p-7">
-          <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.14em] text-emerald-700">Receive payment</p><h2 className="mt-2 text-xl font-bold text-[#233A59]">{payingInvoice.invoiceNumber} · {payingInvoice.patientName}</h2><p className="mt-1 text-sm text-slate-600">Outstanding balance: {money(payingInvoice.balance)}</p></div><button type="button" onClick={() => setPayingInvoice(null)} aria-label="Close payment form" className="rounded-lg p-2 text-slate-500 hover:bg-white"><X size={19} /></button></div>
+          <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.14em] text-emerald-700">Record manual collection</p><h2 className="mt-2 text-xl font-bold text-[#233A59]">{payingInvoice.invoiceNumber} · {payingInvoice.patientName}</h2><p className="mt-1 text-sm text-slate-600">Outstanding balance: {money(payingInvoice.balance)}. Confirm only after the amount has been collected.</p></div><button type="button" onClick={() => setPayingInvoice(null)} aria-label="Close payment form" className="rounded-lg p-2 text-slate-500 hover:bg-white"><X size={19} /></button></div>
           <form onSubmit={recordPayment} className="mt-5 grid gap-4 md:grid-cols-[1fr_1fr_1.2fr_auto] md:items-end">
             <label className={labelClass}>Amount<input required type="number" min="0.01" max={payingInvoice.balance} step="0.01" value={paymentAmount} onChange={(event) => { setPaymentAmount(Number(event.target.value)); setManualPaymentRequestId(crypto.randomUUID()); }} className={inputClass} /></label>
-            <label className={labelClass}>Manual method<select value={followupMethod} onChange={(event) => { setFollowupMethod(event.target.value as PaymentMethod); setManualPaymentRequestId(crypto.randomUUID()); }} className={inputClass}><option value="cash">Cash</option><option value="upi">UPI</option><option value="card">Card</option><option value="bank_transfer">Bank transfer</option></select></label>
-            <label className={labelClass}>Reference<input value={followupReference} maxLength={100} onChange={(event) => { setFollowupReference(event.target.value); setManualPaymentRequestId(crypto.randomUUID()); }} placeholder="Optional transaction reference" className={inputClass} /></label>
-            <button type="submit" disabled={recordingPayment || gatewayPayment} className="inline-flex h-[46px] items-center justify-center gap-2 rounded-xl bg-emerald-700 px-5 text-sm font-bold text-white disabled:opacity-60">{recordingPayment ? <LoaderCircle size={17} className="animate-spin" /> : <CheckCircle2 size={17} />} Record manual</button>
+            <label className={labelClass}>Collection method<select value={followupMethod} onChange={(event) => { setFollowupMethod(event.target.value as PaymentMethod); setManualPaymentRequestId(crypto.randomUUID()); }} className={inputClass}><option value="cash">Cash</option><option value="upi">External UPI</option><option value="card">Card / POS</option><option value="bank_transfer">Bank transfer</option></select></label>
+            <label className={labelClass}>Reference<input value={followupReference} maxLength={100} onChange={(event) => { setFollowupReference(event.target.value); setManualPaymentRequestId(crypto.randomUUID()); }} placeholder="Optional UPI / POS / bank reference" className={inputClass} /></label>
+            <button type="submit" disabled={recordingPayment} className="inline-flex h-[46px] items-center justify-center gap-2 rounded-xl bg-emerald-700 px-5 text-sm font-bold text-white disabled:opacity-60">{recordingPayment ? <LoaderCircle size={17} className="animate-spin" /> : <CheckCircle2 size={17} />} Confirm received</button>
           </form>
-          <div className="mt-5 flex flex-col gap-4 rounded-2xl border border-blue-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-start gap-3">
-              <span className="rounded-xl bg-blue-50 p-2.5 text-blue-700"><ShieldCheck size={21} /></span>
-              <div><p className="font-bold text-[#233A59]">Secure online payment</p><p className="mt-1 text-sm text-slate-600">UPI, cards and netbanking through Razorpay. Invoice and receipt update automatically.</p></div>
+          {AUTOMATED_PAYMENT_COLLECTION_ENABLED ? (
+            <div className="mt-5 flex flex-col gap-4 rounded-2xl border border-blue-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-3">
+                <span className="rounded-xl bg-blue-50 p-2.5 text-blue-700"><ShieldCheck size={21} /></span>
+                <div><p className="font-bold text-[#233A59]">Secure online payment</p><p className="mt-1 text-sm text-slate-600">UPI, cards and netbanking through Razorpay. Invoice and receipt update automatically.</p></div>
+              </div>
+              <button type="button" onClick={startRazorpayPayment} disabled={!razorpayReady || recordingPayment || gatewayPayment} className="inline-flex min-h-12 shrink-0 items-center justify-center gap-2 rounded-xl bg-[#233A59] px-5 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60">
+                {gatewayPayment ? <LoaderCircle size={18} className="animate-spin" /> : <CreditCard size={18} />}
+                {gatewayPayment ? "Opening Razorpay…" : razorpayReady ? `Pay ${money(paymentAmount)} online` : "Loading Razorpay…"}
+              </button>
             </div>
-            <button type="button" onClick={startRazorpayPayment} disabled={!razorpayReady || recordingPayment || gatewayPayment} className="inline-flex min-h-12 shrink-0 items-center justify-center gap-2 rounded-xl bg-[#233A59] px-5 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60">
-              {gatewayPayment ? <LoaderCircle size={18} className="animate-spin" /> : <CreditCard size={18} />}
-              {gatewayPayment ? "Opening Razorpay…" : razorpayReady ? `Pay ${money(paymentAmount)} online` : "Loading Razorpay…"}
-            </button>
-          </div>
+          ) : null}
         </section>
       )}
 

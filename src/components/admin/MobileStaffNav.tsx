@@ -1,66 +1,38 @@
 "use client";
 
+import {
+  STAFF_TOOL_GROUP_LABELS,
+  STAFF_TOOL_GROUP_TONES,
+  STAFF_TOOL_ICONS,
+} from "@/components/admin/staff-tool-ui";
 import { InstallAppButton } from "@/components/pwa/PwaRegister";
 import {
-  BellRing,
-  CalendarDays,
-  ClipboardPlus,
-  FlaskConical,
-  HeartHandshake,
-  LayoutDashboard,
-  ListTodo,
-  LockKeyhole,
-  Menu,
-  ReceiptIndianRupee,
-  Settings2,
-  Smartphone,
-  Stethoscope,
-  UserRoundCog,
-  UsersRound,
-  X,
-  type LucideIcon,
-} from "lucide-react";
+  STAFF_TOOL_GROUPS,
+  groupedStaffToolsForRole,
+  primaryStaffToolsForRole,
+  type StaffRole,
+} from "@/lib/staff-navigation";
+import { LockKeyhole, Menu, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-type MobileNavigationItem = {
-  href: string;
-  label: string;
-  icon: LucideIcon;
-};
-
-function primaryNavigationFor(role: string): MobileNavigationItem[] {
-  if (role === "doctor") {
-    return [
-      { href: "/admin/consultations", label: "Consult", icon: Stethoscope },
-      { href: "/admin/appointments", label: "Bookings", icon: CalendarDays },
-      { href: "/admin/patients", label: "Patients", icon: UsersRound },
-    ];
-  }
-
-  if (role === "reception") {
-    return [
-      { href: "/admin/reception", label: "New patient", icon: ClipboardPlus },
-      { href: "/admin/appointments", label: "Bookings", icon: CalendarDays },
-      { href: "/admin/patients", label: "Patients", icon: UsersRound },
-    ];
-  }
-
-  return [
-    { href: "/admin", label: "Home", icon: LayoutDashboard },
-    { href: "/admin/appointments", label: "Bookings", icon: CalendarDays },
-    { href: "/admin/patients", label: "Patients", icon: UsersRound },
-  ];
+function toolIsActive(pathname: string, href: string) {
+  return href === "/admin" ? pathname === href : pathname.startsWith(href);
 }
 
-export default function MobileStaffNav({ role, onLock }: { role: string; onLock: () => void }) {
+export default function MobileStaffNav({ role, onLock }: { role: StaffRole; onLock: () => void }) {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
   const moreButtonRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const primaryNavigation = primaryNavigationFor(role);
+  const primaryNavigation = useMemo(() => primaryStaffToolsForRole(role), [role]);
+  const groupedNavigation = useMemo(() => groupedStaffToolsForRole(role), [role]);
+  const primaryIds = useMemo(
+    () => new Set(primaryNavigation.map((tool) => tool.id)),
+    [primaryNavigation],
+  );
 
   useEffect(() => {
     if (!moreOpen) return;
@@ -111,13 +83,14 @@ export default function MobileStaffNav({ role, onLock }: { role: string; onLock:
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
         <div className="grid w-full grid-cols-4">
-          {primaryNavigation.map((item) => {
-            const Icon = item.icon;
-            const active = item.href === "/admin" ? pathname === item.href : pathname.startsWith(item.href);
+          {primaryNavigation.map((tool) => {
+            const Icon = STAFF_TOOL_ICONS[tool.icon];
+            const active = toolIsActive(pathname, tool.href);
             return (
               <Link
-                key={item.href}
-                href={item.href}
+                key={tool.id}
+                href={tool.href}
+                prefetch={false}
                 onClick={() => setMoreOpen(false)}
                 aria-current={active ? "page" : undefined}
                 className={
@@ -126,8 +99,8 @@ export default function MobileStaffNav({ role, onLock }: { role: string; onLock:
                 }
               >
                 {active ? <span className="absolute top-1.5 h-1 w-7 rounded-full bg-[#A8864A]" /> : null}
-                <Icon size={22} strokeWidth={active ? 2.6 : 2} />
-                <span>{item.label}</span>
+                <Icon aria-hidden="true" size={22} strokeWidth={active ? 2.6 : 2} />
+                <span>{tool.shortLabel}</span>
               </Link>
             );
           })}
@@ -140,7 +113,7 @@ export default function MobileStaffNav({ role, onLock }: { role: string; onLock:
             aria-controls="staff-more-menu"
             className="flex min-h-[68px] flex-col items-center justify-center gap-1 rounded-2xl px-1 text-[11px] font-bold text-slate-500 transition active:scale-95 active:bg-slate-100"
           >
-            <Menu size={22} />
+            <Menu aria-hidden="true" size={22} />
             <span>More</span>
           </button>
         </div>
@@ -155,78 +128,59 @@ export default function MobileStaffNav({ role, onLock }: { role: string; onLock:
             role="dialog"
             aria-modal="true"
             aria-label="More staff app options"
-            className="absolute inset-x-0 bottom-0 max-h-[86dvh] overflow-y-auto rounded-t-[30px] bg-white px-5 pb-7 pt-4 shadow-2xl"
+            className="absolute inset-x-0 bottom-0 max-h-[86dvh] overflow-y-auto rounded-t-[30px] bg-white px-4 pb-7 pt-4 shadow-2xl sm:px-5"
             style={{ paddingBottom: "max(1.75rem, env(safe-area-inset-bottom))" }}
           >
             <div className="mx-auto mb-4 h-1.5 w-12 rounded-full bg-slate-200" />
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#A8864A]">Asher Staff</p>
-                <h2 className="mt-1 text-xl font-bold text-[#233A59]">App tools</h2>
+                <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#A8864A]">{role} workspace</p>
+                <h2 className="mt-1 text-xl font-bold text-[#233A59]">All your tools</h2>
+                <p className="mt-1 text-xs text-slate-500">Only tools approved for your role are shown.</p>
               </div>
-              <button ref={closeButtonRef} type="button" onClick={() => setMoreOpen(false)} aria-label="Close more menu" className="grid h-11 w-11 place-items-center rounded-full bg-slate-100 text-slate-600">
-                <X size={19} />
+              <button ref={closeButtonRef} type="button" onClick={() => setMoreOpen(false)} aria-label="Close more menu" className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-600">
+                <X aria-hidden="true" size={19} />
               </button>
             </div>
 
-            <div className="mt-5 grid grid-cols-2 gap-3">
-              {role !== "doctor" ? (
-                <Link href="/admin/reception" onClick={() => setMoreOpen(false)} className="flex min-h-24 flex-col justify-between rounded-2xl bg-rose-50 p-4 font-bold text-rose-900">
-                  <ClipboardPlus size={25} />
-                  Express reception
-                </Link>
-              ) : null}
-              {role === "admin" ? (
-                <Link href="/admin/staff" onClick={() => setMoreOpen(false)} className="flex min-h-24 flex-col justify-between rounded-2xl bg-amber-50 p-4 font-bold text-amber-900">
-                  <UserRoundCog size={25} />
-                  Staff access
-                </Link>
-              ) : null}
-              {role === "admin" ? (
-                <Link href="/admin/consultations" onClick={() => setMoreOpen(false)} className="flex min-h-24 flex-col justify-between rounded-2xl bg-cyan-50 p-4 font-bold text-cyan-900">
-                  <Stethoscope size={25} />
-                  Consultations
-                </Link>
-              ) : null}
-              {role === "admin" ? (
-                <Link href="/admin/patient-access" onClick={() => setMoreOpen(false)} className="flex min-h-24 flex-col justify-between rounded-2xl bg-sky-50 p-4 font-bold text-sky-900">
-                  <HeartHandshake size={25} />
-                  Family portal
-                </Link>
-              ) : null}
-              {role !== "doctor" ? (
-                <Link href="/admin/billing" onClick={() => setMoreOpen(false)} className="flex min-h-24 flex-col justify-between rounded-2xl bg-emerald-50 p-4 font-bold text-emerald-900">
-                  <ReceiptIndianRupee size={25} />
-                  Billing
-                </Link>
-              ) : null}
-              <Link href="/admin/tasks" onClick={() => setMoreOpen(false)} className="flex min-h-24 flex-col justify-between rounded-2xl bg-blue-50 p-4 font-bold text-blue-900">
-                <ListTodo size={25} />
-                Tasks
-              </Link>
-              {role !== "doctor" ? (
-                <Link href="/admin/communications" onClick={() => setMoreOpen(false)} className="flex min-h-24 flex-col justify-between rounded-2xl bg-teal-50 p-4 font-bold text-teal-900">
-                  <BellRing size={25} />
-                  Reminders
-                </Link>
-              ) : null}
-              <Link href="/admin/lab" onClick={() => setMoreOpen(false)} className="flex min-h-24 flex-col justify-between rounded-2xl bg-violet-50 p-4 font-bold text-violet-900">
-                <FlaskConical size={25} />
-                Lab desk
-              </Link>
-              <Link href="/admin/app" onClick={() => setMoreOpen(false)} className="flex min-h-24 flex-col justify-between rounded-2xl bg-slate-100 p-4 font-bold text-[#233A59]">
-                <Smartphone size={25} />
-                Mobile app
-              </Link>
-              {role === "admin" ? (
-                <Link href="/admin/settings" onClick={() => setMoreOpen(false)} className="flex min-h-24 flex-col justify-between rounded-2xl bg-orange-50 p-4 font-bold text-orange-900">
-                  <Settings2 size={25} />
-                  Settings
-                </Link>
-              ) : null}
+            <div className="mt-5 space-y-5">
+              {STAFF_TOOL_GROUPS.map((group) => {
+                const tools = groupedNavigation[group].filter((tool) => !primaryIds.has(tool.id));
+                if (!tools.length) return null;
+                return (
+                  <section key={group} aria-labelledby={"mobile-tool-group-" + group}>
+                    <p id={"mobile-tool-group-" + group} className="mb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                      {STAFF_TOOL_GROUP_LABELS[group]}
+                    </p>
+                    <div className="grid grid-cols-2 gap-2.5">
+                      {tools.map((tool) => {
+                        const Icon = STAFF_TOOL_ICONS[tool.icon];
+                        const active = toolIsActive(pathname, tool.href);
+                        return (
+                          <Link
+                            key={tool.id}
+                            href={tool.href}
+                            prefetch={false}
+                            onClick={() => setMoreOpen(false)}
+                            aria-current={active ? "page" : undefined}
+                            className={
+                              "flex min-h-20 flex-col justify-between rounded-2xl p-3.5 font-bold ring-1 transition active:scale-[0.98] " +
+                              STAFF_TOOL_GROUP_TONES[group] +
+                              (active ? " ring-[#A8864A]" : " ring-black/5")
+                            }
+                          >
+                            <Icon aria-hidden="true" size={22} />
+                            <span className="mt-3 text-sm leading-5">{tool.label}</span>
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  </section>
+                );
+              })}
             </div>
 
-            <div className="mt-4"><InstallAppButton wide /></div>
+            <div className="mt-5"><InstallAppButton wide /></div>
             <button type="button" onClick={onLock} className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 text-sm font-bold text-red-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-700">
               <LockKeyhole aria-hidden="true" size={18} />
               Lock app securely

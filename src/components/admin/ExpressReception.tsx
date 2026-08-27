@@ -340,13 +340,13 @@ export default function ExpressReception() {
           <div>
             <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-[#f0d69e]"><Sparkles size={16} />60-second front desk</p>
             <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">Express Reception</h1>
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-white/75 sm:text-base">Find or register the patient, confirm the consultation, then collect payment and print—all without changing pages.</p>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-white/75 sm:text-base">Find or register the patient, confirm the consultation, then record the amount collected and print—all without changing pages.</p>
           </div>
           <div className="grid grid-cols-3 gap-2" aria-label="Reception workflow progress">
             {([
               ["identify", "1", "Patient"],
               ["review", "2", "Review"],
-              ["payment", "3", "Payment"],
+              ["payment", "3", "Collection"],
             ] as const).map(([key, number, label]) => {
               const active = stage === key;
               const complete = (stage === "review" && key === "identify") || (stage === "payment" && key !== "payment");
@@ -432,7 +432,7 @@ export default function ExpressReception() {
 
       {stage === "payment" && result ? (
         <section className="rounded-[28px] bg-white p-5 shadow-sm ring-1 ring-slate-200 sm:p-7">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.15em] text-[#A8864A]">Step 3</p><h2 className="mt-1 text-xl font-bold text-[#233A59]">Collect payment and print</h2><p className="mt-1 text-sm text-slate-500">The patient and invoice are saved. Documents unlock after server-confirmed payment.</p></div><button type="button" onClick={resetWorkflow} className="min-h-11 rounded-xl border border-slate-200 px-4 text-sm font-bold text-[#233A59]">Start next patient</button></div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.15em] text-[#A8864A]">Step 3</p><h2 className="mt-1 text-xl font-bold text-[#233A59]">Record manual collection and print</h2><p className="mt-1 text-sm text-slate-500">The patient and invoice are saved. Confirm cash, external UPI, card/POS, or bank collection to unlock the documents.</p></div><button type="button" onClick={resetWorkflow} className="min-h-11 rounded-xl border border-slate-200 px-4 text-sm font-bold text-[#233A59]">Start next patient</button></div>
           <div className="mt-5 flex flex-col gap-3 rounded-2xl border border-cyan-200 bg-cyan-50 p-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="flex items-center gap-2 font-bold text-cyan-950"><CheckCircle2 size={18} />Patient checked in</p>
@@ -444,7 +444,6 @@ export default function ExpressReception() {
             </div>
           </div>
           <ReceptionPayment key={result.invoice.id} patient={result.patient} invoice={result.invoice} consultationLabel={result.consultationLabel} />
-          <p className="mt-4 text-center text-xs text-slate-500">For cash, card, or manual UPI entry, open <Link href="/admin/billing" className="font-bold text-[#233A59] underline">Billing</Link> and select this invoice.</p>
         </section>
       ) : null}
     </div>

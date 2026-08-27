@@ -82,7 +82,7 @@ export function PwaRegister() {
       navigator.serviceWorker.addEventListener("controllerchange", onControllerChange);
 
       const workerUrl = appContext === "staff"
-        ? "/staff-v2-sw.js?v=asher-staff-20260802-3"
+        ? "/staff-v2-sw.js?v=asher-staff-20260827-1"
         : "/sw.js?v=asher-public-20260825-1";
       const workerScope = appContext === "staff" ? "/admin" : "/";
 

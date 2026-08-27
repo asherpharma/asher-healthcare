@@ -1,45 +1,31 @@
 "use client";
 
-import StaffGuard, { type StaffRole, useStaff } from "@/components/admin/StaffGuard";
+import StaffGuard, { useStaff } from "@/components/admin/StaffGuard";
 import MobileStaffNav from "@/components/admin/MobileStaffNav";
 import StaffCommandCenter from "@/components/admin/StaffCommandCenter";
 import StaffSessionProtection, { type StaffLockReason } from "@/components/admin/StaffSessionProtection";
+import { STAFF_TOOL_GROUP_LABELS, STAFF_TOOL_ICONS } from "@/components/admin/staff-tool-ui";
 import { InstallAppButton, NetworkStatus } from "@/components/pwa/PwaRegister";
 import { firebaseAuth } from "@/firebase/config";
-import { BellRing, CalendarDays, ClipboardPlus, FlaskConical, HeartHandshake, LayoutDashboard, ListTodo, LockKeyhole, ReceiptIndianRupee, Settings2, Smartphone, Stethoscope, UserRoundCog, UsersRound, type LucideIcon } from "lucide-react";
+import {
+  STAFF_TOOL_GROUPS,
+  groupedStaffToolsForRole,
+  primaryStaffToolsForRole,
+} from "@/lib/staff-navigation";
+import { LockKeyhole, Stethoscope } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-
-type NavigationItem = {
-  href: string;
-  label: string;
-  icon: LucideIcon;
-  adminOnly?: boolean;
-  roles?: StaffRole[];
-};
-
-const navigation: NavigationItem[] = [
-  { href: "/admin", label: "Dashboard", icon: LayoutDashboard, adminOnly: true },
-  { href: "/admin/reception", label: "Express reception", icon: ClipboardPlus, roles: ["admin", "reception"] },
-  { href: "/admin/appointments", label: "Appointments", icon: CalendarDays },
-  { href: "/admin/consultations", label: "Consultations", icon: Stethoscope, roles: ["admin", "doctor"] },
-  { href: "/admin/patients", label: "Patients", icon: UsersRound },
-  { href: "/admin/tasks", label: "Tasks & follow-ups", icon: ListTodo },
-  { href: "/admin/communications", label: "Reminders & recalls", icon: BellRing, roles: ["admin", "reception"] },
-  { href: "/admin/billing", label: "Billing", icon: ReceiptIndianRupee, roles: ["admin", "reception"] },
-  { href: "/admin/lab", label: "Lab", icon: FlaskConical },
-  { href: "/admin/staff", label: "Staff access", icon: UserRoundCog, adminOnly: true },
-  { href: "/admin/patient-access", label: "Family portal access", icon: HeartHandshake, adminOnly: true },
-  { href: "/admin/app", label: "Mobile app", icon: Smartphone },
-  { href: "/admin/settings", label: "Settings", icon: Settings2, adminOnly: true },
-];
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 
 function StaffChrome({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { profile } = useStaff();
+  const groupedNavigation = useMemo(
+    () => groupedStaffToolsForRole(profile.role),
+    [profile.role],
+  );
 
   useEffect(() => {
     const connection = (navigator as Navigator & {
@@ -47,16 +33,18 @@ function StaffChrome({ children }: { children: ReactNode }) {
     }).connection;
     if (connection?.saveData || connection?.effectiveType === "slow-2g" || connection?.effectiveType === "2g") return;
 
-    const priorityRoute = profile.role === "doctor"
-      ? "/admin/consultations"
-      : "/admin/appointments";
+    const priorityRoutes = primaryStaffToolsForRole(profile.role)
+      .slice(0, 2)
+      .map((tool) => tool.href);
     const idleWindow = window as Window & {
       requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
       cancelIdleCallback?: (handle: number) => void;
     };
     let timeout: number | undefined;
     let idleHandle: number | undefined;
-    const prefetch = () => router.prefetch(priorityRoute);
+    const prefetch = () => {
+      for (const route of priorityRoutes) router.prefetch(route);
+    };
 
     if (idleWindow.requestIdleCallback) {
       idleHandle = idleWindow.requestIdleCallback(prefetch, { timeout: 2500 });
@@ -82,7 +70,7 @@ function StaffChrome({ children }: { children: ReactNode }) {
   }, [router]);
 
   return (
-    <div data-app-version="mobile-v2" className="staff-app-shell min-h-dvh bg-slate-50 text-slate-950">
+    <div data-app-version="ease-v3" className="staff-app-shell min-h-dvh bg-slate-50 text-slate-950">
       <header className="staff-app-header sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur-xl">
         <div className="staff-app-header-inner mx-auto flex max-w-[1440px] items-center justify-between gap-2 px-3 py-2.5 xl:gap-3 xl:px-8 xl:py-4">
           <Link href="/admin" className="flex min-w-0 items-center gap-2.5 xl:gap-3">
@@ -95,7 +83,7 @@ function StaffChrome({ children }: { children: ReactNode }) {
               role={profile.role}
             />
             <NetworkStatus />
-            <span className="staff-role-chip rounded-full bg-[#233A59] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white xl:hidden">V2 {profile.role}</span>
+            <span className="staff-role-chip rounded-full bg-[#233A59] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white xl:hidden">{profile.role}</span>
             <div className="hidden xl:block"><InstallAppButton compact /></div>
             <div className="hidden text-right xl:block"><p className="text-sm font-bold text-[#233A59]">{profile.displayName}</p><p className="text-xs capitalize text-slate-500">{profile.role}</p></div>
             <button onClick={() => void lockApp("manual")} className="hidden items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#233A59] xl:inline-flex"><LockKeyhole aria-hidden="true" size={16} />Lock app</button>
@@ -106,14 +94,36 @@ function StaffChrome({ children }: { children: ReactNode }) {
       <div className="staff-app-layout mx-auto grid w-full max-w-[1440px] gap-5 px-3 py-4 pb-28 sm:px-5 xl:grid-cols-[230px_minmax(0,1fr)] xl:gap-6 xl:px-8 xl:py-8 xl:pb-8">
         <aside className="staff-desktop-sidebar hidden rounded-2xl bg-[#233A59] p-3 text-white xl:block xl:min-h-[calc(100vh-8.5rem)]">
           <div className="flex items-center gap-2 px-3 py-3 text-xs font-bold uppercase tracking-[0.16em] text-white/60"><Stethoscope size={15} />Staff menu</div>
-          <nav className="grid grid-cols-1 gap-2">
-            {navigation.filter((item) =>
-              (!item.adminOnly || profile.role === "admin")
-              && (!item.roles || item.roles.includes(profile.role)),
-            ).map((item) => {
-              const Icon = item.icon;
-              const active = item.href === "/admin" ? pathname === item.href : pathname.startsWith(item.href);
-              return <Link key={item.href} href={item.href} style={active ? { color: "#233A59" } : undefined} className={"flex items-center gap-2 rounded-xl px-3 py-3 text-sm font-bold transition " + (active ? "bg-white" : "text-white/80 hover:bg-white/10 hover:text-white")}><Icon size={18} />{item.label}</Link>;
+          <nav className="space-y-3" aria-label="Staff workspace">
+            {STAFF_TOOL_GROUPS.map((group) => {
+              const tools = groupedNavigation[group];
+              if (!tools.length) return null;
+              return (
+                <section key={group} aria-labelledby={`staff-nav-${group}`}>
+                  <p id={`staff-nav-${group}`} className="px-3 pb-1 text-[10px] font-bold uppercase tracking-[0.14em] text-white/45">
+                    {STAFF_TOOL_GROUP_LABELS[group]}
+                  </p>
+                  <div className="grid gap-1">
+                    {tools.map((tool) => {
+                      const Icon = STAFF_TOOL_ICONS[tool.icon];
+                      const active = tool.href === "/admin" ? pathname === tool.href : pathname.startsWith(tool.href);
+                      return (
+                        <Link
+                          key={tool.id}
+                          href={tool.href}
+                          prefetch={false}
+                          aria-current={active ? "page" : undefined}
+                          style={active ? { color: "#233A59" } : undefined}
+                          className={"flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-bold transition " + (active ? "bg-white" : "text-white/80 hover:bg-white/10 hover:text-white")}
+                        >
+                          <Icon aria-hidden="true" size={18} />
+                          {tool.label}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </section>
+              );
             })}
           </nav>
         </aside>

@@ -1,4 +1,4 @@
-const STAFF_APP_RELEASE = "2026.08.02.3-recovery";
+const STAFF_APP_RELEASE = "2026.08.27.1-ease-manual";
 
 self.addEventListener("install", () => {
   self.skipWaiting();
