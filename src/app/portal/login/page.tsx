@@ -3,8 +3,8 @@
 
 import PatientPortalPwa from "@/components/portal/PatientPortalPwa";
 import { isFirebaseConfigured, patientFirebaseAuth } from "@/firebase/config";
-import { onAuthStateChanged, signInWithEmailAndPassword, type User } from "firebase/auth";
-import { ArrowLeft, Eye, EyeOff, HeartHandshake, LoaderCircle, LockKeyhole, ShieldCheck } from "lucide-react";
+import { onAuthStateChanged, sendPasswordResetEmail, signInWithEmailAndPassword, type User } from "firebase/auth";
+import { ArrowLeft, Eye, EyeOff, HeartHandshake, KeyRound, LoaderCircle, LockKeyhole, Mail, ShieldCheck } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -16,6 +16,9 @@ export default function PatientPortalLoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [resetNotice, setResetNotice] = useState("");
   const claimingUid = useRef("");
 
   const activatePortal = useCallback(async (user: User) => {
@@ -74,6 +77,26 @@ export default function PatientPortalLoginPage() {
     }
   }
 
+  async function requestPasswordReset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const auth = patientFirebaseAuth;
+    const approvedEmail = email.trim().toLowerCase();
+    if (!auth || !approvedEmail) return;
+    setResetting(true);
+    setResetNotice("");
+    try {
+      await sendPasswordResetEmail(auth, approvedEmail, {
+        url: "https://asherhealthcare.in/portal/login?passwordReset=1",
+        handleCodeInApp: false,
+      });
+    } catch {
+      // Always return the same response so this screen cannot reveal portal accounts.
+    } finally {
+      setResetNotice("If an approved family portal account matches this email, a secure password-reset link has been sent.");
+      setResetting(false);
+    }
+  }
+
   return (
     <main id="main-content" className="min-h-dvh bg-[radial-gradient(circle_at_top_right,#eaf4f6_0,transparent_38%),linear-gradient(180deg,#f8fafc,#eef3f7)] px-4 py-6 sm:px-6 sm:py-12">
       <div className="mx-auto max-w-lg">
@@ -95,13 +118,34 @@ export default function PatientPortalLoginPage() {
                     </button>
                   </span>
                 </label>
-                <div className="flex justify-end">
-                  <a href="tel:+919019263709" className="inline-flex min-h-11 items-center justify-center rounded-xl px-2 text-sm font-bold text-[#233A59] underline-offset-4 hover:underline">Forgot password? Call reception</a>
-                </div>
                 {message ? <div role="alert" className="rounded-xl bg-amber-50 p-3 text-sm font-semibold leading-6 text-amber-900"><p className="break-words">{message}</p><Link href="/admin/login" className="mt-3 inline-flex min-h-11 items-center rounded-lg bg-white px-3 text-[#233A59] shadow-sm ring-1 ring-amber-200">Open Staff Login</Link></div> : null}
                 <button disabled={loading} className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#A8864A] px-5 text-sm font-bold text-white disabled:opacity-60">{loading ? <LoaderCircle aria-hidden="true" className="animate-spin" size={18} /> : <LockKeyhole aria-hidden="true" size={18} />}{loading ? "Verifying access…" : "Sign in securely"}</button>
               </form>
             )}
+            {isFirebaseConfigured ? (
+              <div className="mt-5 border-t border-slate-200 pt-5">
+                {!resetOpen ? (
+                  <button type="button" onClick={() => { setResetOpen(true); setResetNotice(""); }} className="inline-flex min-h-11 items-center gap-2 text-sm font-bold text-[#233A59] hover:text-[#A8864A]">
+                    <KeyRound aria-hidden="true" size={17} />Forgot your password?
+                  </button>
+                ) : (
+                  <form onSubmit={requestPasswordReset} className="rounded-2xl bg-slate-50 p-4" aria-busy={resetting}>
+                    <div className="flex items-start gap-3">
+                      <Mail aria-hidden="true" className="mt-0.5 shrink-0 text-[#A8864A]" size={20} />
+                      <div><h2 className="font-bold text-[#233A59]">Reset your password</h2><p className="mt-1 text-sm leading-6 text-slate-600">We&apos;ll email a secure reset link if this address has approved family portal access.</p></div>
+                    </div>
+                    <label className="mt-4 block text-sm font-bold text-slate-700">Approved email address
+                      <input type="email" autoComplete="email" inputMode="email" autoCapitalize="none" spellCheck={false} value={email} onChange={(event) => { setEmail(event.target.value); setResetNotice(""); }} required className="mt-2 min-h-12 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-base outline-none focus:border-[#233A59] focus:ring-2 focus:ring-[#233A59]/10" />
+                    </label>
+                    {resetNotice ? <p role="status" aria-live="polite" className="mt-3 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-semibold leading-6 text-emerald-800">{resetNotice}</p> : null}
+                    <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                      <button type="submit" disabled={resetting} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-[#A8864A] px-4 text-sm font-bold text-white disabled:opacity-60">{resetting ? <LoaderCircle aria-hidden="true" className="animate-spin" size={17} /> : <Mail aria-hidden="true" size={17} />}{resetting ? "Sending…" : "Send reset link"}</button>
+                      <button type="button" onClick={() => { setResetOpen(false); setResetNotice(""); }} className="min-h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700">Back to sign in</button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            ) : null}
             {isFirebaseConfigured ? <p className="mt-5 border-t border-slate-200 pt-5 text-sm leading-6 text-slate-600">Need help signing in? Call reception at <a className="font-bold text-[#233A59]" href="tel:+919019263709">+91 90192 63709</a>. A clinic administrator will verify your identity and assist manually.</p> : null}
             <p className="mt-6 flex items-start gap-2 text-xs leading-5 text-slate-500"><ShieldCheck className="mt-0.5 shrink-0" size={16} />This session remains only until this browser is closed. Use a private device and sign out when finished.</p>
           </div>

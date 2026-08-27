@@ -53,6 +53,53 @@ export function doctorCanEditPatient(actor, patient) {
   return Boolean(actorDoctor && assignedDoctor && actorDoctor.id === assignedDoctor.id);
 }
 
+/** Role-scoped detail projection for opening one explicitly selected chart.
+ * Reception receives demographics needed for front-desk correction but never
+ * clinical background. Missing, archived, and unassigned charts are handled
+ * by the caller with the same unavailable response.
+ */
+export function patientProfileReadForStaff(patientId, patient, actor) {
+  if (!patient || !actor || !["admin", "reception", "doctor"].includes(actor.role)) {
+    throw new HttpError(404, "This patient record is unavailable.");
+  }
+  if (patient.archived === true && actor.role !== "admin") {
+    throw new HttpError(404, "This patient record is unavailable.");
+  }
+  if (actor.role === "doctor" && !doctorCanEditPatient(actor, patient)) {
+    throw new HttpError(404, "This patient record is unavailable.");
+  }
+
+  const result = {
+    id: patientId,
+    patientNumber: String(patient.patientNumber || patientId),
+    fullName: String(patient.fullName || "Patient"),
+    phone: String(patient.phone || ""),
+    dateOfBirth: String(patient.dateOfBirth || ""),
+    gender: String(patient.gender || ""),
+    doctorId: String(patient.doctorId || ""),
+    doctorName: String(patient.doctorName || ""),
+    caseType: String(patient.caseType || ""),
+    specialty: String(patient.specialty || ""),
+    consultationFee: Number(patient.consultationFee || 0),
+    address: String(patient.address || ""),
+  };
+  if (actor.role === "reception") return result;
+
+  const clinical = {
+    ...result,
+    allergies: String(patient.allergies || ""),
+    medicalHistory: String(patient.medicalHistory || ""),
+  };
+  if (actor.role !== "admin") return clinical;
+  return {
+    ...clinical,
+    archived: patient.archived === true,
+    archivedAt: String(patient.archivedAt || ""),
+    archivedBy: String(patient.archivedBy || ""),
+    archiveReason: String(patient.archiveReason || ""),
+  };
+}
+
 export function canonicalPatientIdentity(patient) {
   const normalizedName = normalizeReceptionName(patient?.fullName);
   const normalizedPhone = normalizeReceptionPhone(patient?.phone);

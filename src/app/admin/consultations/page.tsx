@@ -7,7 +7,12 @@ import {
   consumeAdminNavigationHandoff,
   type AdminNavigationHandoff,
 } from "@/lib/admin-navigation-handoff";
-import { fetchPatientDirectory } from "@/lib/patient-directory";
+import {
+  fetchPatientDirectoryPage,
+  resolvePatientDirectoryEntries,
+  searchPatientDirectory,
+} from "@/lib/patient-directory";
+import { patientSearchReady } from "@/lib/patient-search-readiness";
 import type { PrescriptionPdfRecord } from "@/lib/prescription-pdf";
 import {
   appointmentStatusLabel,
@@ -22,7 +27,6 @@ import {
 import {
   collection,
   doc,
-  getDoc,
   limit,
   onSnapshot,
   orderBy,
@@ -35,6 +39,7 @@ import {
 import {
   Activity,
   AlertCircle,
+  ArrowLeft,
   ArrowRight,
   CalendarCheck2,
   Check,
@@ -164,6 +169,7 @@ type ConsultationDraft = {
 };
 
 type DraftStatus = "idle" | "loading" | "clean" | "dirty" | "saving" | "saved" | "error";
+type MobileDoctorView = "queue" | "consultation";
 
 type QueueEntry = {
   id: string;
@@ -205,6 +211,7 @@ const COMMON_TESTS = [
 const inputClass = "mt-2 w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-[#233A59] focus:ring-2 focus:ring-[#233A59]/10";
 const labelClass = "text-sm font-bold text-slate-700";
 const cardClass = "rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200 sm:p-6";
+const PATIENT_RESOLUTION_BATCH_SIZE = 50;
 
 function clinicDate(value = new Date()) {
   const parts = new Intl.DateTimeFormat("en-GB", {
@@ -428,10 +435,17 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [patientsLoaded, setPatientsLoaded] = useState(false);
   const [appointmentsLoaded, setAppointmentsLoaded] = useState(false);
+  const [patientResolutionRevision, setPatientResolutionRevision] = useState(0);
   const [selectedDate, setSelectedDate] = useState(today);
   const [doctorFilter, setDoctorFilter] = useState<"all" | DoctorName>(profileDoctor || "all");
+  const [mobileWorkspaceView, setMobileWorkspaceView] = useState<MobileDoctorView>("queue");
   const [search, setSearch] = useState("");
+  const [patientSearchResults, setPatientSearchResults] = useState<Patient[]>([]);
+  const [patientSearchLoading, setPatientSearchLoading] = useState(false);
+  const [patientSearchNotice, setPatientSearchNotice] = useState("");
   const [linkSearch, setLinkSearch] = useState("");
+  const [linkSearchResults, setLinkSearchResults] = useState<Patient[]>([]);
+  const [linkSearchLoading, setLinkSearchLoading] = useState(false);
   const [linkingAppointmentId, setLinkingAppointmentId] = useState("");
   const [selectedPatientId, setSelectedPatientId] = useState("");
   const [selectedAppointmentId, setSelectedAppointmentId] = useState("");
@@ -457,6 +471,11 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
     Extract<AdminNavigationHandoff, { destination: "/admin/consultations" }> | null
   >(null);
   const requestedPatientRecords = useRef(new Set<string>());
+  const unavailablePatientRecords = useRef(new Set<string>());
+  const patientSearchSequenceRef = useRef(0);
+  const linkSearchSequenceRef = useRef(0);
+  const queueWorkspaceRef = useRef<HTMLElement>(null);
+  const consultationWorkspaceRef = useRef<HTMLElement>(null);
   const consultationFormRef = useRef<HTMLFormElement>(null);
   const draftAutosaveTimerRef = useRef<number | null>(null);
   const draftExistsRef = useRef(false);
@@ -467,21 +486,44 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   const draftRestoreEpochRef = useRef(0);
 
   useEffect(() => {
+    let active = true;
     const consumeConsultationHandoff = () => {
       const handoff = consumeAdminNavigationHandoff("/admin/consultations");
-      if (handoff) setNavigationHandoff(handoff);
+      if (!handoff) return;
+      if (handoff.intent !== "open-patient-consultation") {
+        setNavigationHandoff(handoff);
+        return;
+      }
+      void resolvePatientDirectoryEntries(user, handoff.patientId)
+        .then((result) => {
+          if (!active) return;
+          const patient = result.patients.find((candidate) => candidate.id === handoff.patientId) as Patient | undefined;
+          if (!patient || !isActivePatient(patient)) {
+            setError("This patient chart is archived or unavailable. Restore it before starting a consultation.");
+            return;
+          }
+          setPatients((current) => [patient, ...current.filter((candidate) => candidate.id !== patient.id)]);
+          setNavigationHandoff(handoff);
+        })
+        .catch((handoffError) => {
+          console.error("Consultation handoff could not be verified", handoffError);
+          if (active) setError("This patient chart could not be securely verified. Refresh and try again.");
+        });
     };
     window.addEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumeConsultationHandoff);
     consumeConsultationHandoff();
-    return () => window.removeEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumeConsultationHandoff);
-  }, []);
+    return () => {
+      active = false;
+      window.removeEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumeConsultationHandoff);
+    };
+  }, [user]);
 
   useEffect(() => {
     let active = true;
-    void fetchPatientDirectory(user)
+    void fetchPatientDirectoryPage(user, { pageSize: 25 })
       .then((directory) => {
         if (!active) return;
-        setPatients((directory as Patient[]).filter(isActivePatient));
+        setPatients((directory.patients as Patient[]).filter(isActivePatient));
         setPatientsLoaded(true);
       })
       .catch((loadError) => {
@@ -494,6 +536,55 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       active = false;
     };
   }, [user]);
+
+  useEffect(() => {
+    const term = search.trim();
+    const sequence = ++patientSearchSequenceRef.current;
+    if (!term || !patientSearchReady(term)) return;
+    const timer = window.setTimeout(() => {
+      setPatientSearchLoading(true);
+      setPatientSearchNotice("");
+      void searchPatientDirectory(user, term, { pageSize: 12 })
+        .then((result) => {
+          if (sequence !== patientSearchSequenceRef.current) return;
+          setPatientSearchResults(result.patients as Patient[]);
+          setPatientSearchNotice(result.patients.length === 0 ? "No active patient found." : "");
+        })
+        .catch((searchError) => {
+          if (sequence !== patientSearchSequenceRef.current) return;
+          setPatientSearchResults([]);
+          setPatientSearchNotice(searchError instanceof Error
+            ? searchError.message
+            : "Patient search is temporarily unavailable.");
+        })
+        .finally(() => {
+          if (sequence === patientSearchSequenceRef.current) setPatientSearchLoading(false);
+        });
+    }, 260);
+    return () => window.clearTimeout(timer);
+  }, [search, user]);
+
+  useEffect(() => {
+    const term = linkSearch.trim();
+    const sequence = ++linkSearchSequenceRef.current;
+    if (!term || !patientSearchReady(term)) return;
+    const timer = window.setTimeout(() => {
+      setLinkSearchLoading(true);
+      void searchPatientDirectory(user, term, { pageSize: 12 })
+        .then((result) => {
+          if (sequence !== linkSearchSequenceRef.current) return;
+          setLinkSearchResults(result.patients as Patient[]);
+        })
+        .catch((searchError) => {
+          console.error("Appointment patient search failed", searchError);
+          if (sequence === linkSearchSequenceRef.current) setLinkSearchResults([]);
+        })
+        .finally(() => {
+          if (sequence === linkSearchSequenceRef.current) setLinkSearchLoading(false);
+        });
+    }, 260);
+    return () => window.clearTimeout(timer);
+  }, [linkSearch, user]);
 
   useEffect(() => {
     const canonicalDoctorId = doctorIdForName(profileDoctor);
@@ -513,6 +604,8 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
     const stopAppointments = onSnapshot(
       appointmentsQuery,
       (snapshot) => {
+        requestedPatientRecords.current.clear();
+        unavailablePatientRecords.current.clear();
         setAppointments(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Appointment));
         setAppointmentsLoaded(true);
       },
@@ -526,7 +619,6 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   }, [db, profile.role, profileDoctor, selectedDate]);
 
   useEffect(() => {
-    if (profile.role !== "admin") return;
     const loadedIds = new Set(patients.map((patient) => patient.id));
     const missingIds = Array.from(new Set(
       appointments.map((appointment) => appointment.patientId).filter((value): value is string => Boolean(value)),
@@ -535,30 +627,44 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
 
     missingIds.forEach((patientId) => requestedPatientRecords.current.add(patientId));
     let active = true;
-    void Promise.all(missingIds.map(async (patientId) => {
-      const snapshot = await getDoc(doc(db, "patients", patientId));
-      if (!snapshot.exists()) return null;
-      const patient = { id: snapshot.id, ...snapshot.data() } as Patient;
-      return isActivePatient(patient) ? patient : null;
-    }))
-      .then((records) => {
+    const batches = Array.from(
+      { length: Math.ceil(missingIds.length / PATIENT_RESOLUTION_BATCH_SIZE) },
+      (_, index) => missingIds.slice(
+        index * PATIENT_RESOLUTION_BATCH_SIZE,
+        (index + 1) * PATIENT_RESOLUTION_BATCH_SIZE,
+      ),
+    );
+    void Promise.all(batches.map((batch) => resolvePatientDirectoryEntries(user, batch)))
+      .then((results) => {
         if (!active) return;
+        const records = results.flatMap((result) => result.patients as Patient[]);
+        results.forEach((result) => result.unavailableIds.forEach((patientId) => {
+          unavailablePatientRecords.current.add(patientId);
+        }));
         setPatients((current) => {
           const merged = new Map(current.map((patient) => [patient.id, patient]));
           records.forEach((patient) => {
-            if (patient) merged.set(patient.id, patient);
+            if (isActivePatient(patient)) merged.set(patient.id, patient);
           });
           return Array.from(merged.values());
         });
+        setPatientResolutionRevision((revision) => revision + 1);
       })
       .catch((loadError) => {
         console.error("Linked patient records could not be loaded", loadError);
+        if (!active) return;
+        missingIds.forEach((patientId) => {
+          requestedPatientRecords.current.delete(patientId);
+          unavailablePatientRecords.current.add(patientId);
+        });
+        setPatientResolutionRevision((revision) => revision + 1);
+        setError("Linked patient charts could not be verified. Queue actions are paused until you refresh.");
       });
 
     return () => {
       active = false;
     };
-  }, [appointments, db, patients, profile.role]);
+  }, [appointments, patients, user]);
 
   useEffect(() => {
     if (!patientsLoaded || !appointmentsLoaded || !navigationHandoff) return;
@@ -575,6 +681,13 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
     const requestedPatient = requestedPatientId
       ? patients.find((patient) => patient.id === requestedPatientId && isActivePatient(patient))
       : undefined;
+    const explicitAppointmentPatientId = deepLinkedAppointment?.patientId || "";
+    if (
+      explicitAppointmentPatientId
+      && !patients.some((patient) => patient.id === explicitAppointmentPatientId && isActivePatient(patient))
+      && requestedPatientRecords.current.has(explicitAppointmentPatientId)
+      && !unavailablePatientRecords.current.has(explicitAppointmentPatientId)
+    ) return;
     const resolution = deepLinkedAppointment
       ? resolveAppointmentPatient(deepLinkedAppointment, patients)
       : undefined;
@@ -591,8 +704,12 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       }
       if (!matchedPatient) {
         if (deepLinkedAppointment) {
+          const initialLinkSearch = deepLinkedAppointment.patientName || deepLinkedAppointment.phone || "";
+          ++linkSearchSequenceRef.current;
           setLinkingAppointmentId(deepLinkedAppointment.id);
-          setLinkSearch(deepLinkedAppointment.patientName || deepLinkedAppointment.phone || "");
+          setLinkSearch(initialLinkSearch);
+          setLinkSearchResults([]);
+          setLinkSearchLoading(patientSearchReady(initialLinkSearch));
           setError(
             resolution?.status === "ambiguous"
               ? "This family phone number is used by more than one patient. Confirm the correct patient chart before starting."
@@ -624,7 +741,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       setError("");
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [appointments, appointmentsLoaded, navigationHandoff, patients, patientsLoaded, profileDoctor]);
+  }, [appointments, appointmentsLoaded, navigationHandoff, patientResolutionRevision, patients, patientsLoaded, profileDoctor]);
 
   useEffect(() => {
     if (!selectedPatientId) return;
@@ -738,6 +855,28 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
     () => appointments.find((appointment) => appointment.id === selectedAppointmentId) ?? null,
     [appointments, selectedAppointmentId],
   );
+
+  useEffect(() => {
+    if (!selectedPatientId) return;
+
+    let focusFrame = 0;
+    const revealFrame = window.requestAnimationFrame(() => {
+      setMobileWorkspaceView("consultation");
+      focusFrame = window.requestAnimationFrame(() => {
+        if (!window.matchMedia("(max-width: 1279px)").matches) return;
+        const workspace = consultationWorkspaceRef.current;
+        if (!workspace) return;
+        const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        workspace.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+        workspace.focus({ preventScroll: true });
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(revealFrame);
+      if (focusFrame) window.cancelAnimationFrame(focusFrame);
+    };
+  }, [selectedAppointmentId, selectedPatientId]);
 
   function markDraftDirty() {
     if (draftCompletionRef.current || !selectedPatientId) return;
@@ -991,14 +1130,13 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   }, [draftStatus]);
 
   const visiblePatients = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return patients
+    const source = search.trim() ? patientSearchResults : patients;
+    return source
       .filter(isActivePatient)
       .filter((patient) => patientIsAssignedToDoctor(patient, profileDoctor))
       .filter((patient) => doctorFilter === "all" || patient.doctorName === doctorFilter)
-      .filter((patient) => !term || [patient.fullName, patient.phone, patient.patientNumber].some((value) => String(value || "").toLowerCase().includes(term)))
       .slice(0, 12);
-  }, [doctorFilter, patients, profileDoctor, search]);
+  }, [doctorFilter, patientSearchResults, patients, profileDoctor, search]);
 
   const queue = useMemo(() => {
     const entries: QueueEntry[] = appointments
@@ -1066,16 +1204,14 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
     const exactPhoneMatches = appointmentPhone
       ? patients.filter((patient) => isActivePatient(patient) && normalisePhone(patient.phone) === appointmentPhone)
       : [];
-    const term = linkSearch.trim().toLowerCase();
-    const matches = term
-      ? patients.filter((patient) => isActivePatient(patient) && [patient.fullName, patient.phone, patient.patientNumber]
-        .some((value) => String(value || "").toLowerCase().includes(term)))
+    const matches = linkSearch.trim()
+      ? linkSearchResults.filter(isActivePatient)
       : exactPhoneMatches;
     const exactIds = new Set(exactPhoneMatches.map((patient) => patient.id));
     return Array.from(new Map([...exactPhoneMatches, ...matches].map((patient) => [patient.id, patient])).values())
       .sort((left, right) => Number(exactIds.has(right.id)) - Number(exactIds.has(left.id)))
       .slice(0, 10);
-  }, [linkSearch, linkingEntry, patients]);
+  }, [linkSearch, linkSearchResults, linkingEntry, patients]);
 
   const queueCounts = useMemo(() => ({
     total: queue.length,
@@ -1084,60 +1220,124 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
     completed: queue.filter((entry) => entry.status === "completed").length,
   }), [queue]);
 
-  function appointmentSelectionError(appointment: Appointment, patientId: string, explicitlyConfirmed: boolean) {
+  const selectedQueueEntry = useMemo(
+    () => queue.find((entry) => (
+      selectedAppointmentId
+        ? entry.appointmentId === selectedAppointmentId
+        : Boolean(selectedPatientId && entry.patientId === selectedPatientId)
+    )) ?? null,
+    [queue, selectedAppointmentId, selectedPatientId],
+  );
+
+  function showMobileWorkspace(view: MobileDoctorView) {
+    setMobileWorkspaceView(view);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (!window.matchMedia("(max-width: 1279px)").matches) return;
+        const workspace = view === "queue" ? queueWorkspaceRef.current : consultationWorkspaceRef.current;
+        if (!workspace) return;
+        const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        workspace.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+        if (view === "consultation") workspace.focus({ preventScroll: true });
+      });
+    });
+  }
+
+  function showConsultationSection(sectionId: string) {
+    setMobileWorkspaceView("consultation");
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const section = document.getElementById(sectionId);
+        if (!section) return;
+        const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        section.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+      });
+    });
+  }
+
+  function appointmentSelectionError(
+    appointment: Appointment,
+    patientId: string,
+    explicitlyConfirmed: boolean,
+    availablePatients: Patient[] = patients,
+  ) {
     if (!doctorCanOpenAppointment(profileDoctor, appointment)) {
       return `This appointment belongs to ${doctorFromAppointment(appointment.doctorId)} and cannot be opened from this doctor's workspace.`;
     }
     if (appointment.patientId && appointment.patientId !== patientId) {
       return "This appointment is already linked to a different patient chart. Refresh the queue before continuing.";
     }
-    if (!patients.some((patient) => patient.id === patientId && isActivePatient(patient))) {
+    if (!availablePatients.some((patient) => patient.id === patientId && isActivePatient(patient))) {
       return "This patient chart is archived or unavailable. Restore it before starting a consultation.";
     }
-    const resolution = resolveAppointmentPatient(appointment, patients);
+    const resolution = resolveAppointmentPatient(appointment, availablePatients);
     if (!explicitlyConfirmed && resolution.patient?.id !== patientId) {
       return "Confirm the correct patient chart before starting this consultation.";
     }
     return "";
   }
 
-  async function beginAppointmentConsultation(entry: QueueEntry, confirmedPatientId = "") {
+  async function beginAppointmentConsultation(
+    entry: QueueEntry,
+    confirmedPatientId = "",
+  ) {
     const patientId = confirmedPatientId || entry.patientId || "";
     if (!patientId) {
+      const initialLinkSearch = entry.patientName || entry.phone || "";
+      ++linkSearchSequenceRef.current;
       setLinkingAppointmentId(entry.appointmentId || "");
-      setLinkSearch(entry.patientName || entry.phone || "");
+      setLinkSearch(initialLinkSearch);
+      setLinkSearchResults([]);
+      setLinkSearchLoading(patientSearchReady(initialLinkSearch));
       setError("Choose the correct patient chart before starting this consultation.");
-      return;
-    }
-    if (!entry.appointmentId || entry.status === "registered") {
-      choosePatient(patientId);
-      return;
-    }
-    const appointment = appointments.find((candidate) => candidate.id === entry.appointmentId);
-    if (!appointment) {
-      setError("This appointment is no longer in the selected queue. Refresh and try again.");
-      return;
-    }
-    const explicitlyConfirmed = Boolean(confirmedPatientId);
-    const selectionError = appointmentSelectionError(appointment, patientId, explicitlyConfirmed);
-    if (selectionError) {
-      setError(selectionError);
       return;
     }
     if (
       (patientId !== selectedPatientId || entry.appointmentId !== selectedAppointmentId)
       && !confirmConsultationSwitch()
     ) return;
-    if (entry.status === "in_consultation") {
-      choosePatient(patientId, entry.appointmentId, explicitlyConfirmed);
-      return;
-    }
-    if (entry.status !== "checked_in" && entry.status !== "waiting") return;
 
     setUpdatingQueueId(entry.id);
     setError("");
     setNotice("");
     try {
+      const resolution = await resolvePatientDirectoryEntries(user, patientId);
+      const verifiedPatient = resolution.patients.find((patient) => patient.id === patientId) as Patient | undefined;
+      if (!verifiedPatient || !isActivePatient(verifiedPatient)) {
+        setPatients((current) => current.filter((patient) => patient.id !== patientId));
+        setError("This patient chart is archived or unavailable. Restore it before starting a consultation.");
+        return;
+      }
+      const candidate = verifiedPatient;
+      const availablePatients = [candidate, ...patients.filter((patient) => patient.id !== candidate.id)];
+      setPatients(availablePatients);
+
+      if (!entry.appointmentId || entry.status === "registered") {
+        choosePatient(patientId, "", false, candidate);
+        return;
+      }
+      const appointment = appointments.find((item) => item.id === entry.appointmentId);
+      if (!appointment) {
+        setError("This appointment is no longer in the selected queue. Refresh and try again.");
+        return;
+      }
+      const explicitlyConfirmed = Boolean(confirmedPatientId);
+      const selectionError = appointmentSelectionError(
+        appointment,
+        patientId,
+        explicitlyConfirmed,
+        availablePatients,
+      );
+      if (selectionError) {
+        setError(selectionError);
+        return;
+      }
+      if (entry.status === "in_consultation") {
+        choosePatient(patientId, entry.appointmentId, explicitlyConfirmed, candidate);
+        return;
+      }
+      if (entry.status !== "checked_in" && entry.status !== "waiting") return;
+
       const changedAt = serverTimestamp();
       const batch = writeBatch(db);
       batch.update(doc(db, "appointments", entry.appointmentId), {
@@ -1146,7 +1346,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
         updatedAt: changedAt,
       });
       await batch.commit();
-      choosePatient(patientId, entry.appointmentId, explicitlyConfirmed);
+      choosePatient(patientId, entry.appointmentId, explicitlyConfirmed, candidate);
       setNotice(`${entry.patientName} is now in consultation.`);
     } catch (queueError) {
       console.error(queueError);
@@ -1156,12 +1356,20 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
     }
   }
 
-  function choosePatient(patientId: string, appointmentId = "", explicitlyConfirmed = false) {
+  function choosePatient(
+    patientId: string,
+    appointmentId = "",
+    explicitlyConfirmed = false,
+    candidate?: Patient,
+  ) {
     if (
       (patientId !== selectedPatientId || appointmentId !== selectedAppointmentId)
       && !confirmConsultationSwitch()
     ) return;
-    if (!patients.some((patient) => patient.id === patientId && isActivePatient(patient))) {
+    const availablePatients = candidate && candidate.id === patientId && isActivePatient(candidate)
+      ? [candidate, ...patients.filter((patient) => patient.id !== candidate.id)]
+      : patients;
+    if (!availablePatients.some((patient) => patient.id === patientId && isActivePatient(patient))) {
       setError("This patient chart is archived or unavailable. Restore it from the patient register before starting a consultation.");
       return;
     }
@@ -1171,17 +1379,21 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
         setError("This appointment is no longer in the selected queue. Refresh and try again.");
         return;
       }
-      const selectionError = appointmentSelectionError(appointment, patientId, explicitlyConfirmed);
+      const selectionError = appointmentSelectionError(appointment, patientId, explicitlyConfirmed, availablePatients);
       if (selectionError) {
         setError(selectionError);
         return;
       }
     }
+    if (candidate) setPatients(availablePatients);
     setSelectedPatientId(patientId);
     setSelectedAppointmentId(appointmentId);
     setConfirmedAppointmentPatient(appointmentId ? { appointmentId, patientId } : null);
     setLinkingAppointmentId("");
+    ++linkSearchSequenceRef.current;
     setLinkSearch("");
+    setLinkSearchResults([]);
+    setLinkSearchLoading(false);
     setHistoryLoading(true);
     setVisits([]);
     setPrescriptions([]);
@@ -1297,6 +1509,12 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
     }
 
     try {
+      const patientCheck = await resolvePatientDirectoryEntries(user, selectedPatient.id);
+      if (!patientCheck.patients.some((patient) => patient.id === selectedPatient.id && patient.archived !== true)) {
+        setPatients((current) => current.filter((patient) => patient.id !== selectedPatient.id));
+        setError("This patient chart was archived or became unavailable. No clinical record was saved.");
+        return;
+      }
       await draftSavePromiseRef.current;
       const batch = writeBatch(db);
       batch.set(visitRef, {
@@ -1486,15 +1704,76 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       {error ? <div className="mt-5 flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-semibold text-red-700"><AlertCircle size={18} className="mt-0.5 shrink-0" />{error}</div> : null}
       {notice ? <div className="mt-5 flex items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm font-semibold text-emerald-800"><CheckCircle2 size={18} className="mt-0.5 shrink-0" />{notice}</div> : null}
 
-      <section className="mt-6 grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <div
+        data-mobile-doctor-switcher
+        className="sticky top-[64px] z-30 -mx-3 mt-5 border-y border-slate-200 bg-slate-50/95 px-3 py-2.5 shadow-sm backdrop-blur-xl sm:-mx-5 sm:top-[68px] sm:px-5 xl:hidden"
+      >
+        <div className="grid grid-cols-2 rounded-2xl bg-slate-200/80 p-1" role="group" aria-label="Doctor mobile workspace view">
+          <button
+            type="button"
+            aria-pressed={mobileWorkspaceView === "queue"}
+            onClick={() => showMobileWorkspace("queue")}
+            className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-sm font-bold transition ${mobileWorkspaceView === "queue" ? "bg-white text-[#233A59] shadow-sm" : "text-slate-600"}`}
+          >
+            <UsersRound aria-hidden="true" size={17} /> Queue
+          </button>
+          <button
+            type="button"
+            aria-pressed={mobileWorkspaceView === "consultation"}
+            onClick={() => showMobileWorkspace("consultation")}
+            className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-sm font-bold transition ${mobileWorkspaceView === "consultation" ? "bg-white text-[#233A59] shadow-sm" : "text-slate-600"}`}
+          >
+            <Stethoscope aria-hidden="true" size={17} /> Consultation
+          </button>
+        </div>
+
+        {mobileWorkspaceView === "queue" ? (
+          <div className="mt-2 flex items-center justify-between gap-3 px-1 text-xs font-semibold text-slate-600">
+            <span>{queueCounts.waiting} waiting · {queueCounts.total} in today&apos;s queue</span>
+            <span className="shrink-0 rounded-full bg-white px-2.5 py-1 font-bold text-[#233A59] ring-1 ring-slate-200">{displayDate(selectedDate)}</span>
+          </div>
+        ) : selectedPatient ? (
+          <>
+            <div className="mt-2 flex min-w-0 items-center gap-2 rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
+              <button type="button" onClick={() => showMobileWorkspace("queue")} aria-label="Return to consultation queue" className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-slate-100 text-[#233A59]"><ArrowLeft aria-hidden="true" size={17} /></button>
+              <div className="min-w-0 flex-1"><p className="truncate text-sm font-bold text-[#233A59]">{selectedPatient.fullName}</p><p className="truncate text-[11px] text-slate-500">{selectedPatient.patientNumber || "Patient chart"} · {selectedQueueEntry?.doctorName || selectedPatient.doctorName || "Clinic doctor"}</p></div>
+              <span className="shrink-0 rounded-lg bg-[#233A59] px-2.5 py-1.5 text-[11px] font-black text-white">{selectedQueueEntry?.queueToken ? queueTokenLabel(selectedQueueEntry.queueToken, selectedQueueEntry.doctorId) : selectedQueueEntry?.time || "Chart"}</span>
+            </div>
+            <nav className="mt-2 flex gap-2 overflow-x-auto pb-0.5 [scrollbar-width:none]" aria-label="Consultation section shortcuts">
+              {([
+                ["consultation-clinical", "Clinical", Stethoscope],
+                ["consultation-prescription", "Rx", Pill],
+                ["consultation-laboratory", "Lab", FlaskConical],
+                ["consultation-follow-up", "Follow-up", CalendarCheck2],
+                ["consultation-complete", "Finish", CheckCircle2],
+              ] as const).map(([id, label, Icon]) => (
+                <button key={id} type="button" onClick={() => showConsultationSection(id)} className={`inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-xl px-3 text-xs font-bold ${id === "consultation-complete" ? "bg-[#233A59] text-white" : "bg-white text-slate-700 ring-1 ring-slate-200"}`}>
+                  <Icon aria-hidden="true" size={15} />{label}
+                </button>
+              ))}
+            </nav>
+          </>
+        ) : (
+          <div className="mt-2 flex items-center justify-between gap-3 rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900 ring-1 ring-amber-200">
+            <span>Select a patient from the queue to begin.</span>
+            <button type="button" onClick={() => showMobileWorkspace("queue")} className="shrink-0 font-bold underline underline-offset-2">Open queue</button>
+          </div>
+        )}
+      </div>
+
+      <section className="mt-6 hidden gap-3 xl:grid xl:grid-cols-4">
         <div className={cardClass}><UsersRound size={22} className="text-blue-600" /><p className="mt-4 text-3xl font-bold text-[#233A59]">{loading ? "—" : queueCounts.total}</p><p className="mt-1 text-sm font-semibold text-slate-600">Queue for {selectedDate === today ? "today" : displayDate(selectedDate)}</p></div>
         <div className={cardClass}><HeartPulse size={22} className="text-amber-600" /><p className="mt-4 text-3xl font-bold text-[#233A59]">{loading ? "—" : queueCounts.waiting}</p><p className="mt-1 text-sm font-semibold text-slate-600">Waiting consultations</p></div>
         <div className={cardClass}><Stethoscope size={22} className="text-fuchsia-600" /><p className="mt-4 text-3xl font-bold text-[#233A59]">{loading ? "—" : queueCounts.consulting}</p><p className="mt-1 text-sm font-semibold text-slate-600">With doctor now</p></div>
         <div className={cardClass}><CheckCircle2 size={22} className="text-emerald-600" /><p className="mt-4 text-3xl font-bold text-[#233A59]">{loading ? "—" : queueCounts.completed}</p><p className="mt-1 text-sm font-semibold text-slate-600">Completed consultations</p></div>
       </section>
 
-      <div className="mt-6 grid gap-6 xl:grid-cols-[0.72fr_1.28fr]">
-        <aside className="space-y-5">
+      <div className="mt-4 grid gap-6 xl:mt-6 xl:grid-cols-[0.72fr_1.28fr]">
+        <aside
+          ref={queueWorkspaceRef}
+          data-mobile-doctor-view="queue"
+          className={`${mobileWorkspaceView === "queue" ? "block" : "hidden"} scroll-mt-48 space-y-5 xl:block xl:scroll-mt-24`}
+        >
           <section className={cardClass}>
             <div className="flex items-center justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#A8864A]">Live queue</p><h2 className="mt-1 text-xl font-bold text-[#233A59]">{displayDate(selectedDate)}</h2></div>{loading ? <LoaderCircle className="animate-spin text-slate-400" /> : <CalendarCheck2 className="text-blue-600" />}</div>
             <div className="mt-5 space-y-3">
@@ -1516,8 +1795,12 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
                       <button
                         type="button"
                         onClick={() => {
+                          const initialLinkSearch = isLinking ? "" : entry.patientName || entry.phone || "";
+                          ++linkSearchSequenceRef.current;
                           setLinkingAppointmentId(isLinking ? "" : entry.appointmentId || "");
-                          setLinkSearch(isLinking ? "" : entry.patientName || entry.phone || "");
+                          setLinkSearch(initialLinkSearch);
+                          setLinkSearchResults([]);
+                          setLinkSearchLoading(Boolean(!isLinking && patientSearchReady(initialLinkSearch)));
                           setError("");
                         }}
                         className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-amber-900 px-3 py-2 text-xs font-bold text-white"
@@ -1530,7 +1813,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
                             Search name, phone or patient ID
                             <input
                               value={linkSearch}
-                              onChange={(event) => setLinkSearch(event.target.value)}
+                              onChange={(event) => { const value = event.target.value; const ready = patientSearchReady(value); ++linkSearchSequenceRef.current; setLinkSearch(value); setLinkSearchResults([]); setLinkSearchLoading(ready); }}
                               placeholder="Confirm patient identity"
                               className="mt-2 w-full rounded-xl border border-amber-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-800 outline-none focus:border-amber-600"
                             />
@@ -1551,7 +1834,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
                                 {updatingQueueId === entry.id ? <LoaderCircle size={15} className="shrink-0 animate-spin" /> : <ArrowRight size={15} className="shrink-0" />}
                               </button>
                             ))}
-                            {linkCandidates.length === 0 ? <p className="rounded-xl bg-white px-3 py-3 text-xs font-semibold text-slate-600">No matching chart is shown. Refine the search or register this patient.</p> : null}
+                            {linkSearchLoading ? <p role="status" className="rounded-xl bg-white px-3 py-3 text-xs font-semibold text-slate-600">Searching secure patient records…</p> : linkCandidates.length === 0 ? <p className="rounded-xl bg-white px-3 py-3 text-xs font-semibold text-slate-600">{linkSearch.trim() && !patientSearchReady(linkSearch) ? "Enter at least 3 letters, 6 phone digits, or a complete patient ID." : "No matching chart is shown. Refine the search or register this patient."}</p> : null}
                           </div>
                           <Link href="/admin/patients" className="mt-3 inline-flex min-h-11 items-center gap-2 text-xs font-bold text-amber-900">Open patient registration <ArrowRight size={14} /></Link>
                         </div>
@@ -1570,14 +1853,21 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
 
           <section className={cardClass}>
             <div className="flex items-center gap-3"><span className="rounded-xl bg-blue-50 p-2.5 text-blue-700"><Search size={19} /></span><div><h2 className="font-bold text-[#233A59]">Find another patient</h2><p className="text-xs text-slate-500">Name, phone or patient ID</p></div></div>
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search patient records" className={inputClass} />
+            <input value={search} onChange={(event) => { const value = event.target.value; const ready = patientSearchReady(value); ++patientSearchSequenceRef.current; setSearch(value); setPatientSearchResults([]); setPatientSearchLoading(ready); setPatientSearchNotice(value.trim() && !ready ? "Enter at least 3 letters, 6 phone digits, or a complete patient ID." : ""); }} aria-describedby="consultation-patient-search-status" autoComplete="off" placeholder="Search patient records" className={inputClass} />
+            {search.trim() ? <p id="consultation-patient-search-status" role="status" className="mt-2 text-xs font-semibold text-slate-500">{patientSearchLoading ? "Searching secure patient records…" : patientSearchNotice || `${visiblePatients.length} active patient${visiblePatients.length === 1 ? "" : "s"} found.`}</p> : <p id="consultation-patient-search-status" className="mt-2 text-xs text-slate-500">Showing recent active patients. Search to find older charts.</p>}
             <div className="mt-4 max-h-80 space-y-2 overflow-y-auto pr-1">
-              {visiblePatients.map((patient) => <button key={patient.id} type="button" onClick={() => choosePatient(patient.id)} className={`flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-3 text-left transition ${selectedPatientId === patient.id && !selectedAppointmentId ? "border-[#A8864A] bg-[#F8F4EA]" : "border-slate-200 hover:bg-slate-50"}`}><span><span className="block text-sm font-bold text-[#233A59]">{patient.fullName}</span><span className="mt-1 block text-xs text-slate-500">{patient.patientNumber || "No patient ID"} · {patient.phone}</span></span><ArrowRight size={15} className="shrink-0 text-slate-400" /></button>)}
+              {visiblePatients.map((patient) => <button key={patient.id} type="button" onClick={() => { ++patientSearchSequenceRef.current; setSearch(""); setPatientSearchResults([]); setPatientSearchLoading(false); setPatientSearchNotice(""); choosePatient(patient.id, "", false, patient); }} className={`flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-3 text-left transition ${selectedPatientId === patient.id && !selectedAppointmentId ? "border-[#A8864A] bg-[#F8F4EA]" : "border-slate-200 hover:bg-slate-50"}`}><span><span className="block text-sm font-bold text-[#233A59]">{patient.fullName}</span><span className="mt-1 block text-xs text-slate-500">{patient.patientNumber || "No patient ID"} · {patient.phone}</span></span><ArrowRight size={15} className="shrink-0 text-slate-400" /></button>)}
             </div>
           </section>
         </aside>
 
-        <main>
+        <section
+          ref={consultationWorkspaceRef}
+          data-mobile-doctor-view="consultation"
+          tabIndex={-1}
+          aria-label="Patient consultation workspace"
+          className={`${mobileWorkspaceView === "consultation" ? "block" : "hidden"} scroll-mt-48 outline-none xl:block xl:scroll-mt-24`}
+        >
           {!selectedPatient ? (
             <section className="grid min-h-[540px] place-items-center rounded-3xl bg-white p-8 text-center shadow-sm ring-1 ring-slate-200">
               <div className="max-w-md"><span className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-blue-50 text-blue-700"><ClipboardList size={31} /></span><h2 className="mt-6 text-2xl font-bold text-[#233A59]">Select a patient to begin</h2><p className="mt-3 leading-7 text-slate-600">Choose someone from the queue or search the patient register. Previous clinical history will appear before you create the new consultation.</p></div>
@@ -1637,7 +1927,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
                   {draftStatus === "error" || completedDraftCleanup ? <button type="button" onClick={completedDraftCleanup ? retryCompletedDraftCleanup : markDraftDirty} className="rounded-lg bg-red-700 px-3 py-1.5 text-xs font-bold text-white">{completedDraftCleanup ? "Retry draft cleanup" : "Retry now"}</button> : <span className="text-xs opacity-75">Draft access expires after 7 days</span>}
                 </div>
                 <fieldset disabled={draftStatus === "loading" || Boolean(completedDraftCleanup)} className="space-y-6 disabled:opacity-60">
-                <section className={cardClass}>
+                <section id="consultation-clinical" className={`${cardClass} scroll-mt-48 xl:scroll-mt-24`}>
                   <SectionTitle icon={Stethoscope} title="Clinical consultation" subtitle="Vitals, examination, diagnosis and care plan" />
                   <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
                     {!profileDoctor ? <label className={`${labelClass} sm:col-span-2 lg:col-span-5`}>Consulting doctor<select name="doctorName" required defaultValue={selectedDoctor} className={inputClass}><option value="" disabled>Select doctor</option>{DOCTORS.map((doctor) => <option key={doctor}>{doctor}</option>)}</select></label> : <input type="hidden" name="doctorName" value={profileDoctor} />}
@@ -1654,7 +1944,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
                   </div>
                 </section>
 
-                <section className={cardClass}>
+                <section id="consultation-prescription" className={`${cardClass} scroll-mt-48 xl:scroll-mt-24`}>
                   <div className="flex flex-wrap items-start justify-between gap-3"><SectionTitle icon={Pill} title="Prescription" subtitle="Add one or more medicines; leave empty when none are prescribed" /><button type="button" disabled={medicines.length >= 20} onClick={() => { setMedicines((current) => [...current, emptyMedicine()]); markDraftDirty(); }} className="inline-flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-2 text-sm font-bold text-blue-800 disabled:cursor-not-allowed disabled:opacity-50"><Plus size={16} />{medicines.length >= 20 ? "20 medicine limit" : "Add medicine"}</button></div>
                   <div className="mt-5 space-y-4">
                     {medicines.map((medicine, index) => <div key={medicine.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><div className="flex items-center justify-between"><p className="text-sm font-bold text-[#233A59]">Medicine {index + 1}</p>{medicines.length > 1 ? <button type="button" onClick={() => { setMedicines((current) => current.filter((item) => item.id !== medicine.id)); markDraftDirty(); }} aria-label={`Remove medicine ${index + 1}`} className="rounded-lg p-2 text-red-600 hover:bg-red-50"><Trash2 size={16} /></button> : null}</div><div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5"><label className={`${labelClass} sm:col-span-2 xl:col-span-1`}>Medicine<input value={medicine.name} onChange={(event) => updateMedicine(medicine.id, "name", event.target.value)} placeholder="Name and strength" className={inputClass} /></label><label className={labelClass}>Dose<input value={medicine.dose} onChange={(event) => updateMedicine(medicine.id, "dose", event.target.value)} placeholder="5 ml" className={inputClass} /></label><label className={labelClass}>Frequency<input value={medicine.frequency} onChange={(event) => updateMedicine(medicine.id, "frequency", event.target.value)} placeholder="Twice daily" className={inputClass} /></label><label className={labelClass}>Duration<input value={medicine.duration} onChange={(event) => updateMedicine(medicine.id, "duration", event.target.value)} placeholder="5 days" className={inputClass} /></label><label className={labelClass}>Instructions<input value={medicine.instructions} onChange={(event) => updateMedicine(medicine.id, "instructions", event.target.value)} placeholder="After food" className={inputClass} /></label></div></div>)}
@@ -1662,27 +1952,27 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
                   <label className={`${labelClass} mt-4 block`}>Advice to patient<textarea name="advice" rows={3} placeholder="Hydration, diet, warning signs and other advice" className={inputClass} /></label>
                 </section>
 
-                <section className={cardClass}>
+                <section id="consultation-laboratory" className={`${cardClass} scroll-mt-48 xl:scroll-mt-24`}>
                   <SectionTitle icon={FlaskConical} title="Laboratory orders" subtitle="Selected tests are sent directly to the clinic lab desk" />
                   <div className="mt-5 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{COMMON_TESTS.map((test) => <label key={test} className={`flex min-h-12 cursor-pointer items-center gap-3 rounded-xl border px-3 py-2 text-sm font-semibold transition ${labTests.includes(test) ? "border-violet-300 bg-violet-50 text-violet-800" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`}><input type="checkbox" checked={labTests.includes(test)} onChange={() => toggleLab(test)} className="h-4 w-4 accent-violet-700" />{test}</label>)}</div>
                   <div className="mt-4 flex flex-col gap-2 sm:flex-row"><input value={customTest} onChange={(event) => setCustomTest(event.target.value)} placeholder="Add another test" className={`${inputClass} mt-0`} /><button type="button" onClick={addCustomLab} className="shrink-0 rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold text-[#233A59]">Add test</button></div>
                   {labTests.length > 0 ? <div className="mt-4 grid gap-4 sm:grid-cols-2"><label className={labelClass}>Priority<select name="labPriority" defaultValue="routine" className={inputClass}><option value="routine">Routine</option><option value="urgent">Urgent</option></select></label><label className={labelClass}>Instructions for lab<input name="labNotes" placeholder="Fasting or collection instructions" className={inputClass} /></label></div> : null}
                 </section>
 
-                <section className={cardClass}>
+                <section id="consultation-follow-up" className={`${cardClass} scroll-mt-48 xl:scroll-mt-24`}>
                   <SectionTitle icon={CalendarCheck2} title="Follow-up plan" subtitle="Create an optional reminder in the staff task centre" />
                   <div className="mt-5 grid gap-4 sm:grid-cols-3"><label className={labelClass}>Follow-up date<input name="followUpDate" type="date" min={today} className={inputClass} /></label><label className={labelClass}>Preferred time<input name="followUpTime" type="time" defaultValue="18:00" className={inputClass} /></label><label className={labelClass}>Priority<select name="followUpPriority" defaultValue="medium" className={inputClass}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="urgent">Urgent</option></select></label></div>
                 </section>
 
-                <section className="rounded-3xl bg-[#233A59] p-5 text-white shadow-lg shadow-[#233A59]/10 sm:p-7">
-                  <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between"><div><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-[#D4B678]"><ShieldCheck size={16} /> Atomic clinical save</div><h2 className="mt-2 text-2xl font-bold">Complete this consultation</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-white/70">The visit, prescription, lab order, follow-up and audit entry are saved together. If any part fails, none of the records are committed.</p></div><button disabled={saving} className="inline-flex min-h-12 shrink-0 items-center justify-center gap-2 rounded-xl bg-white px-6 py-3 font-bold text-[#233A59] transition hover:bg-[#F8F4EA] disabled:cursor-not-allowed disabled:opacity-60">{saving ? <LoaderCircle className="animate-spin" size={19} /> : <Check size={19} />}Complete consultation</button></div>
+                <section id="consultation-complete" className="scroll-mt-48 rounded-3xl bg-[#233A59] p-5 text-white shadow-lg shadow-[#233A59]/10 sm:p-7 xl:scroll-mt-24">
+                  <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between"><div><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-[#D4B678]"><ShieldCheck size={16} /> Atomic clinical save</div><h2 className="mt-2 text-2xl font-bold">Complete this consultation</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-white/70">The visit, prescription, lab order, follow-up and audit entry are saved together. If any part fails, none of the records are committed.</p></div><button type="submit" disabled={saving} className="inline-flex min-h-12 shrink-0 items-center justify-center gap-2 rounded-xl bg-white px-6 py-3 font-bold text-[#233A59] transition hover:bg-[#F8F4EA] disabled:cursor-not-allowed disabled:opacity-60">{saving ? <LoaderCircle className="animate-spin" size={19} /> : <Check size={19} />}Complete consultation</button></div>
                   {savedPrescription ? <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-white/15 pt-5"><p className="mr-auto text-sm font-semibold text-emerald-200">Prescription is ready.</p><button type="button" disabled={documentAction !== null} onClick={() => void preparePrescription("print")} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-white/10 px-4 py-2 text-sm font-bold hover:bg-white/20 disabled:opacity-60">{documentAction === "print" ? <LoaderCircle className="animate-spin" size={16} /> : <Printer size={16} />}Print</button><button type="button" disabled={documentAction !== null} onClick={() => void preparePrescription("download")} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-[#A8864A] px-4 py-2 text-sm font-bold hover:bg-[#92713b] disabled:opacity-60">{documentAction === "download" ? <LoaderCircle className="animate-spin" size={16} /> : <Download size={16} />}Download</button></div> : null}
                 </section>
                 </fieldset>
               </form>
             </div>
           )}
-        </main>
+        </section>
       </div>
     </div>
   );

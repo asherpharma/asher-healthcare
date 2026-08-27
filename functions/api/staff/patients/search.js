@@ -27,6 +27,7 @@ export function createPatientSearchHandlers(dependencies = defaultDependencies) 
           search: body?.search,
           cursor: body?.cursor,
           pageSize: body?.pageSize,
+          archivedOnly: body?.archivedOnly === true,
         });
         return dependencies.json(result);
       } catch (error) {

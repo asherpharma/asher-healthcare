@@ -21,6 +21,7 @@ import {
 } from "../../../../server/reception/workflow.js";
 import {
   canonicalPatientIdentity,
+  patientProfileReadForStaff,
   validatePatientProfileUpdate,
 } from "../../../../server/patients/profile.js";
 import {
@@ -73,6 +74,75 @@ function responsePatient(patientId, patient, updates, includeClinical) {
     allergies: String(merged.allergies || ""),
     medicalHistory: String(merged.medicalHistory || ""),
   };
+}
+
+const defaultProfileReadDependencies = {
+  assertSameOrigin,
+  errorResponse,
+  getDocument,
+  HttpError,
+  json,
+  patientProfileReadForStaff,
+  requireActiveStaff,
+};
+
+export function createPatientProfileReadHandler(
+  dependencies = defaultProfileReadDependencies,
+) {
+  return async function getProfile(context) {
+    try {
+      dependencies.assertSameOrigin(context.request);
+      const authenticatedStaff = await dependencies.requireActiveStaff(
+        context.request,
+        context.env,
+      );
+      const staffDocument = await dependencies.getDocument(
+        context.env,
+        `staff/${authenticatedStaff.uid}`,
+      );
+      const latestRole = String(staffDocument?.data?.role || "");
+      if (
+        !staffDocument
+        || staffDocument.data.active !== true
+        || !["admin", "reception", "doctor"].includes(latestRole)
+      ) {
+        throw new dependencies.HttpError(403, "This staff account is no longer active.");
+      }
+      const patientId = String(
+        new URL(context.request.url).searchParams.get("patientId") || "",
+      ).trim();
+      if (!validPatientId(patientId)) {
+        throw new dependencies.HttpError(400, "Choose a valid patient record.");
+      }
+      const patientDocument = await dependencies.getDocument(
+        context.env,
+        `patients/${patientId}`,
+      );
+      if (!patientDocument) {
+        throw new dependencies.HttpError(404, "This patient record is unavailable.");
+      }
+      const actor = {
+        ...authenticatedStaff,
+        role: latestRole,
+        doctorName: String(staffDocument.data.doctorName || "").trim(),
+      };
+      return dependencies.json({
+        patient: dependencies.patientProfileReadForStaff(
+          patientId,
+          patientDocument.data,
+          actor,
+        ),
+      });
+    } catch (error) {
+      return dependencies.errorResponse(error);
+    }
+  };
+}
+
+const getProfile = createPatientProfileReadHandler();
+
+export async function onRequestGet(context) {
+  return getProfile(context);
 }
 
 export async function onRequestPost(context) {

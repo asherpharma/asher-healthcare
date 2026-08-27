@@ -6,7 +6,12 @@ import {
   ADMIN_NAVIGATION_HANDOFF_EVENT,
   consumeAdminNavigationHandoff,
 } from "@/lib/admin-navigation-handoff";
-import { fetchPatientDirectory } from "@/lib/patient-directory";
+import {
+  fetchPatientDirectoryPage,
+  resolvePatientDirectoryEntries,
+  searchPatientDirectory,
+} from "@/lib/patient-directory";
+import { patientSearchReady } from "@/lib/patient-search-readiness";
 import type { ReceiptInvoice } from "@/lib/receipt-pdf";
 import Script from "next/script";
 import {
@@ -33,11 +38,12 @@ import {
   Search,
   ShieldCheck,
   Trash2,
+  UserRound,
   WalletCards,
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 type Patient = {
   id: string;
@@ -62,7 +68,12 @@ type InvoiceStatusFilter = "all" | PaymentStatus | "due";
 // Keep the gateway implementation available for a future controlled rollout,
 // while the live clinic workflow uses manual collection only.
 const AUTOMATED_PAYMENT_COLLECTION_ENABLED = false;
+const RECENT_PATIENT_LIMIT = 12;
+const PATIENT_SEARCH_LIMIT = 10;
+const INVOICE_PATIENT_RESOLUTION_CHUNK = 50;
 type PaymentMethod = "cash" | "upi" | "card" | "bank_transfer" | "online";
+type InvoicePatientState = "active" | "archived" | "unavailable";
+type BillingPatientRecheck = InvoicePatientState | "unverified";
 
 type Invoice = ReceiptInvoice & {
   id: string;
@@ -220,8 +231,22 @@ function refundablePaymentAmount(payment: PaymentEntry) {
 function BillingWorkspace() {
   const { user, profile } = useStaff();
   const db = firestore!;
-  const [patients, setPatients] = useState<Patient[]>([]);
+  const [recentPatients, setRecentPatients] = useState<Patient[]>([]);
+  const [recentPatientsLoaded, setRecentPatientsLoaded] = useState(false);
+  const [recentPatientsError, setRecentPatientsError] = useState("");
+  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
+  const [patientPickerQuery, setPatientPickerQuery] = useState("");
+  const [patientPickerResults, setPatientPickerResults] = useState<Patient[]>([]);
+  const [patientPickerLoading, setPatientPickerLoading] = useState(false);
+  const [patientPickerSearched, setPatientPickerSearched] = useState(false);
+  const [patientPickerError, setPatientPickerError] = useState("");
+  const patientSearchTimerRef = useRef<number | null>(null);
+  const patientSearchSequenceRef = useRef(0);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [invoicePatientStates, setInvoicePatientStates] = useState<Record<string, InvoicePatientState>>({});
+  const [resolvedInvoicePatientKey, setResolvedInvoicePatientKey] = useState("");
+  const [invoicePatientSafetyError, setInvoicePatientSafetyError] = useState("");
+  const [invoicePatientSafetyRefresh, setInvoicePatientSafetyRefresh] = useState(0);
   const [payments, setPayments] = useState<PaymentEntry[]>([]);
   const [refundOperations, setRefundOperations] = useState<RefundOperation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -231,8 +256,6 @@ function BillingWorkspace() {
   const [statusFilter, setStatusFilter] = useState<InvoiceStatusFilter>("all");
   const [showCreate, setShowCreate] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [patientsLoaded, setPatientsLoaded] = useState(false);
-  const [selectedPatientId, setSelectedPatientId] = useState("");
   const [items, setItems] = useState<LineItem[]>([{ id: crypto.randomUUID(), description: "Consultation fee", quantity: 1, unitPrice: 0, amount: 0 }]);
   const [discount, setDiscount] = useState(0);
   const [initialPayment, setInitialPayment] = useState(0);
@@ -284,26 +307,35 @@ function BillingWorkspace() {
 
   useEffect(() => {
     let active = true;
-    const refreshPatientDirectory = () => {
-      void fetchPatientDirectory(user, { includeArchived: profile.role === "admin" })
-        .then((directory) => {
+    const refreshRecentPatients = () => {
+      void fetchPatientDirectoryPage(user, { pageSize: RECENT_PATIENT_LIMIT })
+        .then((page) => {
           if (!active) return;
-          setPatients(directory as Patient[]);
-          setPatientsLoaded(true);
+          setRecentPatients(page.patients.filter((patient) => patient.archived !== true) as Patient[]);
+          setRecentPatientsLoaded(true);
+          setRecentPatientsError("");
         })
         .catch((loadError) => {
-          console.error("Patient directory could not be loaded", loadError);
+          console.error("Recent patient directory could not be loaded", loadError);
           if (!active) return;
-          setError(loadError instanceof Error ? loadError.message : "Patient records could not be loaded.");
-          setPatientsLoaded(true);
+          setRecentPatientsError(loadError instanceof Error ? loadError.message : "Recent patients could not be loaded.");
+          setRecentPatientsLoaded(true);
         });
     };
     const refreshWhenVisible = () => {
-      if (document.visibilityState === "visible") refreshPatientDirectory();
+      if (document.visibilityState === "visible") refreshRecentPatients();
     };
-    refreshPatientDirectory();
-    window.addEventListener("focus", refreshPatientDirectory);
+    refreshRecentPatients();
+    window.addEventListener("focus", refreshRecentPatients);
     document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", refreshRecentPatients);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [user]);
+
+  useEffect(() => {
     const unsubscribeInvoices = onSnapshot(
       query(collection(db, "invoices"), orderBy("createdAt", "desc"), limit(250)),
       (snapshot) => {
@@ -342,59 +374,179 @@ function BillingWorkspace() {
         )
       : () => undefined;
     return () => {
-      active = false;
-      window.removeEventListener("focus", refreshPatientDirectory);
-      document.removeEventListener("visibilitychange", refreshWhenVisible);
       unsubscribeInvoices();
       unsubscribePayments();
       unsubscribeRefunds();
     };
-  }, [db, profile.role, user]);
+  }, [db, profile.role]);
+
+  const patientPickerSearchReady = patientSearchReady(patientPickerQuery);
 
   useEffect(() => {
-    if (!patientsLoaded || !handoffPatientId) return;
+    if (patientSearchTimerRef.current !== null) {
+      window.clearTimeout(patientSearchTimerRef.current);
+      patientSearchTimerRef.current = null;
+    }
+    const sequence = ++patientSearchSequenceRef.current;
+    if (!showCreate || !patientPickerSearchReady || selectedPatient) {
+      const resetTimer = window.setTimeout(() => {
+        if (sequence !== patientSearchSequenceRef.current) return;
+        setPatientPickerLoading(false);
+        setPatientPickerResults([]);
+        setPatientPickerSearched(false);
+        setPatientPickerError("");
+      }, 0);
+      return () => window.clearTimeout(resetTimer);
+    }
 
-    const patient = patients.find((entry) => entry.id === handoffPatientId && entry.archived !== true);
-    const timer = window.setTimeout(() => {
-      setHandoffPatientId("");
-      if (!patient) return;
-
-      const consultationFee = Math.max(0, Number(patient.consultationFee || 0));
-      setSelectedPatientId(patient.id);
-      setShowCreate(true);
-      setItems([{
-        id: crypto.randomUUID(),
-        description: "Consultation fee",
-        quantity: 1,
-        unitPrice: consultationFee,
-        amount: consultationFee,
-      }]);
-      setError("");
+    const startTimer = window.setTimeout(() => {
+      if (sequence !== patientSearchSequenceRef.current) return;
+      setPatientPickerLoading(true);
+      setPatientPickerResults([]);
+      setPatientPickerSearched(false);
+      setPatientPickerError("");
     }, 0);
-    return () => window.clearTimeout(timer);
-  }, [handoffPatientId, patients, patientsLoaded]);
+    patientSearchTimerRef.current = window.setTimeout(() => {
+      void searchPatientDirectory(user, patientPickerQuery.trim(), { pageSize: PATIENT_SEARCH_LIMIT })
+        .then((page) => {
+          if (sequence !== patientSearchSequenceRef.current) return;
+          setPatientPickerResults(page.patients as Patient[]);
+          setPatientPickerSearched(true);
+        })
+        .catch((searchError) => {
+          console.error("Billing patient search failed", searchError);
+          if (sequence !== patientSearchSequenceRef.current) return;
+          setPatientPickerResults([]);
+          setPatientPickerSearched(true);
+          setPatientPickerError(
+            searchError instanceof Error ? searchError.message : "Patient search could not be completed.",
+          );
+        })
+        .finally(() => {
+          if (sequence === patientSearchSequenceRef.current) setPatientPickerLoading(false);
+        });
+    }, 280);
 
-  const activePatients = useMemo(
-    () => patients.filter((patient) => patient.archived !== true),
-    [patients],
+    return () => {
+      window.clearTimeout(startTimer);
+      if (patientSearchTimerRef.current !== null) {
+        window.clearTimeout(patientSearchTimerRef.current);
+        patientSearchTimerRef.current = null;
+      }
+    };
+  }, [patientPickerQuery, patientPickerSearchReady, selectedPatient, showCreate, user]);
+
+  useEffect(() => {
+    if (!handoffPatientId) return;
+    let cancelled = false;
+
+    void resolvePatientDirectoryEntries(user, handoffPatientId, {
+      includeArchived: profile.role === "admin",
+    })
+      .then((resolution) => {
+        if (cancelled) return;
+        const patient = resolution.patients.find((entry) => entry.id === handoffPatientId);
+        if (!patient || patient.archived === true || resolution.unavailableIds.includes(handoffPatientId)) {
+          setError("This patient is archived or unavailable. Restore the patient record before creating an invoice.");
+          return;
+        }
+
+        const consultationFee = Math.max(0, Number(patient.consultationFee || 0));
+        setSelectedPatient(patient as Patient);
+        setInitialPaymentRequestId(crypto.randomUUID());
+        setShowCreate(true);
+        setItems([{
+          id: crypto.randomUUID(),
+          description: "Consultation fee",
+          quantity: 1,
+          unitPrice: consultationFee,
+          amount: consultationFee,
+        }]);
+        setError("");
+      })
+      .catch((handoffError) => {
+        console.error("Billing patient handoff could not be resolved", handoffError);
+        if (!cancelled) {
+          setError(handoffError instanceof Error ? handoffError.message : "The selected patient could not be verified.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setHandoffPatientId("");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [handoffPatientId, profile.role, user]);
+
+  const invoicePatientIdsKey = useMemo(
+    () => JSON.stringify(Array.from(new Set(
+      invoices.map((invoice) => String(invoice.patientId || "").trim()).filter(Boolean),
+    )).sort()),
+    [invoices],
   );
-  const activePatientIds = useMemo(
-    () => new Set(activePatients.map((patient) => patient.id)),
-    [activePatients],
-  );
-  const selectedPatient = useMemo(
-    () => activePatients.find((patient) => patient.id === selectedPatientId) ?? null,
-    [activePatients, selectedPatientId],
+  const invoicePatientIds = useMemo(
+    () => JSON.parse(invoicePatientIdsKey) as string[],
+    [invoicePatientIdsKey],
   );
 
   useEffect(() => {
-    if (!patientsLoaded || !payingInvoice || activePatientIds.has(payingInvoice.patientId)) return;
+    let cancelled = false;
+    if (invoicePatientIds.length === 0) {
+      const timer = window.setTimeout(() => {
+        setInvoicePatientStates({});
+        setResolvedInvoicePatientKey(invoicePatientIdsKey);
+        setInvoicePatientSafetyError("");
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+
+    const chunks: string[][] = [];
+    for (let index = 0; index < invoicePatientIds.length; index += INVOICE_PATIENT_RESOLUTION_CHUNK) {
+      chunks.push(invoicePatientIds.slice(index, index + INVOICE_PATIENT_RESOLUTION_CHUNK));
+    }
+
+    void Promise.all(chunks.map((patientIds) => resolvePatientDirectoryEntries(user, patientIds, {
+      includeArchived: profile.role === "admin",
+    })))
+      .then((resolutions) => {
+        if (cancelled) return;
+        const nextStates: Record<string, InvoicePatientState> = {};
+        for (const patientId of invoicePatientIds) nextStates[patientId] = "unavailable";
+        for (const resolution of resolutions) {
+          for (const patient of resolution.patients) {
+            nextStates[patient.id] = patient.archived === true ? "archived" : "active";
+          }
+          for (const unavailableId of resolution.unavailableIds) nextStates[unavailableId] = "unavailable";
+        }
+        setInvoicePatientStates(nextStates);
+        setResolvedInvoicePatientKey(invoicePatientIdsKey);
+        setInvoicePatientSafetyError("");
+      })
+      .catch((resolutionError) => {
+        console.error("Invoice patient safety check failed", resolutionError);
+        if (cancelled) return;
+        setInvoicePatientStates({});
+        setResolvedInvoicePatientKey("");
+        setInvoicePatientSafetyError(
+          "Patient status could not be verified. Payment and correction controls are paused; invoice history remains available.",
+        );
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [invoicePatientIds, invoicePatientIdsKey, invoicePatientSafetyRefresh, profile.role, user]);
+
+  useEffect(() => {
+    if (!payingInvoice || resolvedInvoicePatientKey !== invoicePatientIdsKey) return;
+    if (invoicePatientStates[payingInvoice.patientId] === "active") return;
     const timer = window.setTimeout(() => {
       setPayingInvoice(null);
       setError("This patient record was archived or became unavailable. Payment controls have been closed.");
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [activePatientIds, patientsLoaded, payingInvoice]);
+  }, [invoicePatientIdsKey, invoicePatientStates, payingInvoice, resolvedInvoicePatientKey]);
   const subtotal = useMemo(() => items.reduce((sum, item) => sum + Math.max(0, item.quantity) * Math.max(0, item.unitPrice), 0), [items]);
   const total = Math.max(0, subtotal - Math.max(0, discount));
 
@@ -428,16 +580,63 @@ function BillingWorkspace() {
   }, [invoices, search, statusFilter]);
 
   function patientAvailabilityLabel(invoice: Invoice) {
-    const patient = patients.find((entry) => entry.id === invoice.patientId);
-    if (patient?.archived === true) return "Archived patient · history only";
-    if (patientsLoaded && !activePatientIds.has(invoice.patientId)) {
-      return "Archived or unavailable patient · history only";
-    }
+    if (resolvedInvoicePatientKey !== invoicePatientIdsKey) return "Patient status is being verified";
+    const patientState = invoicePatientStates[invoice.patientId];
+    if (patientState === "archived") return "Archived patient · history only";
+    if (patientState !== "active") return "Archived or unavailable patient · history only";
     return "";
   }
 
+  async function recheckPatientBeforeBillingMutation(patientId: string): Promise<BillingPatientRecheck> {
+    let resolution: Awaited<ReturnType<typeof resolvePatientDirectoryEntries>>;
+    try {
+      resolution = await resolvePatientDirectoryEntries(user, patientId, {
+        includeArchived: profile.role === "admin",
+      });
+    } catch (lookupError) {
+      console.error("Patient could not be rechecked before a billing change", lookupError);
+      setResolvedInvoicePatientKey("");
+      setInvoicePatientSafetyRefresh((current) => current + 1);
+      setInvoicePatientSafetyError(
+        "Patient status could not be verified. Billing changes are paused; receipts and invoice history remain available.",
+      );
+      setError("Patient status could not be verified. No billing changes were made. Check the connection and try again.");
+      return "unverified";
+    }
+
+    const patient = resolution.patients.find((entry) => entry.id === patientId);
+    const status: InvoicePatientState = patient?.archived === true
+      ? "archived"
+      : patient && !resolution.unavailableIds.includes(patientId)
+        ? "active"
+        : "unavailable";
+    setInvoicePatientStates((current) => ({ ...current, [patientId]: status }));
+
+    if (status !== "active") {
+      setError(
+        status === "archived"
+          ? "This patient record is archived. No billing changes were made. Restore the record before continuing."
+          : "This patient record is unavailable. No billing changes were made. Restore or correct the record before continuing.",
+      );
+    }
+    return status;
+  }
+
+  function choosePatient(patient: Patient) {
+    setSelectedPatient(patient);
+    setPatientPickerQuery("");
+    setPatientPickerResults([]);
+    setPatientPickerSearched(false);
+    setPatientPickerError("");
+    setInitialPaymentRequestId(crypto.randomUUID());
+  }
+
   function resetInvoiceForm() {
-    setSelectedPatientId("");
+    setSelectedPatient(null);
+    setPatientPickerQuery("");
+    setPatientPickerResults([]);
+    setPatientPickerSearched(false);
+    setPatientPickerError("");
     setItems([{ id: crypto.randomUUID(), description: "Consultation fee", quantity: 1, unitPrice: 0, amount: 0 }]);
     setDiscount(0);
     setInitialPayment(0);
@@ -519,6 +718,11 @@ function BillingWorkspace() {
 
     setSaving(true);
     try {
+      const patientCheck = await recheckPatientBeforeBillingMutation(selectedPatient.id);
+      if (patientCheck !== "active") {
+        if (patientCheck !== "unverified") setSelectedPatient(null);
+        return;
+      }
       const token = await user.getIdToken();
       const response = await fetch("/api/billing/invoice-create", {
         method: "POST",
@@ -599,6 +803,11 @@ function BillingWorkspace() {
     setError("");
     setNotice("");
     try {
+      const patientCheck = await recheckPatientBeforeBillingMutation(payingInvoice.patientId);
+      if (patientCheck !== "active") {
+        if (patientCheck !== "unverified") setPayingInvoice(null);
+        return;
+      }
       const payment = await submitManualPayment({
         invoiceId: payingInvoice.id,
         amount: received,
@@ -666,6 +875,11 @@ function BillingWorkspace() {
     setError("");
     setNotice("");
     try {
+      const patientCheck = await recheckPatientBeforeBillingMutation(reversingInvoice.patientId);
+      if (patientCheck !== "active") {
+        if (patientCheck !== "unverified") setReversingPayment(null);
+        return;
+      }
       const token = await user.getIdToken();
       const response = await fetch("/api/billing/reverse-payment", {
         method: "POST",
@@ -751,6 +965,11 @@ function BillingWorkspace() {
     setError("");
     setNotice("");
     try {
+      const patientCheck = await recheckPatientBeforeBillingMutation(refundInvoice.patientId);
+      if (patientCheck !== "active") {
+        if (patientCheck !== "unverified") setRefundingPayment(null);
+        return;
+      }
       const token = await user.getIdToken();
       const response = await fetch("/api/razorpay/refund", {
         method: "POST",
@@ -786,10 +1005,19 @@ function BillingWorkspace() {
 
   async function syncRazorpayRefund(requestId: string) {
     if (profile.role !== "admin" || !requestId) return;
+    const operation = refundOperations.find((entry) => entry.requestId === requestId || entry.id === requestId);
+    const payment = payments.find((entry) => entry.activeRefundOperationId === requestId);
+    const syncInvoice = invoices.find((entry) => entry.id === (operation?.invoiceId || payment?.invoiceId));
+    if (!syncInvoice) {
+      setError("The invoice linked to this refund could not be verified. No refund status changes were made.");
+      return;
+    }
     setSyncingRefundId(requestId);
     setError("");
     setNotice("");
     try {
+      const patientCheck = await recheckPatientBeforeBillingMutation(syncInvoice.patientId);
+      if (patientCheck !== "active") return;
       const token = await user.getIdToken();
       const response = await fetch("/api/razorpay/refund-status", {
         method: "POST",
@@ -834,6 +1062,12 @@ function BillingWorkspace() {
     setError("");
     setNotice("");
     try {
+      const patientCheck = await recheckPatientBeforeBillingMutation(invoice.patientId);
+      if (patientCheck !== "active") {
+        setGatewayPayment(false);
+        if (patientCheck !== "unverified") setPayingInvoice(null);
+        return;
+      }
       const token = await user.getIdToken();
       const orderResponse = await fetch("/api/razorpay/create-order", {
         method: "POST",
@@ -875,6 +1109,11 @@ function BillingWorkspace() {
         handler: async (confirmation) => {
           setGatewayPayment(true);
           try {
+            const patientCheck = await recheckPatientBeforeBillingMutation(invoice.patientId);
+            if (patientCheck !== "active") {
+              if (patientCheck !== "unverified") setPayingInvoice(null);
+              return;
+            }
             const freshToken = await user.getIdToken();
             const verificationResponse = await fetch("/api/razorpay/verify-payment", {
               method: "POST",
@@ -970,7 +1209,56 @@ function BillingWorkspace() {
           <div className="flex items-start justify-between gap-4"><div><h2 className="text-2xl font-bold text-[#233A59]">Create patient invoice</h2><p className="mt-1 text-sm text-slate-600">Every manually confirmed collection creates a permanent, traceable audit entry.</p></div><button type="button" onClick={() => setShowCreate(false)} aria-label="Close invoice form" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={19} /></button></div>
           <form onSubmit={createInvoice} className="mt-6 space-y-6">
             <div className="grid gap-4 md:grid-cols-2">
-              <label className={labelClass}>Registered patient<select required value={selectedPatientId} onChange={(event) => { setSelectedPatientId(event.target.value); setInitialPaymentRequestId(crypto.randomUUID()); }} className={inputClass}><option value="">Select active patient</option>{activePatients.map((patient) => <option key={patient.id} value={patient.id}>{patient.patientNumber ? patient.patientNumber + " · " : ""}{patient.fullName} · {patient.phone}</option>)}</select></label>
+              <div className="md:col-span-2">
+                <p className={labelClass}>Registered patient</p>
+                {selectedPatient ? (
+                  <div className="mt-2 flex flex-col gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white text-emerald-700 ring-1 ring-emerald-200"><UserRound size={19} /></span>
+                      <div className="min-w-0">
+                        <p className="truncate font-bold text-[#233A59]">{selectedPatient.fullName}</p>
+                        <p className="mt-1 break-words text-sm text-slate-600">{selectedPatient.patientNumber || "Patient ID pending"} · {selectedPatient.phone}</p>
+                      </div>
+                    </div>
+                    <button type="button" onClick={() => { setSelectedPatient(null); setInitialPaymentRequestId(crypto.randomUUID()); }} className="min-h-10 shrink-0 rounded-xl border border-emerald-300 bg-white px-4 py-2 text-sm font-bold text-emerald-800 hover:bg-emerald-100">Change patient</button>
+                  </div>
+                ) : (
+                  <div className="mt-2 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <label className="relative block">
+                      <span className="sr-only">Search registered patients</span>
+                      <Search size={17} className="pointer-events-none absolute left-3 top-3.5 text-slate-400" />
+                      <input
+                        value={patientPickerQuery}
+                        onChange={(event) => setPatientPickerQuery(event.target.value.slice(0, 100))}
+                        placeholder="Search name, mobile number or patient ID"
+                        autoComplete="off"
+                        aria-controls="billing-patient-results"
+                        aria-describedby="billing-patient-search-help"
+                        className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-[#233A59] focus:ring-2 focus:ring-[#233A59]/10"
+                      />
+                    </label>
+                    <p id="billing-patient-search-help" className="mt-2 text-xs leading-5 text-slate-500">Enter at least 3 letters, 6 mobile digits, or a complete patient ID. Search details stay only on this screen.</p>
+                    {patientPickerError || (!patientPickerSearchReady && recentPatientsError) ? <p role="alert" className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">{patientPickerError || recentPatientsError}</p> : null}
+                    <div id="billing-patient-results" aria-live="polite" className="mt-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">{patientPickerSearchReady ? "Search results" : "Recent active patients"}</p>
+                        {patientPickerLoading ? <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500"><LoaderCircle size={14} className="animate-spin" /> Searching…</span> : null}
+                      </div>
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                        {(patientPickerSearchReady ? patientPickerResults : recentPatients).map((patient) => (
+                          <button key={patient.id} type="button" onClick={() => choosePatient(patient)} className="min-w-0 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-[#A8864A] hover:bg-amber-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#233A59]">
+                            <span className="block truncate text-sm font-bold text-[#233A59]">{patient.fullName}</span>
+                            <span className="mt-1 block break-words text-xs font-semibold text-slate-500">{patient.patientNumber || "Patient ID pending"} · {patient.phone}</span>
+                          </button>
+                        ))}
+                      </div>
+                      {!patientPickerSearchReady && !recentPatientsLoaded ? <p className="mt-3 text-sm text-slate-500">Loading recent patients…</p> : null}
+                      {!patientPickerSearchReady && recentPatientsLoaded && recentPatients.length === 0 && !recentPatientsError ? <p className="mt-3 text-sm text-slate-500">No recent active patients. Search to find a registered patient.</p> : null}
+                      {patientPickerSearchReady && patientPickerSearched && patientPickerResults.length === 0 && !patientPickerError ? <p className="mt-3 text-sm text-slate-500">No active patients matched. Check the spelling, mobile number or patient ID.</p> : null}
+                    </div>
+                  </div>
+                )}
+              </div>
               <label className={labelClass}>Notes<input value={notes} maxLength={500} onChange={(event) => { setNotes(event.target.value); setInitialPaymentRequestId(crypto.randomUUID()); }} placeholder="Optional billing note" className={inputClass} /></label>
             </div>
 
@@ -1083,6 +1371,7 @@ function BillingWorkspace() {
 
       {notice && <p className="mt-5 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">{notice}</p>}
       {error && <p className="mt-5 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p>}
+      {invoicePatientSafetyError && <p className="mt-5 rounded-xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">{invoicePatientSafetyError}</p>}
 
       {profile.role === "admin" && (
         <section className="mt-6 rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
@@ -1150,7 +1439,7 @@ function BillingWorkspace() {
         {filteredInvoices.map((invoice) => {
           const invoicePayments = paymentsByInvoice.get(invoice.id) ?? [];
           const unavailableReason = patientAvailabilityLabel(invoice);
-          const paymentControlsEnabled = patientsLoaded && !unavailableReason;
+          const paymentControlsEnabled = resolvedInvoicePatientKey === invoicePatientIdsKey && !unavailableReason;
           return (
             <article key={invoice.id} className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
               <div className="grid gap-5 xl:grid-cols-[1fr_1fr_auto] xl:items-center">

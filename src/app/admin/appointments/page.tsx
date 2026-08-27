@@ -8,7 +8,7 @@ import {
   consumeAdminNavigationHandoff,
   stageAdminNavigationHandoff,
 } from "@/lib/admin-navigation-handoff";
-import { fetchPatientDirectory } from "@/lib/patient-directory";
+import { resolvePatientDirectoryEntries } from "@/lib/patient-directory";
 import {
   clinicDate,
   dateIsEnabled,
@@ -63,7 +63,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 type Appointment = {
   id: string;
@@ -111,6 +111,25 @@ const FRONT_DESK_STATUSES = new Set<AppointmentStatus>([
   "no_show",
   "cancelled",
 ]);
+
+const PATIENT_SAFETY_BATCH_SIZE = 50;
+
+function uniqueAppointmentPatientIds(appointments: readonly Appointment[]) {
+  const patientIds = new Set<string>();
+  appointments.forEach((appointment) => {
+    const patientId = String(appointment.patientId || "").trim();
+    if (patientId) patientIds.add(patientId);
+  });
+  return Array.from(patientIds);
+}
+
+function patientSafetyBatches(patientIds: readonly string[]) {
+  const batches: string[][] = [];
+  for (let index = 0; index < patientIds.length; index += PATIENT_SAFETY_BATCH_SIZE) {
+    batches.push(patientIds.slice(index, index + PATIENT_SAFETY_BATCH_SIZE));
+  }
+  return batches;
+}
 
 function assignedDoctorId(doctorNameValue?: string): DoctorId | null {
   return DOCTORS.find((doctor) => doctor.name === doctorNameValue)?.id ?? null;
@@ -167,6 +186,7 @@ function AppointmentDesk() {
     slots: new Set(),
     error: false,
   });
+  const patientSafetyRequestRef = useRef(0);
   const deskDate = dateFilter || today;
   const loading = deskLoading || historyLoading || archiveLoading;
   const allItems = useMemo(() => {
@@ -179,6 +199,10 @@ function AppointmentDesk() {
       return right.preferredTime.localeCompare(left.preferredTime);
     });
   }, [deskItems, historyItems]);
+  const appointmentPatientIds = useMemo(
+    () => uniqueAppointmentPatientIds(allItems),
+    [allItems],
+  );
   const items = useMemo(
     () => allItems.filter((appointment) => (
       !appointment.patientId || activePatientIds.has(appointment.patientId)
@@ -188,26 +212,39 @@ function AppointmentDesk() {
   const archivedExcludedCount = allItems.length - items.length;
 
   const refreshPatientSafety = useCallback(async () => {
+    const requestId = patientSafetyRequestRef.current + 1;
+    patientSafetyRequestRef.current = requestId;
+    setArchiveLoading(true);
     try {
       const user = firebaseAuth?.currentUser;
       if (!user) throw new Error("Staff session missing");
-      const directory = await fetchPatientDirectory(user, {
-        includeArchived: profile.role === "admin",
-      });
-      const activeIds = new Set(
-        directory.filter((patient) => patient.archived !== true).map((patient) => patient.id),
+      const resolutions = await Promise.all(
+        patientSafetyBatches(appointmentPatientIds).map((patientIds) => (
+          resolvePatientDirectoryEntries(user, patientIds, {
+            includeArchived: profile.role === "admin",
+          })
+        )),
       );
+      const activeIds = new Set<string>();
+      resolutions.forEach(({ patients }) => {
+        patients.forEach((patient) => {
+          if (patient.archived !== true) activeIds.add(patient.id);
+        });
+      });
+      if (requestId !== patientSafetyRequestRef.current) return null;
       setActivePatientIds(activeIds);
       setArchiveSafetyError("");
       return activeIds;
     } catch (directoryError) {
+      if (requestId !== patientSafetyRequestRef.current) return null;
       console.error(directoryError);
+      setActivePatientIds(new Set());
       setArchiveSafetyError("Archived patient safeguards could not be loaded. Appointment actions are paused to protect patient records.");
       return null;
     } finally {
-      setArchiveLoading(false);
+      if (requestId === patientSafetyRequestRef.current) setArchiveLoading(false);
     }
-  }, [profile.role]);
+  }, [appointmentPatientIds, profile.role]);
 
   useEffect(() => {
     const openAppointment = () => setShowCreate(true);
@@ -235,12 +272,12 @@ function AppointmentDesk() {
       const patientId = handoff.patientId;
       const user = firebaseAuth?.currentUser;
       const directoryRequest = user
-        ? fetchPatientDirectory(user, { includeArchived: profile.role === "admin" })
+        ? resolvePatientDirectoryEntries(user, [patientId], { includeArchived: profile.role === "admin" })
         : Promise.reject(new Error("Staff session missing"));
       void directoryRequest
-        .then((directory) => {
+        .then(({ patients }) => {
           if (!active) return;
-          const patient = directory.find((entry) => entry.id === patientId);
+          const patient = patients.find((entry) => entry.id === patientId);
           if (!patient || patient.archived === true) {
             setBookingError("This patient record is unavailable or archived. An administrator must restore it before a new appointment can be created.");
             setBooking((current) => ({ ...current, patientId: "", patientName: "", phone: "" }));
@@ -426,11 +463,28 @@ function AppointmentDesk() {
 
   async function verifyPatientIsActive(patientId?: string) {
     if (!patientId) return;
-    const refreshedActiveIds = await refreshPatientSafety();
-    if (!refreshedActiveIds) {
+    const user = firebaseAuth?.currentUser;
+    if (!user) throw new Error("Staff session missing");
+    let patientIsActive = false;
+    try {
+      const resolution = await resolvePatientDirectoryEntries(user, [patientId], {
+        includeArchived: profile.role === "admin",
+      });
+      patientIsActive = resolution.patients.some((patient) => (
+        patient.id === patientId && patient.archived !== true
+      ));
+    } catch (verificationError) {
+      console.error(verificationError);
+      setActivePatientIds(new Set());
+      setArchiveSafetyError("Archived patient safeguards could not be loaded. Appointment actions are paused to protect patient records.");
       throw new Error("Patient status could not be verified. Appointment actions are paused; please try again.");
     }
-    if (!refreshedActiveIds.has(patientId)) {
+    if (!patientIsActive) {
+      setActivePatientIds((current) => {
+        const next = new Set(current);
+        next.delete(patientId);
+        return next;
+      });
       throw new Error("This patient record is archived or unavailable. Appointment actions are no longer available.");
     }
   }

@@ -7,7 +7,13 @@ import {
   ADMIN_NAVIGATION_HANDOFF_EVENT,
   consumeAdminNavigationHandoff,
 } from "@/lib/admin-navigation-handoff";
-import { fetchPatientDirectory } from "@/lib/patient-directory";
+import {
+  fetchPatientDirectoryPage,
+  fetchPatientProfile,
+  resolvePatientDirectoryEntries,
+  searchPatientDirectory,
+} from "@/lib/patient-directory";
+import { patientSearchReady } from "@/lib/patient-search-readiness";
 import {
   MAX_REPORT_FILE_BYTES,
   REPORT_FILE_ACCEPT,
@@ -81,14 +87,14 @@ type Patient = {
   consultationFee?: number;
   registrationInvoiceId?: string;
   registrationInvoiceNumber?: string;
-  address: string;
+  address?: string;
   allergies?: string;
   medicalHistory?: string;
   archived?: boolean;
-  archivedAt?: Timestamp;
+  archivedAt?: Timestamp | string;
   archivedBy?: string;
   archiveReason?: string;
-  createdAt?: Timestamp;
+  createdAt?: Timestamp | string;
 };
 type BaseRecord = { id: string; createdAt?: Timestamp };
 type VisitRecord = BaseRecord & {
@@ -230,7 +236,17 @@ function PatientRegister() {
   const [recentPatients, setRecentPatients] = useState<Patient[]>([]);
   const [archivedRegistry, setArchivedRegistry] = useState<Patient[]>([]);
   const [search, setSearch] = useState("");
-  const [visibleCount, setVisibleCount] = useState(20);
+  const [searchResults, setSearchResults] = useState<Patient[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchNotice, setSearchNotice] = useState("");
+  const [searchCursor, setSearchCursor] = useState("");
+  const [searchHasMore, setSearchHasMore] = useState(false);
+  const [activeCursor, setActiveCursor] = useState("");
+  const [archivedCursor, setArchivedCursor] = useState("");
+  const [activeHasMore, setActiveHasMore] = useState(false);
+  const [archivedHasMore, setArchivedHasMore] = useState(false);
+  const [directoryLoading, setDirectoryLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -252,8 +268,10 @@ function PatientRegister() {
   const [lifecycleActionId, setLifecycleActionId] = useState<string | null>(null);
   const [patientView, setPatientView] = useState<"active" | "archived">("active");
   const [handoffPatientId, setHandoffPatientId] = useState("");
+  const [hydratedPatientId, setHydratedPatientId] = useState("");
   const selectedPatientIdRef = useRef<string | null>(null);
   const reportAccessAbortRef = useRef<AbortController | null>(null);
+  const patientSearchSequenceRef = useRef(0);
   const canEditDemographics = profile.role === "admin" || profile.role === "reception";
   const canEditClinical = profile.role === "admin" || profile.role === "doctor";
 
@@ -286,6 +304,7 @@ function PatientRegister() {
 
   const selectPatient = useCallback((patientId: string) => {
     resetPatientDetailData();
+    setHydratedPatientId("");
     selectedPatientIdRef.current = patientId;
     setSelectedId(patientId);
     setShowEdit(false);
@@ -314,16 +333,22 @@ function PatientRegister() {
 
   useEffect(() => {
     let active = true;
-    void fetchPatientDirectory(user, { includeArchived: profile.role === "admin" })
-      .then((directory) => {
+    const loadDirectory = async () => {
+      try {
+        const [activePage, archivedPage] = await Promise.all([
+          fetchPatientDirectoryPage(user, { pageSize: 25 }),
+          profile.role === "admin"
+            ? fetchPatientDirectoryPage(user, { pageSize: 25, archivedOnly: true })
+            : Promise.resolve({ patients: [], nextCursor: "", hasMore: false }),
+        ]);
         if (!active) return;
-        const records = directory as Patient[];
-        setRecentPatients(records.filter((patient) => patient.archived !== true));
-        setArchivedRegistry(profile.role === "admin"
-          ? records.filter((patient) => patient.archived === true)
-          : []);
-      })
-      .catch((loadError) => {
+        setRecentPatients(activePage.patients as Patient[]);
+        setArchivedRegistry(archivedPage.patients as Patient[]);
+        setActiveCursor(activePage.nextCursor);
+        setArchivedCursor(archivedPage.nextCursor);
+        setActiveHasMore(activePage.hasMore);
+        setArchivedHasMore(archivedPage.hasMore);
+      } catch (loadError) {
         console.error("Patient directory could not be loaded", loadError);
         if (active) {
           setRecentPatients([]);
@@ -331,11 +356,49 @@ function PatientRegister() {
           clearSelectedPatientData();
           setMessage(loadError instanceof Error ? loadError.message : "Patient records could not be loaded.");
         }
-      });
+      } finally {
+        if (active) setDirectoryLoading(false);
+      }
+    };
+    void loadDirectory();
     return () => {
       active = false;
     };
   }, [clearSelectedPatientData, profile.role, user]);
+
+  useEffect(() => {
+    const term = search.trim();
+    const sequence = ++patientSearchSequenceRef.current;
+    if (!term || !patientSearchReady(term)) return;
+    const timer = window.setTimeout(() => {
+      setSearchLoading(true);
+      setSearchNotice("");
+      void searchPatientDirectory(user, term, {
+        pageSize: 25,
+        archivedOnly: profile.role === "admin" && patientView === "archived",
+      })
+        .then((result) => {
+          if (sequence !== patientSearchSequenceRef.current) return;
+          setSearchResults(result.patients as Patient[]);
+          setSearchCursor(result.nextCursor);
+          setSearchHasMore(result.hasMore);
+          setSearchNotice(result.patients.length === 0 ? "No matching patient found." : "");
+        })
+        .catch((searchError) => {
+          if (sequence !== patientSearchSequenceRef.current) return;
+          setSearchResults([]);
+          setSearchCursor("");
+          setSearchHasMore(false);
+          setSearchNotice(searchError instanceof Error
+            ? searchError.message
+            : "Patient search is temporarily unavailable.");
+        })
+        .finally(() => {
+          if (sequence === patientSearchSequenceRef.current) setSearchLoading(false);
+        });
+    }, 260);
+    return () => window.clearTimeout(timer);
+  }, [patientView, profile.role, search, user]);
 
   const patients = useMemo(() => {
     const merged = new Map(recentPatients.map((patient) => [patient.id, patient]));
@@ -345,23 +408,39 @@ function PatientRegister() {
 
   useEffect(() => {
     if (!handoffPatientId) return;
-    const patient = patients.find((candidate) => candidate.id === handoffPatientId);
-    if (patient) {
-      window.setTimeout(() => {
+    let active = true;
+    const requestedPatientId = handoffPatientId;
+    void resolvePatientDirectoryEntries(user, requestedPatientId, {
+      includeArchived: profile.role === "admin",
+    })
+      .then((result) => {
+        if (!active) return;
         setHandoffPatientId("");
+        const patient = result.patients[0] as Patient | undefined;
+        if (!patient) {
+          setMessage("This patient is archived or is no longer available to your account.");
+          return;
+        }
         if (patient.archived === true) {
           if (profile.role !== "admin") {
             setMessage("This patient record is archived and can only be opened by an administrator.");
             return;
           }
+          setArchivedRegistry((current) => [patient, ...current.filter((item) => item.id !== patient.id)]);
           setPatientView("archived");
         } else {
+          setRecentPatients((current) => [patient, ...current.filter((item) => item.id !== patient.id)]);
           setPatientView("active");
         }
-        selectPatient(handoffPatientId);
-      }, 0);
-    }
-  }, [handoffPatientId, patients, profile.role, selectPatient]);
+        selectPatient(patient.id);
+      })
+      .catch((handoffError) => {
+        if (!active) return;
+        setHandoffPatientId("");
+        setMessage(handoffError instanceof Error ? handoffError.message : "This patient could not be opened.");
+      });
+    return () => { active = false; };
+  }, [handoffPatientId, profile.role, selectPatient, user]);
 
   const activePatients = useMemo(
     () => patients.filter((patient) => patient.archived !== true),
@@ -371,8 +450,14 @@ function PatientRegister() {
     () => patients
       .filter((patient) => patient.archived === true)
       .sort((left, right) => {
-        const leftTime = left.archivedAt?.toMillis?.() ?? left.createdAt?.toMillis?.() ?? 0;
-        const rightTime = right.archivedAt?.toMillis?.() ?? right.createdAt?.toMillis?.() ?? 0;
+        const leftValue = left.archivedAt ?? left.createdAt;
+        const rightValue = right.archivedAt ?? right.createdAt;
+        const leftTime = typeof leftValue === "string"
+          ? Date.parse(leftValue) || 0
+          : leftValue?.toMillis?.() ?? 0;
+        const rightTime = typeof rightValue === "string"
+          ? Date.parse(rightValue) || 0
+          : rightValue?.toMillis?.() ?? 0;
         return rightTime - leftTime;
       }),
     [patients],
@@ -384,9 +469,35 @@ function PatientRegister() {
     () => patientPool.find((patient) => patient.id === selectedId) ?? null,
     [patientPool, selectedId],
   );
-  const canModifySelectedPatient = canEditClinical && selectedPatient?.archived !== true;
-  const canEditSelectedProfile = (canEditDemographics || canEditClinical)
+  const selectedProfileIsHydrated = selectedPatient !== null
+    && hydratedPatientId === selectedPatient.id;
+  const canModifySelectedPatient = canEditClinical
+    && selectedProfileIsHydrated
     && selectedPatient?.archived !== true;
+  const canEditSelectedProfile = selectedPatient !== null
+    && (canEditDemographics || canEditClinical)
+    && selectedPatient.archived !== true
+    && selectedProfileIsHydrated;
+
+  useEffect(() => {
+    if (!selectedId || profile.role !== "reception") return;
+    let active = true;
+    void fetchPatientProfile(user, selectedId)
+      .then((patient) => {
+        if (!active || selectedPatientIdRef.current !== patient.id) return;
+        setHydratedPatientId(patient.id);
+        setRecentPatients((current) => [
+          patient as Patient,
+          ...current.filter((entry) => entry.id !== patient.id),
+        ]);
+      })
+      .catch((loadError) => {
+        if (!active) return;
+        console.error("Reception patient profile could not be loaded", loadError);
+        clearSelectedPatientData("This patient record is no longer available to your account.");
+      });
+    return () => { active = false; };
+  }, [clearSelectedPatientData, profile.role, selectedId, user]);
 
   useEffect(() => {
     if (!selectedId || (profile.role === "doctor" && !profile.doctorName)) return;
@@ -411,6 +522,7 @@ function PatientRegister() {
           }
           setRecentPatients((current) => current.map((patient) =>
             patient.id === freshPatient.id ? { ...patient, ...freshPatient } : patient));
+          setHydratedPatientId(freshPatient.id);
           return;
         }
 
@@ -425,6 +537,7 @@ function PatientRegister() {
           setArchivedRegistry((current) => current.filter((patient) => patient.id !== freshPatient.id));
           setRecentPatients(upsertPatient);
         }
+        setHydratedPatientId(freshPatient.id);
       },
       (loadError) => {
         console.error("Assigned patient clinical profile could not be loaded", loadError);
@@ -490,18 +603,65 @@ function PatientRegister() {
     return items.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   }, [growthRecords, invoices, labOrders, pregnancyRecords, prescriptions, reports, vaccinations, visits]);
 
-  const filtered = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    if (!term) return patientPool;
-    return patientPool.filter((patient) =>
-      [patient.fullName, patient.phone, patient.patientNumber ?? ""].some((value) => value.toLowerCase().includes(term)),
-    );
-  }, [patientPool, search]);
-
   const visiblePatients = useMemo(
-    () => search.trim() ? filtered : filtered.slice(0, visibleCount),
-    [filtered, search, visibleCount],
+    () => search.trim() ? (patientSearchReady(search) ? searchResults : []) : patientPool,
+    [patientPool, search, searchResults],
   );
+
+  const directoryHasMore = patientView === "archived" ? archivedHasMore : activeHasMore;
+  const canLoadMore = search.trim()
+    ? patientSearchReady(search) && searchHasMore
+    : directoryHasMore;
+
+  async function loadMorePatients() {
+    if (loadingMore || !canLoadMore) return;
+    setLoadingMore(true);
+    setMessage("");
+    try {
+      const archivedOnly = profile.role === "admin" && patientView === "archived";
+      const term = search.trim();
+      if (term) {
+        const sequence = patientSearchSequenceRef.current;
+        const result = await searchPatientDirectory(user, term, {
+          pageSize: 25,
+          cursor: searchCursor,
+          archivedOnly,
+        });
+        if (sequence !== patientSearchSequenceRef.current) return;
+        setSearchResults((current) => {
+          const merged = new Map(current.map((patient) => [patient.id, patient]));
+          (result.patients as Patient[]).forEach((patient) => merged.set(patient.id, patient));
+          return Array.from(merged.values());
+        });
+        setSearchCursor(result.nextCursor);
+        setSearchHasMore(result.hasMore);
+        return;
+      }
+      const page = await fetchPatientDirectoryPage(user, {
+        pageSize: 25,
+        cursor: archivedOnly ? archivedCursor : activeCursor,
+        archivedOnly,
+      });
+      const mergePatients = (current: Patient[]) => {
+        const merged = new Map(current.map((patient) => [patient.id, patient]));
+        (page.patients as Patient[]).forEach((patient) => merged.set(patient.id, patient));
+        return Array.from(merged.values());
+      };
+      if (archivedOnly) {
+        setArchivedRegistry(mergePatients);
+        setArchivedCursor(page.nextCursor);
+        setArchivedHasMore(page.hasMore);
+      } else {
+        setRecentPatients(mergePatients);
+        setActiveCursor(page.nextCursor);
+        setActiveHasMore(page.hasMore);
+      }
+    } catch (loadError) {
+      setMessage(loadError instanceof Error ? loadError.message : "More patient records could not be loaded.");
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   async function editPatient(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -869,16 +1029,17 @@ function PatientRegister() {
         <section className={selectedPatient ? "hidden xl:block" : "block"}>
           {profile.role === "admin" && (
             <div className="mb-3 grid grid-cols-2 rounded-2xl bg-slate-200/70 p-1" aria-label="Patient record status">
-              <button type="button" onClick={() => { setPatientView("active"); clearSelectedPatientData(); setVisibleCount(20); }} className={"rounded-xl px-3 py-2.5 text-sm font-bold transition " + (patientView === "active" ? "bg-white text-[#233A59] shadow-sm" : "text-slate-600")}>Active ({activePatients.length})</button>
-              <button type="button" onClick={() => { setPatientView("archived"); clearSelectedPatientData(); setVisibleCount(20); }} className={"rounded-xl px-3 py-2.5 text-sm font-bold transition " + (patientView === "archived" ? "bg-white text-amber-800 shadow-sm" : "text-slate-600")}>Archived ({archivedPatients.length})</button>
+              <button type="button" onClick={() => { setPatientView("active"); clearSelectedPatientData(); setSearch(""); setSearchResults([]); setSearchNotice(""); setSearchCursor(""); setSearchHasMore(false); }} className={"rounded-xl px-3 py-2.5 text-sm font-bold transition " + (patientView === "active" ? "bg-white text-[#233A59] shadow-sm" : "text-slate-600")}>Active</button>
+              <button type="button" onClick={() => { setPatientView("archived"); clearSelectedPatientData(); setSearch(""); setSearchResults([]); setSearchNotice(""); setSearchCursor(""); setSearchHasMore(false); }} className={"rounded-xl px-3 py-2.5 text-sm font-bold transition " + (patientView === "archived" ? "bg-white text-amber-800 shadow-sm" : "text-slate-600")}>Archived</button>
             </div>
           )}
-          <label className="relative block"><Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={19} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, mobile or patient ID" className="w-full rounded-2xl border border-slate-200 bg-white py-3.5 pl-12 pr-4 outline-none focus:border-[#233A59]" /></label>
+          <label className="relative block"><Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={19} /><input value={search} onChange={(event) => { const value = event.target.value; const ready = patientSearchReady(value); ++patientSearchSequenceRef.current; setSearch(value); setSearchResults([]); setSearchCursor(""); setSearchHasMore(false); setSearchLoading(ready); setSearchNotice(value.trim() && !ready ? "Enter at least 3 letters, 6 phone digits, or a complete patient ID." : ""); }} aria-describedby="patient-directory-search-status" autoComplete="off" placeholder="Search name, mobile or patient ID" className="w-full rounded-2xl border border-slate-200 bg-white py-3.5 pl-12 pr-4 outline-none focus:border-[#233A59]" /></label>
+          {search.trim() ? <p id="patient-directory-search-status" role="status" className="mt-2 px-1 text-xs font-semibold text-slate-500">{searchLoading ? "Searching secure patient records…" : searchNotice || `${visiblePatients.length} matching ${patientView === "archived" ? "archived" : "active"} patient${visiblePatients.length === 1 ? "" : "s"}.`}</p> : <p id="patient-directory-search-status" className="mt-2 px-1 text-xs text-slate-500">Showing the most recently updated {patientView === "archived" ? "archived" : "active"} records. Search to find older patients.</p>}
           <div className="performance-list mt-4 space-y-2 xl:max-h-[calc(100dvh-14rem)] xl:overflow-y-auto xl:pr-2">
             {visiblePatients.map((patient) => {
               const selected = patient.id === selectedId;
               return (
-                <button key={patient.id} type="button" onClick={() => { selectPatient(patient.id); window.scrollTo({ top: 0, behavior: "smooth" }); }} className={"flex w-full items-center gap-3 rounded-2xl p-3.5 text-left shadow-sm ring-1 transition " + (selected ? "bg-[#233A59] text-white ring-[#233A59]" : "bg-white text-slate-700 ring-slate-200 hover:ring-[#A8864A]")}>
+                <button key={patient.id} type="button" onClick={() => { if (patient.archived === true) setArchivedRegistry((current) => [patient, ...current.filter((item) => item.id !== patient.id)]); else setRecentPatients((current) => [patient, ...current.filter((item) => item.id !== patient.id)]); setSearch(""); setSearchResults([]); setSearchCursor(""); setSearchHasMore(false); setSearchNotice(""); setSearchLoading(false); selectPatient(patient.id); window.scrollTo({ top: 0, behavior: "smooth" }); }} className={"flex w-full items-center gap-3 rounded-2xl p-3.5 text-left shadow-sm ring-1 transition " + (selected ? "bg-[#233A59] text-white ring-[#233A59]" : "bg-white text-slate-700 ring-slate-200 hover:ring-[#A8864A]")}>
                   <span className={"flex h-11 w-11 shrink-0 items-center justify-center rounded-xl " + (selected ? "bg-white/10" : "bg-blue-50 text-blue-700")}><UserRound size={20} /></span>
                   <span className="min-w-0 flex-1"><span className="block truncate font-bold">{patient.fullName}</span><span className={"mt-1 block text-xs " + (selected ? "text-slate-200" : "text-slate-500")}>{patient.patientNumber ?? "Patient"} · {patient.phone}</span></span>
                   <ChevronRight size={18} />
@@ -886,10 +1047,10 @@ function PatientRegister() {
               );
             })}
           </div>
-          {!search.trim() && visiblePatients.length < filtered.length && (
-            <button type="button" onClick={() => setVisibleCount((count) => count + 20)} className="mt-3 min-h-11 w-full rounded-xl border border-slate-200 bg-white text-sm font-bold text-[#233A59]">Show 20 more patients</button>
+          {canLoadMore && (
+            <button type="button" onClick={() => void loadMorePatients()} disabled={loadingMore} className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white text-sm font-bold text-[#233A59] disabled:opacity-60">{loadingMore ? <LoaderCircle size={17} className="animate-spin" /> : null}{loadingMore ? "Loading records…" : search.trim() ? "Load more search results" : "Load 25 more patients"}</button>
           )}
-          {filtered.length === 0 && <div className={cardClass + " mt-5 text-center"}><UserRound className="mx-auto text-[#A8864A]" size={34} /><p className="mt-4 font-bold text-[#233A59]">No matching patients</p></div>}
+          {!search.trim() && directoryLoading ? <div className={cardClass + " mt-5 text-center"}><LoaderCircle className="mx-auto animate-spin text-[#A8864A]" size={32} /><p className="mt-4 font-bold text-[#233A59]">Loading recent patients…</p></div> : visiblePatients.length === 0 && !searchLoading ? <div className={cardClass + " mt-5 text-center"}><UserRound className="mx-auto text-[#A8864A]" size={34} /><p className="mt-4 font-bold text-[#233A59]">{search.trim() ? "No matching patients" : `No ${patientView} patients`}</p></div> : null}
         </section>
 
         <section className={!selectedPatient ? "hidden xl:block" : "block"}>
@@ -1075,7 +1236,7 @@ function Overview({ canEditDemographics, canEditClinical, canEditProfile, canVie
               : "Legacy patient · fee not classified"}
         />
         <Info label="Gender" value={patient.gender} />
-        <Info label="Address" value={patient.address} />
+        <Info label="Address" value={patient.address ?? ""} />
         {canViewClinical ? <Info label="Known allergies" value={patient.allergies || "None recorded"} alert={Boolean(patient.allergies)} /> : null}
         {canViewClinical ? <Info label="Medical history" value={patient.medicalHistory || "No history recorded"} /> : null}
       </div>

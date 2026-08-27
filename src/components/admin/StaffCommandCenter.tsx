@@ -83,6 +83,9 @@ export default function StaffCommandCenter({ role }: { role: StaffRole }) {
   const router = useRouter();
   const pathname = usePathname();
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   const searchTimerRef = useRef<number | null>(null);
   const searchSequenceRef = useRef(0);
   const [open, setOpen] = useState(false);
@@ -150,6 +153,13 @@ export default function StaffCommandCenter({ role }: { role: StaffRole }) {
     setError("");
   }, []);
 
+  const openCommandCenter = useCallback(() => {
+    if (document.activeElement instanceof HTMLElement) {
+      returnFocusRef.current = document.activeElement;
+    }
+    setOpen(true);
+  }, []);
+
   useEffect(() => {
     const visited = staffToolForPath(pathname);
     if (!visited) return;
@@ -163,26 +173,68 @@ export default function StaffCommandCenter({ role }: { role: StaffRole }) {
     function handleShortcut(event: KeyboardEvent) {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        setOpen(true);
+        openCommandCenter();
       }
-      if (event.key === "Escape") close();
     }
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [close]);
+  }, [openCommandCenter]);
 
   useEffect(() => {
     if (!open) return;
     const previousOverflow = document.body.style.overflow;
+    const background = document.querySelector<HTMLElement>(".staff-app-shell");
+    const previousInert = background?.inert ?? false;
+    const previousAriaHidden = background?.getAttribute("aria-hidden") ?? null;
+    const returnFocusTarget = returnFocusRef.current;
     document.body.style.overflow = "hidden";
-    const focusTimer = window.setTimeout(() => {
-      if (window.innerWidth >= 1024) inputRef.current?.focus();
-    }, 80);
+    (inputRef.current ?? closeButtonRef.current)?.focus();
+    if (background) {
+      background.inert = true;
+      background.setAttribute("aria-hidden", "true");
+    }
+
+    function handleDialogKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+        return;
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+
+      const focusable = Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialogRef.current.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !dialogRef.current.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !dialogRef.current.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleDialogKeyDown);
     return () => {
-      window.clearTimeout(focusTimer);
+      document.removeEventListener("keydown", handleDialogKeyDown);
       document.body.style.overflow = previousOverflow;
+      if (background) {
+        background.inert = previousInert;
+        if (previousAriaHidden === null) background.removeAttribute("aria-hidden");
+        else background.setAttribute("aria-hidden", previousAriaHidden);
+      }
+      if (returnFocusTarget?.isConnected) returnFocusTarget.focus();
     };
-  }, [open]);
+  }, [close, open]);
 
   useEffect(() => () => {
     if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current);
@@ -216,15 +268,19 @@ export default function StaffCommandCenter({ role }: { role: StaffRole }) {
     <>
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={openCommandCenter}
         aria-label="Open clinic search and quick actions"
+        aria-expanded={open}
+        aria-controls="staff-command-dialog"
         className="grid h-10 w-10 place-items-center rounded-xl border border-slate-200 bg-slate-50 text-[#233A59] transition active:scale-95 lg:hidden"
       >
         <Search aria-hidden="true" size={19} />
       </button>
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={openCommandCenter}
+        aria-expanded={open}
+        aria-controls="staff-command-dialog"
         className="hidden h-11 min-w-56 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 text-left text-sm font-semibold text-slate-500 transition hover:border-slate-300 hover:bg-white lg:flex"
       >
         <Search aria-hidden="true" size={18} />
@@ -241,9 +297,12 @@ export default function StaffCommandCenter({ role }: { role: StaffRole }) {
             className="absolute inset-0 bg-slate-950/55 backdrop-blur-sm"
           />
           <section
+            id="staff-command-dialog"
+            ref={dialogRef}
             role="dialog"
             aria-modal="true"
             aria-labelledby="staff-command-title"
+            tabIndex={-1}
             className="relative flex max-h-[92dvh] w-full max-w-3xl flex-col overflow-hidden rounded-t-[30px] bg-white shadow-2xl lg:max-h-[84dvh] lg:rounded-[30px]"
           >
             <h2 id="staff-command-title" className="sr-only">Clinic search and quick actions</h2>
@@ -260,7 +319,7 @@ export default function StaffCommandCenter({ role }: { role: StaffRole }) {
                   aria-label="Search patients and clinic actions"
                   className="h-12 min-w-0 flex-1 bg-transparent text-base font-semibold text-slate-900 outline-none placeholder:font-normal placeholder:text-slate-400 lg:text-lg"
                 />
-                <button type="button" onClick={close} aria-label="Close command centre" className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-600">
+                <button ref={closeButtonRef} type="button" onClick={close} aria-label="Close command centre" className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-600">
                   <X aria-hidden="true" size={19} />
                 </button>
               </div>

@@ -8,7 +8,12 @@ import {
   consumeAdminNavigationHandoff,
 } from "@/lib/admin-navigation-handoff";
 import { AYUSLAB_PROVIDER } from "@/lib/external-lab-providers";
-import { fetchPatientDirectory } from "@/lib/patient-directory";
+import {
+  fetchPatientDirectoryPage,
+  resolvePatientDirectoryEntries,
+  searchPatientDirectory,
+} from "@/lib/patient-directory";
+import { patientSearchReady } from "@/lib/patient-search-readiness";
 import {
   MAX_REPORT_FILE_BYTES,
   REPORT_FILE_ACCEPT,
@@ -146,6 +151,7 @@ function availableStatusTransitions(status: LabStatus, reception: boolean) {
 }
 
 const INITIAL_VISIBLE_ORDERS = 30;
+const PATIENT_SAFETY_BATCH_SIZE = 50;
 
 const cardClass = "rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm";
 const fieldClass = "mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-[#A8864A] focus:ring-2 focus:ring-[#A8864A]/15";
@@ -199,6 +205,12 @@ function LabDesk() {
   const db = firestore!;
   const files = storage!;
   const [patients, setPatients] = useState<Patient[]>([]);
+  const [patientSearchResults, setPatientSearchResults] = useState<Patient[]>([]);
+  const [patientSearchLoading, setPatientSearchLoading] = useState(false);
+  const [patientSearchNotice, setPatientSearchNotice] = useState("");
+  const [activeOrderPatientIds, setActiveOrderPatientIds] = useState<Set<string>>(() => new Set());
+  const [patientSafetyLoading, setPatientSafetyLoading] = useState(true);
+  const [patientSafetyScope, setPatientSafetyScope] = useState("");
   const [orders, setOrders] = useState<LabOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -236,8 +248,10 @@ function LabDesk() {
   const chooseFileRef = useRef<HTMLInputElement | null>(null);
   const cameraFileRef = useRef<HTMLInputElement | null>(null);
   const fileValidationSequence = useRef(0);
+  const patientSearchSequence = useRef(0);
   const directoryScope = `${profile.role}:${profile.doctorName ?? ""}`;
   const patientDirectoryAvailable = patientsLoaded && patientDirectoryScope === directoryScope;
+  const patientSafetyAvailable = !patientSafetyLoading && patientSafetyScope === directoryScope;
   const isReception = profile.role === "reception";
   const canReadReports = profile.role === "admin"
     || profile.role === "doctor"
@@ -265,10 +279,19 @@ function LabDesk() {
 
   useEffect(() => {
     let active = true;
-    void fetchPatientDirectory(user)
+    const resetTimer = window.setTimeout(() => {
+      if (!active) return;
+      setPatientsLoaded(false);
+      setPatientDirectoryScope("");
+      setPatients([]);
+      setPatientSearchResults([]);
+      setPatientSearchLoading(false);
+      setPatientSearchNotice("");
+    }, 0);
+    void fetchPatientDirectoryPage(user, { pageSize: 25 })
       .then((directory) => {
         if (!active) return;
-        setPatients(directory.map((patient) => ({
+        setPatients(directory.patients.map((patient) => ({
           id: patient.id,
           patientNumber: patient.patientNumber,
           fullName: patient.fullName,
@@ -289,8 +312,44 @@ function LabDesk() {
       .finally(() => {
         if (active) setPatientsLoaded(true);
       });
-    return () => { active = false; };
+    return () => {
+      active = false;
+      window.clearTimeout(resetTimer);
+    };
   }, [directoryScope, user]);
+
+  useEffect(() => {
+    const term = patientSearch.trim();
+    const sequence = ++patientSearchSequence.current;
+    if (!term || !patientSearchReady(term)) return;
+    const timer = window.setTimeout(() => {
+      setPatientSearchLoading(true);
+      setPatientSearchNotice("");
+      void searchPatientDirectory(user, term, { pageSize: 12 })
+        .then((result) => {
+          if (sequence !== patientSearchSequence.current) return;
+          setPatientSearchResults(result.patients.map((patient) => ({
+            id: patient.id,
+            patientNumber: patient.patientNumber,
+            fullName: patient.fullName,
+            phone: patient.phone,
+            archived: false,
+          })));
+          setPatientSearchNotice(result.patients.length === 0 ? "No active patient found." : "");
+        })
+        .catch((searchError) => {
+          if (sequence !== patientSearchSequence.current) return;
+          setPatientSearchResults([]);
+          setPatientSearchNotice(searchError instanceof Error
+            ? searchError.message
+            : "Patient search is temporarily unavailable.");
+        })
+        .finally(() => {
+          if (sequence === patientSearchSequence.current) setPatientSearchLoading(false);
+        });
+    }, 260);
+    return () => window.clearTimeout(timer);
+  }, [patientSearch, user]);
 
   useEffect(() => {
     if (profile.role === "doctor" && !profile.doctorName?.trim()) {
@@ -356,24 +415,92 @@ function LabDesk() {
   }, [db, directoryRefresh, profile.doctorName, profile.role, user]);
 
   useEffect(() => {
-    if (!patientDirectoryAvailable || !handoffPatientId) return;
-    const deepLinkedPatientExists = patients.some((patient) => patient.id === handoffPatientId);
-    const timer = window.setTimeout(() => {
-      setHandoffPatientId("");
-      if (!deepLinkedPatientExists) return;
-      setPatientId(handoffPatientId);
-      setShowCreate(true);
-      setError("");
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [handoffPatientId, patientDirectoryAvailable, patients]);
+    let active = true;
+    const patientIds = [...new Set(orders.map((order) => order.patientId).filter(Boolean))];
+
+    const verifyLinkedPatients = async () => {
+      setPatientSafetyLoading(true);
+      setPatientSafetyScope("");
+      setActiveOrderPatientIds(new Set());
+      if (patientIds.length === 0) {
+        if (active) {
+          setPatientSafetyScope(directoryScope);
+          setPatientSafetyLoading(false);
+        }
+        return;
+      }
+      try {
+        const resolved = new Set<string>();
+        const batches = Array.from(
+          { length: Math.ceil(patientIds.length / PATIENT_SAFETY_BATCH_SIZE) },
+          (_, index) => patientIds.slice(
+            index * PATIENT_SAFETY_BATCH_SIZE,
+            (index + 1) * PATIENT_SAFETY_BATCH_SIZE,
+          ),
+        );
+        const results = await Promise.all(
+          batches.map((batch) => resolvePatientDirectoryEntries(user, batch)),
+        );
+        results.forEach((result) => result.patients.forEach((patient) => resolved.add(patient.id)));
+        if (!active) return;
+        setActiveOrderPatientIds(resolved);
+        setPatientSafetyScope(directoryScope);
+      } catch (verificationError) {
+        if (!active) return;
+        setShowCreate(false);
+        setResultOrder(null);
+        setError(verificationError instanceof Error
+          ? verificationError.message
+          : "Linked patients could not be verified. Laboratory actions are paused.");
+      } finally {
+        if (active) setPatientSafetyLoading(false);
+      }
+    };
+
+    void verifyLinkedPatients();
+    return () => { active = false; };
+  }, [directoryScope, orders, user]);
+
+  useEffect(() => {
+    if (!handoffPatientId) return;
+    let active = true;
+    const requestedPatientId = handoffPatientId;
+    void resolvePatientDirectoryEntries(user, requestedPatientId)
+      .then((result) => {
+        if (!active) return;
+        const patient = result.patients.find((entry) => (
+          entry.id === requestedPatientId && entry.archived !== true
+        ));
+        setHandoffPatientId("");
+        if (!patient) {
+          setError("This patient is archived or is no longer available to your account.");
+          return;
+        }
+        const candidate: Patient = {
+          id: patient.id,
+          patientNumber: patient.patientNumber,
+          fullName: patient.fullName,
+          phone: patient.phone,
+          archived: false,
+        };
+        setPatients((current) => [candidate, ...current.filter((item) => item.id !== candidate.id)].slice(0, 26));
+        setPatientId(candidate.id);
+        setShowCreate(true);
+        setError("");
+      })
+      .catch((handoffError) => {
+        if (!active) return;
+        setHandoffPatientId("");
+        setError(handoffError instanceof Error ? handoffError.message : "This patient could not be opened.");
+      });
+    return () => { active = false; };
+  }, [handoffPatientId, user]);
 
   const filteredOrders = useMemo(() => {
-    if (!patientsLoaded || !patientDirectoryAvailable) return [];
-    const activePatientIds = new Set(patients.map((patient) => patient.id));
+    if (!patientSafetyAvailable) return [];
     const term = search.trim().toLowerCase();
     return orders.filter((order) => {
-      if (!activePatientIds.has(order.patientId)) return false;
+      if (!activeOrderPatientIds.has(order.patientId)) return false;
       const matchesStatus = statusFilter === "all" || order.status === statusFilter;
       const matchesPriority = priorityFilter === "all" || order.priority === priorityFilter;
       const haystack = [order.orderNumber, order.patientName, order.patientPhone, order.patientNumber, order.tests.join(" ")].join(" ").toLowerCase();
@@ -383,7 +510,7 @@ function LabDesk() {
       if (rankDifference !== 0) return rankDifference;
       return timestampMillis(right.orderedAt) - timestampMillis(left.orderedAt);
     });
-  }, [orders, patientDirectoryAvailable, patients, patientsLoaded, priorityFilter, search, statusFilter]);
+  }, [activeOrderPatientIds, orders, patientSafetyAvailable, priorityFilter, search, statusFilter]);
 
   const visibleOrders = useMemo(
     () => filteredOrders.slice(0, visibleOrderCount),
@@ -391,10 +518,9 @@ function LabDesk() {
   );
 
   const accessibleOrders = useMemo(() => {
-    if (!patientsLoaded || !patientDirectoryAvailable) return [];
-    const activePatientIds = new Set(patients.map((patient) => patient.id));
-    return orders.filter((order) => activePatientIds.has(order.patientId));
-  }, [orders, patientDirectoryAvailable, patients, patientsLoaded]);
+    if (!patientSafetyAvailable) return [];
+    return orders.filter((order) => activeOrderPatientIds.has(order.patientId));
+  }, [activeOrderPatientIds, orders, patientSafetyAvailable]);
 
   const selectedOrderPatient = useMemo(
     () => patients.find((patient) => patient.id === patientId) ?? null,
@@ -404,17 +530,41 @@ function LabDesk() {
   const patientMatches = useMemo(() => {
     const term = patientSearch.trim().toLowerCase();
     if (!term) return patients.slice(0, 8);
-    return patients.filter((patient) => [patient.fullName, patient.phone, patient.patientNumber ?? ""]
-      .join(" ")
-      .toLowerCase()
-      .includes(term)).slice(0, 12);
-  }, [patientSearch, patients]);
+    if (!patientSearchReady(term)) return [];
+    return patientSearchResults;
+  }, [patientSearch, patientSearchResults, patients]);
 
   const stats = useMemo(() => ({
     active: accessibleOrders.filter((item) => !["completed", "cancelled"].includes(item.status)).length,
     urgent: accessibleOrders.filter((item) => item.priority === "urgent" && item.status !== "completed" && item.status !== "cancelled").length,
     completed: accessibleOrders.filter((item) => item.status === "completed").length,
   }), [accessibleOrders]);
+
+  async function verifyActivePatient(patientIdToVerify: string) {
+    let resolution;
+    try {
+      resolution = await resolvePatientDirectoryEntries(user, patientIdToVerify);
+    } catch (verificationError) {
+      console.error(verificationError);
+      setActiveOrderPatientIds(new Set());
+      setPatientSafetyScope("");
+      throw new Error("Patient status could not be verified. Laboratory actions are paused; please refresh and try again.");
+    }
+
+    const patient = resolution.patients.find((entry) => (
+      entry.id === patientIdToVerify && entry.archived !== true
+    ));
+    if (patient) return patient;
+
+    setActiveOrderPatientIds((current) => {
+      const next = new Set(current);
+      next.delete(patientIdToVerify);
+      return next;
+    });
+    setPatients((current) => current.filter((entry) => entry.id !== patientIdToVerify));
+    setPatientId((current) => current === patientIdToVerify ? "" : current);
+    throw new Error("This patient is archived or is no longer available to your account. Laboratory actions are unavailable.");
+  }
 
   function toggleTest(test: string) {
     setSelectedTests((current) => current.includes(test) ? current.filter((item) => item !== test) : [...current, test]);
@@ -604,12 +754,13 @@ function LabDesk() {
     setSaving(true);
     setError("");
     try {
+      const verifiedPatient = await verifyActivePatient(selectedPatient.id);
       await addDoc(collection(db, "labOrders"), {
         orderNumber: makeOrderNumber(),
-        patientId: selectedPatient.id,
-        patientNumber: selectedPatient.patientNumber ?? "",
-        patientName: selectedPatient.fullName,
-        patientPhone: selectedPatient.phone,
+        patientId: verifiedPatient.id,
+        patientNumber: verifiedPatient.patientNumber ?? "",
+        patientName: verifiedPatient.fullName,
+        patientPhone: verifiedPatient.phone,
         tests: selectedTests,
         priority: String(form.get("priority") || "routine"),
         clinician,
@@ -625,15 +776,15 @@ function LabDesk() {
       setShowCreate(false);
       setNotice("Laboratory order created.");
       if (profile.role !== "admin") setDirectoryRefresh((value) => value + 1);
-    } catch {
-      setError("The laboratory order could not be created.");
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : "The laboratory order could not be created.");
     } finally {
       setSaving(false);
     }
   }
 
   async function changeStatus(order: LabOrder, status: LabStatus) {
-    if (!patientDirectoryAvailable || !patients.some((patient) => patient.id === order.patientId)) {
+    if (!patientSafetyAvailable || !activeOrderPatientIds.has(order.patientId)) {
       setError("This laboratory order is no longer linked to an available active patient.");
       return;
     }
@@ -651,13 +802,14 @@ function LabDesk() {
     setStatusBusyOrderId(order.id);
     setError("");
     try {
+      await verifyActivePatient(order.patientId);
       const values: Record<string, unknown> = { status, updatedAt: serverTimestamp() };
       if (status === "collected") values.specimenCollectedAt = serverTimestamp();
       if (status === "completed" && !order.completedAt) values.completedAt = serverTimestamp();
       await updateDoc(doc(db, "labOrders", order.id), values);
       if (profile.role !== "admin") setDirectoryRefresh((value) => value + 1);
-    } catch {
-      setError("Unable to update the laboratory status.");
+    } catch (statusError) {
+      setError(statusError instanceof Error ? statusError.message : "Unable to update the laboratory status.");
     } finally {
       setStatusBusyOrderId("");
     }
@@ -670,11 +822,22 @@ function LabDesk() {
       setError("Confirm that the downloaded report matches this patient and laboratory order before attaching it.");
       return;
     }
-    if (!patientDirectoryAvailable || !patients.some((patient) => patient.id === resultOrder.patientId)) {
+    if (!patientSafetyAvailable || !activeOrderPatientIds.has(resultOrder.patientId)) {
       setResultOrder(null);
       setError("This laboratory order is no longer linked to an available active patient.");
       return;
     }
+    setUploadPhase("checking");
+    try {
+      await verifyActivePatient(resultOrder.patientId);
+    } catch (verificationError) {
+      setUploadPhase("idle");
+      setError(verificationError instanceof Error
+        ? verificationError.message
+        : "Patient status could not be verified. Laboratory actions are paused.");
+      return;
+    }
+    setUploadPhase("idle");
     const latestOrder = orders.find((order) => order.id === resultOrder.id);
     if (latestOrder?.status === "cancelled") {
       setError("This laboratory order was cancelled while it was open. A report cannot be attached.");
@@ -861,7 +1024,7 @@ function LabDesk() {
 
   async function accessReport(order: LabOrder, action: "preview" | "download" | "print") {
     if (!hasAttachedReport(order) || !canReadReports) return;
-    if (!patientDirectoryAvailable || !patients.some((patient) => patient.id === order.patientId)) {
+    if (!patientSafetyAvailable || !activeOrderPatientIds.has(order.patientId)) {
       setError("This report is no longer linked to an available active patient.");
       return;
     }
@@ -872,6 +1035,16 @@ function LabDesk() {
     }
     setReportAction({ orderId: order.id, action });
     setError("");
+    try {
+      await verifyActivePatient(order.patientId);
+    } catch (verificationError) {
+      preview?.close();
+      setReportAction(null);
+      setError(verificationError instanceof Error
+        ? verificationError.message
+        : "Patient status could not be verified. Laboratory actions are paused.");
+      return;
+    }
     try {
       const idToken = await user.getIdToken();
       const reportResponse = await fetch("/api/labs/report-access", {
@@ -1034,14 +1207,14 @@ function LabDesk() {
                 {selectedOrderPatient ? (
                   <div className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
                     <div className="min-w-0"><p className="truncate text-sm font-bold text-emerald-950">{selectedOrderPatient.fullName}</p><p className="mt-0.5 text-xs text-emerald-800">{selectedOrderPatient.patientNumber || "Patient"} · {selectedOrderPatient.phone}</p></div>
-                    <button type="button" onClick={() => { setPatientId(""); setPatientSearch(""); }} className="shrink-0 rounded-lg bg-white px-3 py-2 text-xs font-bold text-emerald-900 ring-1 ring-emerald-200">Change</button>
+                    <button type="button" onClick={() => { setPatientId(""); setPatientSearch(""); setPatientSearchResults([]); setPatientSearchLoading(false); setPatientSearchNotice(""); }} className="shrink-0 rounded-lg bg-white px-3 py-2 text-xs font-bold text-emerald-900 ring-1 ring-emerald-200">Change</button>
                   </div>
                 ) : (
                   <>
-                    <input id="lab-patient-search" value={patientSearch} onChange={(event) => setPatientSearch(event.target.value)} autoComplete="off" placeholder="Search name, phone, or patient ID" className={fieldClass} />
+                    <input id="lab-patient-search" value={patientSearch} onChange={(event) => { const value = event.target.value; const ready = patientSearchReady(value); setPatientSearch(value); setPatientSearchResults([]); setPatientSearchLoading(ready); setPatientSearchNotice(value.trim() && !ready ? "Enter at least 3 letters, 6 phone digits, or a complete patient ID." : ""); }} autoComplete="off" placeholder="Search name, phone, or patient ID" className={fieldClass} aria-describedby="lab-patient-search-status" />
                     <div className="mt-2 max-h-52 space-y-1 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1">
-                      {patientMatches.map((patient) => <button type="button" key={patient.id} onClick={() => { setPatientId(patient.id); setPatientSearch(""); }} className="flex min-h-12 w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition hover:bg-slate-50 focus:bg-slate-50"><span className="min-w-0"><span className="block truncate text-sm font-bold text-slate-800">{patient.fullName}</span><span className="block text-xs text-slate-500">{patient.patientNumber || "Patient"} · {patient.phone}</span></span><span className="text-xs font-bold text-[#A8864A]">Select</span></button>)}
-                      {patientMatches.length === 0 && <p className="px-3 py-4 text-center text-sm text-slate-500">No active patient found.</p>}
+                      {patientMatches.map((patient) => <button type="button" key={patient.id} onClick={() => { setPatients((current) => [patient, ...current.filter((item) => item.id !== patient.id)].slice(0, 26)); setPatientId(patient.id); setPatientSearch(""); setPatientSearchResults([]); setPatientSearchLoading(false); setPatientSearchNotice(""); }} className="flex min-h-12 w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition hover:bg-slate-50 focus:bg-slate-50"><span className="min-w-0"><span className="block truncate text-sm font-bold text-slate-800">{patient.fullName}</span><span className="block text-xs text-slate-500">{patient.patientNumber || "Patient"} · {patient.phone}</span></span><span className="text-xs font-bold text-[#A8864A]">Select</span></button>)}
+                      {patientSearchLoading ? <p id="lab-patient-search-status" role="status" className="px-3 py-4 text-center text-sm font-semibold text-slate-600">Searching active patients…</p> : patientSearchNotice ? <p id="lab-patient-search-status" role="status" className="px-3 py-4 text-center text-sm text-slate-500">{patientSearchNotice}</p> : patientMatches.length === 0 ? <p id="lab-patient-search-status" className="px-3 py-4 text-center text-sm text-slate-500">No active patient found.</p> : <p id="lab-patient-search-status" className="sr-only">{patientMatches.length} active patients available.</p>}
                     </div>
                   </>
                 )}

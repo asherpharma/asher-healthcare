@@ -27,8 +27,9 @@ test("system health returns redacted readiness only to a current administrator",
   );
 
   assert.equal(result.services.database.status, "operational");
-  assert.equal(result.services.payments.status, "attention");
-  assert.equal(result.services.payments.mode, "test");
+  assert.equal(result.services.payments.status, "operational");
+  assert.equal(result.services.payments.mode, "manual");
+  assert.equal(result.services.payments.gatewayMode, "test");
   assert.equal(result.services.clinicalReports.status, "configured");
   assert.equal(result.release, "0123456789abcdef");
   const serialized = JSON.stringify(result);
@@ -37,15 +38,16 @@ test("system health returns redacted readiness only to a current administrator",
   assert.equal(serialized.includes("@example.test"), false);
 });
 
-test("system health distinguishes a live Razorpay configuration without exposing its key", async () => {
+test("system health retains historical gateway readiness without making it a manual billing dependency", async () => {
   const result = await clinicSystemHealth(
     { ...fullEnvironment, RAZORPAY_KEY_ID: "rzp_live_redacted" },
     { uid: "admin-1", role: "admin" },
     { async getDocument() { return { data: { active: true, role: "admin" } }; } },
   );
 
-  assert.equal(result.services.payments.status, "configured");
-  assert.equal(result.services.payments.mode, "live");
+  assert.equal(result.services.payments.status, "operational");
+  assert.equal(result.services.payments.mode, "manual");
+  assert.equal(result.services.payments.gatewayMode, "live");
   assert.equal(JSON.stringify(result).includes("rzp_live_redacted"), false);
 });
 
@@ -56,7 +58,9 @@ test("system health reports missing optional services without exposing variable 
     { async getDocument() { return { data: { active: true, role: "admin" } }; } },
   );
   assert.equal(result.services.authentication.status, "attention");
-  assert.equal(result.services.payments.status, "attention");
+  assert.equal(result.services.payments.status, "operational");
+  assert.equal(result.services.payments.mode, "manual");
+  assert.equal(result.services.payments.gatewayMode, "unconfigured");
   assert.equal(JSON.stringify(result).includes("RAZORPAY"), false);
 });
 

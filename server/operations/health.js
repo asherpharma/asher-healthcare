@@ -58,8 +58,9 @@ export async function clinicSystemHealth(env, staff, database = { getDocument })
         status: configured(env, REQUIRED_SERVER_SETTINGS) ? "configured" : "attention",
       },
       payments: {
-        status: paymentConfigured && paymentMode === "live" ? "configured" : "attention",
-        mode: paymentConfigured ? paymentMode : "unconfigured",
+        status: "operational",
+        mode: "manual",
+        gatewayMode: paymentConfigured ? paymentMode : "unconfigured",
       },
       clinicalReports: {
         status: configured(env, REQUIRED_REPORT_SETTINGS) ? "configured" : "attention",

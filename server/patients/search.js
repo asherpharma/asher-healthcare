@@ -19,6 +19,9 @@ const SEARCH_FIELD_MASK = [
   "specialty",
   "consultationFee",
   "archived",
+  "archivedAt",
+  "archivedBy",
+  "archiveReason",
   "updatedAt",
 ];
 const DOCTOR_IDS = new Map([
@@ -87,10 +90,13 @@ function filter(fieldPath, op, value) {
   return { fieldFilter: { field: { fieldPath }, op, value } };
 }
 
-export function patientSearchQuery(env, { token, pageSize, cursor, doctorKey = "" }) {
+export function patientSearchQuery(
+  env,
+  { token, pageSize, cursor, doctorKey = "", archivedOnly = false },
+) {
   const filters = [
     filter("searchPrefixes", "ARRAY_CONTAINS", { stringValue: token }),
-    filter("archived", "EQUAL", { booleanValue: false }),
+    filter("archived", "EQUAL", { booleanValue: archivedOnly === true }),
   ];
   if (doctorKey) {
     filters.push(filter("searchDoctorKey", "EQUAL", { stringValue: doctorKey }));
@@ -117,8 +123,8 @@ export function patientSearchQuery(env, { token, pageSize, cursor, doctorKey = "
   return structuredQuery;
 }
 
-function projectSearchPatient(patient) {
-  return {
+function projectSearchPatient(patient, includeArchiveMetadata = false) {
+  const result = {
     id: patient.id,
     patientNumber: String(patient.patientNumber || ""),
     fullName: String(patient.fullName || "Patient"),
@@ -131,12 +137,26 @@ function projectSearchPatient(patient) {
     specialty: String(patient.specialty || ""),
     consultationFee: Number(patient.consultationFee || 0),
   };
+  if (!includeArchiveMetadata) return result;
+  return {
+    ...result,
+    archived: patient.archived === true,
+    archivedAt: String(patient.archivedAt || ""),
+    archivedBy: String(patient.archivedBy || ""),
+    archiveReason: String(patient.archiveReason || ""),
+  };
 }
 
-export function projectPatientSearchResults(documents, { doctorName = "" } = {}) {
+export function projectPatientSearchResults(
+  documents,
+  { doctorName = "", archivedOnly = false } = {},
+) {
   return documents
-    .filter((patient) => patient.archived !== true && doctorMaySee(patient, doctorName))
-    .map(projectSearchPatient);
+    .filter((patient) => (
+      (archivedOnly ? patient.archived === true : patient.archived !== true)
+      && doctorMaySee(patient, doctorName)
+    ))
+    .map((patient) => projectSearchPatient(patient, archivedOnly));
 }
 
 function doctorMaySee(patient, doctorName) {
@@ -145,6 +165,27 @@ function doctorMaySee(patient, doctorName) {
   return patient.doctorName
     ? patient.doctorName === doctorName
     : Boolean(doctorId && patient.doctorId === doctorId);
+}
+
+export function patientSearchStaffScope(staff, staffRecord, { archivedOnly = false } = {}) {
+  const currentRole = String(staffRecord?.role || "");
+  if (
+    !staffRecord
+    || staffRecord.active !== true
+    || !["admin", "doctor", "reception"].includes(currentRole)
+  ) {
+    throw new HttpError(403, "This staff account is no longer active.");
+  }
+  const doctorName = currentRole === "doctor"
+    ? String(staffRecord.doctorName || "").trim()
+    : "";
+  if (currentRole === "doctor" && !DOCTOR_IDS.has(doctorName)) {
+    throw new HttpError(403, "This doctor login is not linked to a clinic doctor.");
+  }
+  if (archivedOnly && currentRole !== "admin") {
+    throw new HttpError(403, "Only clinic administrators can search archived patient records.");
+  }
+  return { ...staff, role: currentRole, doctorName };
 }
 
 async function runQuery(env, structuredQuery) {
@@ -181,24 +222,17 @@ async function runQuery(env, structuredQuery) {
 export async function searchPatientsForStaff(
   env,
   staff,
-  { search, cursor: encodedCursor = "", pageSize: requestedPageSize = 10 } = {},
+  {
+    search,
+    cursor: encodedCursor = "",
+    pageSize: requestedPageSize = 10,
+    archivedOnly = false,
+  } = {},
 ) {
   const staffRecord = await getDocument(env, `staff/${staff.uid}`);
-  const currentRole = String(staffRecord?.data?.role || "");
-  if (
-    !staffRecord
-    || staffRecord.data.active !== true
-    || !["admin", "doctor", "reception"].includes(currentRole)
-  ) {
-    throw new HttpError(403, "This staff account is no longer active.");
-  }
-
-  const doctorName = currentRole === "doctor"
-    ? String(staffRecord.data.doctorName || "").trim()
-    : "";
-  if (currentRole === "doctor" && !DOCTOR_IDS.has(doctorName)) {
-    throw new HttpError(403, "This doctor login is not linked to a clinic doctor.");
-  }
+  const scope = patientSearchStaffScope(staff, staffRecord?.data, { archivedOnly });
+  const currentRole = scope.role;
+  const doctorName = scope.doctorName;
 
   const token = patientSearchToken(search);
   if (!token) {
@@ -207,7 +241,9 @@ export async function searchPatientsForStaff(
   const doctorKey = currentRole === "doctor"
     ? patientSearchDoctorKey({ doctorName })
     : "";
-  const queryKey = `${token}|${doctorKey || "all"}`;
+  const queryKey = archivedOnly
+    ? `${token}|all|archived`
+    : `${token}|${doctorKey || "all"}`;
   const parsedPageSize = Number(requestedPageSize);
   const pageSize = Math.min(
     MAX_PAGE_SIZE,
@@ -216,7 +252,7 @@ export async function searchPatientsForStaff(
   const cursor = decodePatientSearchCursor(encodedCursor, queryKey);
   const documents = await runQuery(
     env,
-    patientSearchQuery(env, { token, pageSize, cursor, doctorKey }),
+    patientSearchQuery(env, { token, pageSize, cursor, doctorKey, archivedOnly }),
   );
   // Doctor filtering is applied after the bounded indexed query so legacy
   // charts that only store doctorId remain discoverable. Returning at most 26
@@ -225,7 +261,10 @@ export async function searchPatientsForStaff(
   // The canonical key is the database scope. This second check is
   // defense-in-depth against malformed legacy assignments.
   const visible = rawPage
-    .filter((patient) => patient.archived !== true && doctorMaySee(patient, doctorName));
+    .filter((patient) => (
+      (archivedOnly ? patient.archived === true : patient.archived !== true)
+      && doctorMaySee(patient, doctorName)
+    ));
   let legacyFallbackUsed = false;
   let legacyBackfillRequired = false;
   if (!cursor && visible.length === 0) {
@@ -235,11 +274,13 @@ export async function searchPatientsForStaff(
       staffRecord.data,
       token,
       pageSize,
+      { archivedOnly },
     );
     if (legacy.patients.length > 0) {
       return {
         patients: legacy.patients,
         nextCursor: "",
+        hasMore: false,
         legacyFallbackUsed: true,
         legacyBackfillRequired: true,
       };
@@ -254,8 +295,9 @@ export async function searchPatientsForStaff(
     : "";
 
   return {
-    patients: projectPatientSearchResults(visible, { doctorName }),
+    patients: projectPatientSearchResults(visible, { doctorName, archivedOnly }),
     nextCursor,
+    hasMore: Boolean(nextCursor),
     legacyFallbackUsed,
     legacyBackfillRequired,
   };

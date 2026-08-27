@@ -13,7 +13,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 type ServiceHealth = {
   status: "operational" | "configured" | "attention";
-  mode?: "live" | "test" | "unknown" | "unconfigured";
+  mode?: "manual" | "live" | "test" | "unknown" | "unconfigured";
+  gatewayMode?: "live" | "test" | "unknown" | "unconfigured";
 };
 type HealthResponse = {
   checkedAt: string;
@@ -31,7 +32,7 @@ type HealthResponse = {
 const serviceLabels: Record<keyof HealthResponse["services"], string> = {
   database: "Patient database",
   authentication: "Staff authentication",
-  payments: "Payment gateway",
+  payments: "Manual billing",
   clinicalReports: "Secure lab reports",
 };
 
@@ -93,7 +94,7 @@ export default function SystemHealthPanel() {
         <div>
           <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-[#D4B678]"><CloudCog size={17} />Operations centre</p>
           <h2 className="mt-2 text-2xl font-bold">System readiness</h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-white/70">A private database check plus configuration readiness for staff login, billing, and secure laboratory reports.</p>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-white/70">A private database check plus readiness for staff login, the manual billing ledger, and secure laboratory reports.</p>
         </div>
         <button type="button" onClick={() => void refresh()} disabled={loading} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-white px-4 py-2 text-sm font-bold text-[#233A59] disabled:opacity-60">
           {loading ? <LoaderCircle size={17} className="animate-spin" /> : <RefreshCw size={17} />}
@@ -118,15 +119,11 @@ export default function SystemHealthPanel() {
               <p className={`mt-1 text-xs font-semibold ${healthy ? "text-emerald-200" : "text-amber-200"}`}>
                 {key === "database" && healthy
                   ? "Operational"
-                  : key === "payments" && service.mode === "test"
-                    ? "TEST mode · payments are not live"
-                    : key === "payments" && service.mode === "unknown"
-                      ? "Payment key mode needs review"
-                      : key === "payments" && service.mode === "live"
-                        ? "LIVE mode"
-                        : healthy
-                          ? "Configured"
-                          : "Needs configuration"}
+                  : key === "payments" && service.mode === "manual"
+                    ? "Manual collection · ledger operational"
+                    : healthy
+                      ? "Configured"
+                      : "Needs configuration"}
               </p>
             </article>
           );
