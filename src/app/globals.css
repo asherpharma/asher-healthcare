@@ -406,6 +406,349 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .legal-content p { margin: 0; }
 .legal-content ul { display: grid; gap: 10px; margin: 0; padding-left: 20px; }
 
+/* Premium clinical depth: progressive motion enhancement for the public site. */
+:root {
+  --ease-premium: cubic-bezier(.22, 1, .36, 1);
+  --depth-shadow: 0 32px 80px rgba(15, 48, 65, .16);
+}
+
+.motion-enhanced .motion-reveal {
+  --reveal-y: 26px;
+  --reveal-scale: .985;
+  opacity: 0;
+  filter: blur(7px);
+  transition:
+    opacity .72s var(--ease-premium),
+    filter .78s var(--ease-premium),
+    transform .88s var(--ease-premium);
+  transition-delay: var(--reveal-delay, 0ms);
+}
+
+.motion-enhanced .motion-reveal:not(.premium-tilt) {
+  transform: translate3d(0, var(--reveal-y), 0) scale(var(--reveal-scale));
+}
+
+.motion-enhanced .motion-reveal.is-visible {
+  --reveal-y: 0px;
+  --reveal-scale: 1;
+  opacity: 1;
+  filter: blur(0);
+}
+
+.hero-visual.premium-tilt,
+.service-card.premium-tilt,
+.public-care-panel.premium-tilt,
+.why-visual.premium-tilt,
+.doctor-card.premium-tilt,
+.gallery-item.premium-tilt {
+  --tilt-rx: 0deg;
+  --tilt-ry: 0deg;
+  --tilt-lift: 0px;
+  --glow-x: 50%;
+  --glow-y: 50%;
+  --parallax-x: 0px;
+  --parallax-y: 0px;
+  transform:
+    perspective(1200px)
+    translate3d(0, calc(var(--reveal-y, 0px) + var(--tilt-lift)), 0)
+    rotateX(var(--tilt-rx))
+    rotateY(var(--tilt-ry))
+    scale(var(--reveal-scale, 1));
+  transform-style: preserve-3d;
+  transition:
+    transform .56s var(--ease-premium),
+    opacity .72s var(--ease-premium),
+    filter .78s var(--ease-premium),
+    box-shadow .38s var(--ease-premium),
+    border-color .38s ease;
+  transition-delay: var(--reveal-delay, 0ms);
+}
+
+.premium-tilt[data-tilt-active="true"] {
+  will-change: transform;
+  transition-duration: .16s, .72s, .78s, .38s, .38s;
+  transition-delay: 0ms;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .service-card.premium-tilt:hover,
+  .public-care-panel.premium-tilt:hover,
+  .why-visual.premium-tilt:hover,
+  .doctor-card.premium-tilt:hover,
+  .gallery-item.premium-tilt:hover {
+    --tilt-lift: -6px;
+  }
+}
+
+.hero-visual {
+  isolation: isolate;
+  perspective: 1200px;
+}
+
+.hero-visual::before {
+  position: absolute;
+  z-index: -2;
+  inset: -7% -4% 1% 3%;
+  content: "";
+  border-radius: 46% 46% 30px 30px;
+  background-image:
+    linear-gradient(rgba(43, 133, 129, .07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(43, 133, 129, .07) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, .82), transparent 92%);
+}
+
+.hero-visual::after {
+  position: absolute;
+  z-index: -1;
+  inset: 8% 2% -2% 10%;
+  content: "";
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(43, 133, 129, .21), transparent 68%);
+  filter: blur(26px);
+  transform: translateZ(-60px);
+}
+
+.hero-image-wrap {
+  z-index: 2;
+  border: 1px solid rgba(255, 255, 255, .86);
+  box-shadow: 0 38px 90px rgba(16, 46, 63, .24), inset 0 1px 0 rgba(255, 255, 255, .68);
+  transform: translateZ(24px);
+  transform-style: preserve-3d;
+}
+
+.hero-image-wrap img {
+  transform: translate3d(var(--parallax-x), var(--parallax-y), 0) scale(1.045);
+  transition: transform .42s var(--ease-premium);
+}
+
+.hero-glass-sheen {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(112deg, rgba(255, 255, 255, .35) 0%, transparent 25%, transparent 68%, rgba(255, 255, 255, .12) 100%),
+    radial-gradient(360px circle at var(--glow-x) var(--glow-y), rgba(255, 255, 255, .18), transparent 64%);
+}
+
+.hero-depth-ring {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  border: 1px solid rgba(43, 133, 129, .22);
+  border-radius: 50%;
+  transform-style: preserve-3d;
+}
+
+.hero-depth-ring span {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: 2px solid white;
+  border-radius: 50%;
+  background: var(--gold);
+  box-shadow: 0 8px 22px rgba(129, 90, 28, .32);
+}
+
+.hero-depth-ring-one {
+  inset: 2% -5% 9% 3%;
+  transform: translateZ(-42px) rotate(-8deg);
+  animation: hero-ring-breathe 8s ease-in-out infinite;
+}
+
+.hero-depth-ring-one span { top: 13%; right: 15%; }
+
+.hero-depth-ring-two {
+  inset: 18% 2% -3% -5%;
+  border-color: rgba(212, 167, 95, .24);
+  transform: translateZ(-30px) rotate(9deg);
+}
+
+.hero-depth-ring-two span { left: 11%; bottom: 18%; background: var(--teal); }
+
+@keyframes hero-ring-breathe {
+  50% { opacity: .64; transform: translateZ(-42px) rotate(-5deg) scale(1.025); }
+}
+
+.floating-card {
+  z-index: 5;
+  border-color: rgba(255, 255, 255, .82);
+  box-shadow: 0 24px 58px rgba(18, 49, 65, .19), inset 0 1px 0 white;
+}
+
+.floating-care { transform: translateZ(76px) rotate(-1deg); }
+.floating-child { transform: translateZ(58px) rotate(1deg); }
+
+.hero-security-chip {
+  position: absolute;
+  z-index: 6;
+  top: 13px;
+  right: 39px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  color: white;
+  border: 1px solid rgba(255, 255, 255, .24);
+  border-radius: 14px;
+  background: rgba(8, 36, 58, .82);
+  box-shadow: 0 18px 42px rgba(8, 36, 58, .2);
+  backdrop-filter: blur(14px);
+  transform: translateZ(92px) rotate(.5deg);
+}
+
+.hero-security-chip > svg { width: 17px; color: #f0cc8c; }
+.hero-security-chip span { display: grid; }
+.hero-security-chip strong { font-size: .7rem; }
+.hero-security-chip small { color: #bed1d8; font-size: .58rem; }
+
+.specialty-strip {
+  border: 1px solid rgba(255, 255, 255, .09);
+  background: linear-gradient(105deg, #0d2b45 0%, #123d58 52%, #0d2b45 100%);
+  box-shadow: 0 24px 54px rgba(13, 43, 69, .22), inset 0 1px 0 rgba(255, 255, 255, .09);
+}
+
+.button-primary {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.button-primary::after {
+  position: absolute;
+  z-index: -1;
+  inset: -2px;
+  content: "";
+  pointer-events: none;
+  background: linear-gradient(112deg, transparent 20%, rgba(255, 255, 255, .19) 46%, transparent 72%);
+  transform: translateX(-120%);
+  transition: transform .7s var(--ease-premium);
+}
+
+.button-primary:hover::after { transform: translateX(120%); }
+
+.service-card {
+  transform-style: preserve-3d;
+  box-shadow: 0 14px 34px rgba(31, 71, 84, .055);
+}
+
+.service-card::after {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  content: "";
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(250px circle at var(--glow-x) var(--glow-y), rgba(43, 133, 129, .16), transparent 68%);
+  transition: opacity .35s ease;
+}
+
+.service-card > * { position: relative; z-index: 2; }
+.service-card .service-icon { transform: translateZ(30px); transition: transform .42s var(--ease-premium), color .25s ease, background .25s ease; }
+.service-card h3 { transform: translateZ(17px); }
+.service-card a { transform: translateZ(24px); }
+.service-card:hover::after { opacity: 1; }
+.service-card:hover .service-icon { color: white; background: var(--teal); transform: translateZ(38px) rotate(-3deg); }
+
+.public-care-panel { transform-style: preserve-3d; }
+.public-care-panel .public-care-image { transform: translateZ(12px); }
+.public-care-panel .public-care-image img { animation: care-image-in .55s var(--ease-premium) both; }
+.public-care-panel .public-care-copy { position: relative; z-index: 2; transform: translateZ(24px); animation: care-copy-in .46s var(--ease-premium) both; }
+.public-care-tab.is-active { transform: translateY(-2px) scale(1.01); }
+
+@keyframes care-image-in {
+  from { opacity: .72; clip-path: inset(0 7% 0 0 round 24px); filter: saturate(.72); }
+  to { opacity: 1; clip-path: inset(0); filter: saturate(1); }
+}
+
+@keyframes care-copy-in {
+  from { opacity: 0; translate: 0 14px; }
+  to { opacity: 1; translate: 0 0; }
+}
+
+.why-visual { transform-style: preserve-3d; }
+.why-visual .abstract-card { transform: translateZ(18px); }
+.why-visual .abstract-card img {
+  transform: translate3d(var(--parallax-x), var(--parallax-y), 0) scale(1.045);
+  transition: transform .5s var(--ease-premium);
+}
+.why-visual .care-quote { transform: translateZ(58px); }
+
+.doctor-card {
+  position: relative;
+  transform-style: preserve-3d;
+  transition: box-shadow .38s var(--ease-premium), border-color .3s ease;
+}
+
+.doctor-card::after {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  content: "";
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(320px circle at var(--glow-x) var(--glow-y), rgba(255, 255, 255, .38), transparent 64%);
+  transition: opacity .32s ease;
+}
+
+.doctor-card:hover { border-color: #b6d2cf; box-shadow: var(--depth-shadow); }
+.doctor-card:hover::after { opacity: 1; }
+.doctor-card .doctor-portrait { transform: translateZ(10px); }
+.doctor-card .doctor-details { position: relative; z-index: 2; transform: translateZ(22px); }
+
+.public-journey-steps { position: relative; }
+.public-journey-steps::before {
+  position: absolute;
+  top: 60px;
+  bottom: 60px;
+  left: 113px;
+  width: 1px;
+  content: "";
+  background: linear-gradient(to bottom, transparent, rgba(229, 189, 121, .45) 12%, rgba(43, 133, 129, .55) 88%, transparent);
+}
+.public-journey-steps li { position: relative; z-index: 1; backdrop-filter: blur(10px); }
+.public-journey-icon { transition: transform .38s var(--ease-premium), background .3s ease; }
+.public-journey-steps li:hover .public-journey-icon { background: #1d5068; transform: translateZ(20px) rotate(-5deg) scale(1.04); }
+
+.gallery-item { transform-style: preserve-3d; box-shadow: 0 24px 55px rgba(2, 18, 31, .24); }
+.gallery-item img { transform: translate3d(var(--parallax-x), var(--parallax-y), 0) scale(1.045); }
+.gallery-item:hover img { transform: translate3d(var(--parallax-x), var(--parallax-y), 0) scale(1.075); }
+.gallery-item figcaption { transform: translateZ(30px); }
+.gallery-note { box-shadow: 0 24px 50px rgba(2, 18, 31, .2), inset 0 1px 0 rgba(255, 255, 255, .06); }
+
+.appointment-section {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 82% 12%, rgba(212, 167, 95, .19), transparent 26%),
+    radial-gradient(circle at 11% 87%, rgba(43, 133, 129, .15), transparent 28%),
+    linear-gradient(135deg, #e8f4f1 0%, #f8f4eb 100%);
+}
+
+.booking-card {
+  position: relative;
+  isolation: isolate;
+  border-color: rgba(255, 255, 255, .95);
+  box-shadow: 0 34px 90px rgba(34, 72, 81, .19), inset 0 1px 0 white;
+}
+
+.booking-card::before {
+  position: absolute;
+  top: 0;
+  left: 8%;
+  right: 8%;
+  height: 2px;
+  content: "";
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, var(--gold), var(--teal), transparent);
+  opacity: .7;
+}
+
+.booking-card-head > span { box-shadow: 0 12px 28px rgba(13, 43, 69, .22); }
+.phone-card { box-shadow: 0 14px 34px rgba(34, 72, 81, .08), inset 0 1px 0 white; transition: transform .28s var(--ease-premium), box-shadow .28s ease; }
+.phone-card:hover { transform: translateY(-3px); box-shadow: 0 20px 42px rgba(34, 72, 81, .13), inset 0 1px 0 white; }
+
 @media (max-width: 1050px) {
   .desktop-nav, .staff-link { display: none; }
   .menu-button { display: grid; place-items: center; }
@@ -425,6 +768,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 @media (max-width: 800px) {
   .site-shell { width: min(100% - 28px, 680px); }
   .section { padding: 78px 0; }
+  .motion-enhanced .motion-reveal { filter: none; }
   .topline-inner > span { display: none; }
   .topline-inner { justify-content: center; }
   .nav-inner { min-height: 70px; }
@@ -439,6 +783,17 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .hero-copy h1 { font-size: clamp(3.15rem, 15vw, 4.7rem); }
   .hero-visual { padding: 12px 5px 24px; }
   .hero-image-wrap { min-height: 500px; }
+  .hero-visual.premium-tilt,
+  .service-card.premium-tilt,
+  .public-care-panel.premium-tilt,
+  .why-visual.premium-tilt,
+  .doctor-card.premium-tilt,
+  .gallery-item.premium-tilt {
+    --tilt-lift: 0px;
+    transform: translate3d(0, var(--reveal-y, 0px), 0) scale(var(--reveal-scale, 1));
+  }
+  .hero-depth-ring-one { inset: 5% -2% 8% 1%; }
+  .hero-depth-ring-two { inset: 18% 2% -1% -1%; }
   .floating-care { left: -5px; }
   .floating-child { right: -5px; }
   .specialty-strip { grid-template-columns: 1fr; gap: 13px; padding: 23px; }
@@ -483,6 +838,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .floating-card { min-width: 170px; padding: 12px; }
   .floating-care { top: 32px; }
   .floating-child { bottom: 35px; }
+  .hero-security-chip { top: 6px; right: 12px; padding: 8px 10px; }
+  .hero-security-chip small { display: none; }
+  .hero-depth-ring-two { display: none; }
   .service-grid { grid-template-columns: 1fr; }
   .service-card { min-height: 280px; }
   .public-care-heading { margin-bottom: 24px; }
@@ -691,4 +1049,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  .motion-enhanced .motion-reveal { --reveal-y: 0px; --reveal-scale: 1; opacity: 1 !important; filter: none !important; }
+  .premium-tilt,
+  .hero-image-wrap,
+  .floating-care,
+  .floating-child,
+  .hero-security-chip,
+  .public-care-image,
+  .public-care-copy,
+  .abstract-card,
+  .care-quote,
+  .doctor-portrait,
+  .doctor-details,
+  .gallery-item figcaption { transform: none !important; }
+  .hero-depth-ring { animation: none !important; }
 }

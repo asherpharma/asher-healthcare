@@ -23,7 +23,11 @@ export default function Services() {
           {services.map((service, index) => {
             const Icon = service.icon;
             return (
-              <article className="service-card" key={service.title}>
+              <article
+                className="service-card premium-tilt"
+                data-premium-tilt="5"
+                key={service.title}
+              >
                 <span className="service-number">{String(index + 1).padStart(2, "0")}</span>
                 <div className="service-icon"><Icon /></div>
                 <h3>{service.title}</h3>

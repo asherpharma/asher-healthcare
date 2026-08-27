@@ -37,7 +37,11 @@ export default function Doctors() {
           {doctors.map((doctor) => {
             const Icon = doctor.icon;
             return (
-              <article className={"doctor-card " + doctor.accent} key={doctor.name}>
+              <article
+                className={`doctor-card premium-tilt ${doctor.accent}`}
+                data-premium-tilt="3"
+                key={doctor.name}
+              >
                 <div className="doctor-portrait">
                   <Image
                     src={doctor.image}

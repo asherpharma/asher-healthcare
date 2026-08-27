@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { ArrowRight, Baby, CalendarDays, CheckCircle2, HeartPulse, MapPin, Phone, Sparkles } from "lucide-react";
+import { ArrowRight, Baby, CalendarDays, CheckCircle2, HeartPulse, MapPin, Phone, ShieldCheck, Sparkles } from "lucide-react";
 
 export default function Hero() {
   return (
@@ -25,9 +25,16 @@ export default function Hero() {
           </div>
         </div>
 
-        <div className="hero-visual" aria-label="Asher Women and Child Healthcare clinic">
+        <div
+          className="hero-visual premium-tilt"
+          aria-label="Asher Women and Child Healthcare clinic"
+          data-premium-tilt="3.5"
+        >
+          <div className="hero-depth-ring hero-depth-ring-one" aria-hidden="true"><span /></div>
+          <div className="hero-depth-ring hero-depth-ring-two" aria-hidden="true"><span /></div>
           <div className="hero-image-wrap">
             <Image src="/asher-hero-clinic-v2.webp" alt="Representative concept of a calm modern women and child healthcare clinic" fill priority sizes="(max-width: 900px) 92vw, 48vw" />
+            <div className="hero-glass-sheen" aria-hidden="true" />
             <div className="image-shade" />
             <div className="image-caption">
               <span className="pulse-dot" />
@@ -36,6 +43,7 @@ export default function Hero() {
           </div>
           <div className="floating-card floating-care"><HeartPulse /><span><strong>Women&apos;s care</strong><small>From wellness to maternity</small></span></div>
           <div className="floating-card floating-child"><Baby /><span><strong>Child health</strong><small>Newborn to adolescence</small></span></div>
+          <div className="hero-security-chip"><ShieldCheck /><span><strong>Secure by design</strong><small>Private family records</small></span></div>
         </div>
       </div>
 

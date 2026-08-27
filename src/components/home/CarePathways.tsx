@@ -84,7 +84,8 @@ export default function CarePathways() {
         </div>
 
         <article
-          className={`public-care-panel public-care-panel-${selected.id}`}
+          className={`public-care-panel public-care-panel-${selected.id} premium-tilt`}
+          data-premium-tilt="2.5"
         >
           <div className="public-care-image">
             <Image
@@ -99,7 +100,7 @@ export default function CarePathways() {
             </span>
           </div>
 
-          <div className="public-care-copy">
+          <div className="public-care-copy" key={`copy-${selected.id}`}>
             <span className="public-care-icon"><SelectedIcon aria-hidden="true" /></span>
             <p className="public-care-eyebrow">{selected.eyebrow}</p>
             <h3>{selected.title}</h3>

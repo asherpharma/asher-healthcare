@@ -10,6 +10,7 @@ import AppointmentCTA from "@/components/home/AppointmentCTA";
 import Contact from "@/components/home/Contact";
 import FrequentlyAskedQuestions, { clinicFaqs } from "@/components/home/FrequentlyAskedQuestions";
 import MobileCareBar from "@/components/home/MobileCareBar";
+import PremiumMotion from "@/components/home/PremiumMotion";
 import Footer from "@/components/layout/Footer";
 
 const clinicSchema = {
@@ -91,6 +92,7 @@ export default function Home() {
         <Contact />
       </main>
       <MobileCareBar />
+      <PremiumMotion />
       <Footer />
     </>
   );

@@ -12,7 +12,7 @@ export default function WhyChooseUs() {
   return (
     <section className="section why-section">
       <div className="site-shell why-grid">
-        <div className="why-visual">
+        <div className="why-visual premium-tilt" data-premium-tilt="2.5">
           <div className="abstract-card"><Image src="/asher-abstract-care-v2.webp" alt="Abstract navy and gold artwork representing women and child healthcare" fill sizes="(max-width: 900px) 92vw, 44vw" /></div>
           <div className="care-quote"><strong>Care should feel clear, calm and human.</strong><span>That belief shapes every Asher appointment.</span></div>
         </div>
