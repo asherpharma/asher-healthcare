@@ -73,3 +73,24 @@ test("public specialist hours are consistent with the default booking schedule",
   assert.match(appointments, /endTime: "20:00"/u);
   assert.doesNotMatch(`${hero}\n${contact}`, /Open every day|Open daily/u);
 });
+
+test("appointment booking keeps its initial server and client markup time-neutral", async () => {
+  const appointment = await readFile(
+    path.join(root, "src/components/home/AppointmentCTA.tsx"),
+    "utf8",
+  );
+
+  assert.match(appointment, /const \[date, setDate\] = useState\(""\);/u);
+  assert.match(
+    appointment,
+    /const \[clinicClock, setClinicClock\] = useState\(\{ date: "", time: "" \}\);/u,
+  );
+  assert.match(appointment, /setClinicClock\(currentClinicClock\(\)\);/u);
+  assert.match(
+    appointment,
+    /nextEnabledDate\(schedule, clinicClock\.date\)/u,
+  );
+  assert.doesNotMatch(appointment, /useState\(currentClinicClock\)/u);
+  assert.doesNotMatch(appointment, /useState\(\(\) => nextEnabledDate\(schedule\)\)/u);
+  assert.doesNotMatch(appointment, /min=\{clinicDate\(\)\}/u);
+});

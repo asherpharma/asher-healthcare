@@ -4,7 +4,6 @@ import { firestore } from "@/firebase/config";
 import { useAppointmentSchedule } from "@/hooks/useAppointmentSchedule";
 import {
   appointmentSlotId,
-  clinicDate,
   dateIsEnabled,
   DOCTORS,
   formatAppointmentTime,
@@ -61,7 +60,11 @@ function currentClinicClock() {
 export default function AppointmentCTA() {
   const { schedule, loading: scheduleLoading, error: scheduleError } = useAppointmentSchedule();
   const [doctorId, setDoctorId] = useState<DoctorId>("pediatrics");
-  const [date, setDate] = useState(() => nextEnabledDate(schedule));
+  // Keep the server render and the browser's first render time-neutral. This
+  // page is statically generated, so deriving these values during render would
+  // otherwise compare the build clock with the visitor's current clock during
+  // hydration and produce different date/slot markup.
+  const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const [availability, setAvailability] = useState<Availability>({
     key: "",
@@ -71,11 +74,11 @@ export default function AppointmentCTA() {
   const [result, setResult] = useState<Result>(null);
   const [carePrefillMessage, setCarePrefillMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [clinicClock, setClinicClock] = useState(currentClinicClock);
+  const [clinicClock, setClinicClock] = useState({ date: "", time: "" });
   const formStartedAt = useRef(0);
 
   const allSlots = useMemo(
-    () => dateIsEnabled(schedule, date)
+    () => date && clinicClock.date && dateIsEnabled(schedule, date)
       ? generateTimeSlots(schedule.doctors[doctorId]).filter(
           (slot) => date !== clinicClock.date || slot > clinicClock.time,
         )
@@ -97,9 +100,19 @@ export default function AppointmentCTA() {
 
   useEffect(() => {
     formStartedAt.current = Date.now();
+    setClinicClock(currentClinicClock());
     const timer = window.setInterval(() => setClinicClock(currentClinicClock()), 30_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!clinicClock.date) return;
+    setDate((current) => (
+      current && current >= clinicClock.date && dateIsEnabled(schedule, current)
+        ? current
+        : nextEnabledDate(schedule, clinicClock.date)
+    ));
+  }, [clinicClock.date, schedule]);
 
   useEffect(() => {
     function selectCare(nextDoctorId: DoctorId) {
@@ -226,7 +239,7 @@ export default function AppointmentCTA() {
     }
   }
 
-  const selectedDayEnabled = dateIsEnabled(schedule, date);
+  const selectedDayEnabled = Boolean(date) && dateIsEnabled(schedule, date);
   const scheduleText = scheduleSummary(schedule, doctorId);
 
   return (
@@ -304,7 +317,7 @@ export default function AppointmentCTA() {
               <input
                 name="date"
                 type="date"
-                min={clinicDate()}
+                min={clinicClock.date || undefined}
                 value={date}
                 onChange={(event) => {
                   setDate(event.target.value);
@@ -343,7 +356,7 @@ export default function AppointmentCTA() {
             </label>
           </div>
 
-          {!selectedDayEnabled && (
+          {date && !selectedDayEnabled && (
             <p className="rounded-xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
               Appointments are closed on this day. Please choose Monday to Saturday.
             </p>
