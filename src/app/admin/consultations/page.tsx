@@ -7,6 +7,7 @@ import {
   consumeAdminNavigationHandoff,
   type AdminNavigationHandoff,
 } from "@/lib/admin-navigation-handoff";
+import { nextActionableConsultationEntry } from "@/lib/consultation-completion";
 import {
   fetchPatientDirectoryPage,
   resolvePatientDirectoryEntries,
@@ -170,6 +171,13 @@ type ConsultationDraft = {
 
 type DraftStatus = "idle" | "loading" | "clean" | "dirty" | "saving" | "saved" | "error";
 type MobileDoctorView = "queue" | "consultation";
+
+type CompletedConsultation = {
+  consultationId: string;
+  patientId: string;
+  appointmentId: string;
+  patientName: string;
+};
 
 type QueueEntry = {
   id: string;
@@ -462,6 +470,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [savedPrescription, setSavedPrescription] = useState<PrescriptionPdfRecord | null>(null);
+  const [completedConsultation, setCompletedConsultation] = useState<CompletedConsultation | null>(null);
   const [documentAction, setDocumentAction] = useState<"print" | "download" | null>(null);
   const [draftStatus, setDraftStatus] = useState<DraftStatus>("idle");
   const [draftRevision, setDraftRevision] = useState(0);
@@ -476,6 +485,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   const linkSearchSequenceRef = useRef(0);
   const queueWorkspaceRef = useRef<HTMLElement>(null);
   const consultationWorkspaceRef = useRef<HTMLElement>(null);
+  const completionPanelRef = useRef<HTMLElement>(null);
   const consultationFormRef = useRef<HTMLFormElement>(null);
   const draftAutosaveTimerRef = useRef<number | null>(null);
   const draftExistsRef = useRef(false);
@@ -737,6 +747,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       setLabTests([]);
       setCustomTest("");
       setSavedPrescription(null);
+      setCompletedConsultation(null);
       setNotice("");
       setError("");
     }, 0);
@@ -761,6 +772,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       setLabTests([]);
       setCustomTest("");
       setSavedPrescription(null);
+      setCompletedConsultation(null);
       setDocumentAction(null);
       setNotice("");
       setError(message);
@@ -846,6 +858,9 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       setPrescriptions([]);
       setReports([]);
       setHistoryLoading(false);
+      setSavedPrescription(null);
+      setCompletedConsultation(null);
+      setDocumentAction(null);
       setError("This patient chart is archived or unavailable. Restore it from the patient register before continuing.");
     }, 0);
     return () => window.clearTimeout(timer);
@@ -879,7 +894,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
   }, [selectedAppointmentId, selectedPatientId]);
 
   function markDraftDirty() {
-    if (draftCompletionRef.current || !selectedPatientId) return;
+    if (draftCompletionRef.current || completedConsultation || !selectedPatientId) return;
     draftRestoreEpochRef.current += 1;
     draftRevisionRef.current += 1;
     setDraftRevision(draftRevisionRef.current);
@@ -1229,6 +1244,31 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
     [queue, selectedAppointmentId, selectedPatientId],
   );
 
+  const completedSelection = useMemo(() => {
+    if (!completedConsultation) return null;
+    if (completedConsultation.patientId !== selectedPatientId) return null;
+    if (completedConsultation.appointmentId !== selectedAppointmentId) return null;
+    return completedConsultation;
+  }, [completedConsultation, selectedAppointmentId, selectedPatientId]);
+
+  const nextQueueEntry = useMemo(
+    () => completedSelection
+      ? nextActionableConsultationEntry(queue, {
+          appointmentId: completedSelection.appointmentId,
+          patientId: completedSelection.patientId,
+        })
+      : null,
+    [completedSelection, queue],
+  );
+
+  useEffect(() => {
+    if (!completedSelection) return;
+    const focusFrame = window.requestAnimationFrame(() => {
+      completionPanelRef.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, [completedSelection]);
+
   function showMobileWorkspace(view: MobileDoctorView) {
     setMobileWorkspaceView(view);
     window.requestAnimationFrame(() => {
@@ -1241,6 +1281,40 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
         if (view === "consultation") workspace.focus({ preventScroll: true });
       });
     });
+  }
+
+  function completedQueueLabel(entry: QueueEntry) {
+    const token = entry.queueToken ? queueTokenLabel(entry.queueToken, entry.doctorId) : entry.time;
+    return [token, entry.patientName].filter(Boolean).join(" · ");
+  }
+
+  async function continueToNextPatient() {
+    if (!completedSelection || !nextQueueEntry || !confirmConsultationSwitch()) return;
+    if (!nextQueueEntry.patientId) showMobileWorkspace("queue");
+    await beginAppointmentConsultation(nextQueueEntry);
+  }
+
+  function returnToQueueAfterCompletion() {
+    if (!completedSelection || !confirmConsultationSwitch()) return;
+    setSelectedPatientId("");
+    setSelectedAppointmentId("");
+    setConfirmedAppointmentPatient(null);
+    setVisits([]);
+    setPrescriptions([]);
+    setReports([]);
+    setHistoryLoading(false);
+    setMedicines([emptyMedicine()]);
+    setLabTests([]);
+    setCustomTest("");
+    setSavedPrescription(null);
+    setCompletedConsultation(null);
+    setCompletedDraftCleanup(null);
+    setDocumentAction(null);
+    setDraftStatus("idle");
+    setDraftSavedAt("");
+    setError("");
+    setNotice("Consultation completed securely. The queue is ready for the next patient.");
+    showMobileWorkspace("queue");
   }
 
   function showConsultationSection(sectionId: string) {
@@ -1402,6 +1476,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
     setLabTests([]);
     setCustomTest("");
     setSavedPrescription(null);
+    setCompletedConsultation(null);
     setNotice("");
     setError("");
   }
@@ -1434,6 +1509,11 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
 
   async function completeConsultation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (saving || draftCompletionRef.current) return;
+    if (completedSelection) {
+      setError("This consultation is already complete. Print the prescription or continue to the next patient.");
+      return;
+    }
     if (!selectedPatient) return;
     if (!isActivePatient(selectedPatient)) {
       setError("This patient chart has been archived. Restore it before recording clinical care.");
@@ -1617,6 +1697,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
       });
 
       await batch.commit();
+      setCompletedDraftCleanup(null);
       let draftCleanupFailed = false;
       if (draftExistsRef.current) {
         try {
@@ -1630,6 +1711,12 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
           });
         }
       }
+      setCompletedConsultation({
+        consultationId,
+        patientId: selectedPatient.id,
+        appointmentId: selectedAppointmentId,
+        patientName: selectedPatient.fullName,
+      });
       const prescriptionDocument = prescriptionRef ? {
         id: prescriptionRef.id,
         prescribedDate: selectedDate,
@@ -1739,19 +1826,27 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
               <div className="min-w-0 flex-1"><p className="truncate text-sm font-bold text-[#233A59]">{selectedPatient.fullName}</p><p className="truncate text-[11px] text-slate-500">{selectedPatient.patientNumber || "Patient chart"} · {selectedQueueEntry?.doctorName || selectedPatient.doctorName || "Clinic doctor"}</p></div>
               <span className="shrink-0 rounded-lg bg-[#233A59] px-2.5 py-1.5 text-[11px] font-black text-white">{selectedQueueEntry?.queueToken ? queueTokenLabel(selectedQueueEntry.queueToken, selectedQueueEntry.doctorId) : selectedQueueEntry?.time || "Chart"}</span>
             </div>
-            <nav className="mt-2 flex gap-2 overflow-x-auto pb-0.5 [scrollbar-width:none]" aria-label="Consultation section shortcuts">
-              {([
-                ["consultation-clinical", "Clinical", Stethoscope],
-                ["consultation-prescription", "Rx", Pill],
-                ["consultation-laboratory", "Lab", FlaskConical],
-                ["consultation-follow-up", "Follow-up", CalendarCheck2],
-                ["consultation-complete", "Finish", CheckCircle2],
-              ] as const).map(([id, label, Icon]) => (
-                <button key={id} type="button" onClick={() => showConsultationSection(id)} className={`inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-xl px-3 text-xs font-bold ${id === "consultation-complete" ? "bg-[#233A59] text-white" : "bg-white text-slate-700 ring-1 ring-slate-200"}`}>
-                  <Icon aria-hidden="true" size={15} />{label}
+            {completedSelection ? (
+              <nav className="mt-2" aria-label="Completed consultation action">
+                <button type="button" onClick={() => showConsultationSection("consultation-complete")} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-3 text-xs font-bold text-white">
+                  <CheckCircle2 aria-hidden="true" size={16} /> Consultation completed
                 </button>
-              ))}
-            </nav>
+              </nav>
+            ) : (
+              <nav className="mt-2 flex gap-2 overflow-x-auto pb-0.5 [scrollbar-width:none]" aria-label="Consultation section shortcuts">
+                {([
+                  ["consultation-clinical", "Clinical", Stethoscope],
+                  ["consultation-prescription", "Rx", Pill],
+                  ["consultation-laboratory", "Lab", FlaskConical],
+                  ["consultation-follow-up", "Follow-up", CalendarCheck2],
+                  ["consultation-complete", "Finish", CheckCircle2],
+                ] as const).map(([id, label, Icon]) => (
+                  <button key={id} type="button" onClick={() => showConsultationSection(id)} className={`inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-xl px-3 text-xs font-bold ${id === "consultation-complete" ? "bg-[#233A59] text-white" : "bg-white text-slate-700 ring-1 ring-slate-200"}`}>
+                    <Icon aria-hidden="true" size={15} />{label}
+                  </button>
+                ))}
+              </nav>
+            )}
           </>
         ) : (
           <div className="mt-2 flex items-center justify-between gap-3 rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900 ring-1 ring-amber-200">
@@ -1900,6 +1995,63 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
                 onSubmit={completeConsultation}
                 className="space-y-6"
               >
+                {completedSelection ? (
+                  <section
+                    ref={completionPanelRef}
+                    id="consultation-complete"
+                    tabIndex={-1}
+                    role="status"
+                    aria-live="polite"
+                    className="scroll-mt-48 overflow-hidden rounded-3xl bg-[#233A59] text-white shadow-xl shadow-[#233A59]/15 outline-none ring-4 ring-emerald-100 xl:scroll-mt-24"
+                  >
+                    <div className="p-5 sm:p-8">
+                      <span className="grid h-14 w-14 place-items-center rounded-2xl bg-emerald-400/15 text-emerald-200 ring-1 ring-emerald-300/25">
+                        <CheckCircle2 aria-hidden="true" size={30} />
+                      </span>
+                      <p className="mt-6 text-xs font-black uppercase tracking-[0.18em] text-[#D4B678]">Saved and signed</p>
+                      <h2 className="mt-2 text-2xl font-bold sm:text-3xl">Consultation completed</h2>
+                      <p className="mt-3 max-w-2xl text-sm leading-6 text-white/75">
+                        {completedSelection.patientName}&apos;s visit is safely recorded. This chart is locked against another submission.
+                      </p>
+
+                      <div className="mt-6 rounded-2xl border border-white/15 bg-white/5 p-4">
+                        {savedPrescription ? (
+                          <>
+                            <p className="text-sm font-bold text-emerald-200">Prescription is ready</p>
+                            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                              <button type="button" disabled={documentAction !== null} onClick={() => void preparePrescription("print")} className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-3 text-sm font-bold text-[#233A59] transition hover:bg-[#F8F4EA] disabled:opacity-60">{documentAction === "print" ? <LoaderCircle className="animate-spin" size={17} /> : <Printer size={17} />}Print prescription</button>
+                              <button type="button" disabled={documentAction !== null} onClick={() => void preparePrescription("download")} className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#A8864A] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#92713b] disabled:opacity-60">{documentAction === "download" ? <LoaderCircle className="animate-spin" size={17} /> : <Download size={17} />}Download PDF</button>
+                            </div>
+                          </>
+                        ) : (
+                          <p className="text-sm font-semibold text-white/70">No prescription was created for this visit.</p>
+                        )}
+                      </div>
+
+                      {completedDraftCleanup ? (
+                        <div className="mt-5 rounded-2xl border border-red-300/30 bg-red-500/10 p-4">
+                          <p className="text-sm font-bold text-red-100">Secure draft cleanup needs attention before leaving this patient.</p>
+                          <button type="button" onClick={() => void retryCompletedDraftCleanup()} className="mt-3 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-red-50 px-4 py-3 text-sm font-bold text-red-800 sm:w-auto"><ShieldAlert aria-hidden="true" size={17} />Retry draft cleanup</button>
+                        </div>
+                      ) : (
+                        <div className="mt-6 border-t border-white/15 pt-6">
+                          <p className="text-xs font-black uppercase tracking-[0.16em] text-white/55">Next action</p>
+                          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                            {nextQueueEntry ? (
+                              <button type="button" disabled={Boolean(updatingQueueId)} onClick={() => void continueToNextPatient()} className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-3 text-sm font-bold text-[#102B22] transition hover:bg-emerald-400 disabled:opacity-60">
+                                {updatingQueueId ? <LoaderCircle aria-hidden="true" className="animate-spin" size={18} /> : <ArrowRight aria-hidden="true" size={18} />}
+                                <span className="truncate">{nextQueueEntry.patientId ? `Next: ${completedQueueLabel(nextQueueEntry)}` : `Link next chart: ${completedQueueLabel(nextQueueEntry)}`}</span>
+                              </button>
+                            ) : null}
+                            <button type="button" onClick={returnToQueueAfterCompletion} className={`inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-bold transition ${nextQueueEntry ? "bg-white/10 text-white ring-1 ring-white/20 hover:bg-white/15" : "bg-emerald-500 text-[#102B22] hover:bg-emerald-400 sm:col-span-2"}`}><UsersRound aria-hidden="true" size={18} />Return to queue</button>
+                          </div>
+                          {!nextQueueEntry ? <p className="mt-3 text-sm text-white/60">No checked-in or waiting patient is ready yet.</p> : null}
+                        </div>
+                      )}
+                    </div>
+                  </section>
+                ) : (
+                  <>
                 <div
                   aria-live="polite"
                   className={`flex flex-wrap items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-sm font-semibold ${
@@ -1926,7 +2078,7 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
                   </span>
                   {draftStatus === "error" || completedDraftCleanup ? <button type="button" onClick={completedDraftCleanup ? retryCompletedDraftCleanup : markDraftDirty} className="rounded-lg bg-red-700 px-3 py-1.5 text-xs font-bold text-white">{completedDraftCleanup ? "Retry draft cleanup" : "Retry now"}</button> : <span className="text-xs opacity-75">Draft access expires after 7 days</span>}
                 </div>
-                <fieldset disabled={draftStatus === "loading" || Boolean(completedDraftCleanup)} className="space-y-6 disabled:opacity-60">
+                <fieldset disabled={saving || draftStatus === "loading" || Boolean(completedDraftCleanup)} className="space-y-6 disabled:opacity-60">
                 <section id="consultation-clinical" className={`${cardClass} scroll-mt-48 xl:scroll-mt-24`}>
                   <SectionTitle icon={Stethoscope} title="Clinical consultation" subtitle="Vitals, examination, diagnosis and care plan" />
                   <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
@@ -1969,6 +2121,8 @@ function ConsultationWorkspace({ profile, profileDoctor }: { profile: StaffProfi
                   {savedPrescription ? <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-white/15 pt-5"><p className="mr-auto text-sm font-semibold text-emerald-200">Prescription is ready.</p><button type="button" disabled={documentAction !== null} onClick={() => void preparePrescription("print")} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-white/10 px-4 py-2 text-sm font-bold hover:bg-white/20 disabled:opacity-60">{documentAction === "print" ? <LoaderCircle className="animate-spin" size={16} /> : <Printer size={16} />}Print</button><button type="button" disabled={documentAction !== null} onClick={() => void preparePrescription("download")} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-[#A8864A] px-4 py-2 text-sm font-bold hover:bg-[#92713b] disabled:opacity-60">{documentAction === "download" ? <LoaderCircle className="animate-spin" size={16} /> : <Download size={16} />}Download</button></div> : null}
                 </section>
                 </fieldset>
+                  </>
+                )}
               </form>
             </div>
           )}

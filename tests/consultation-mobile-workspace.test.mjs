@@ -41,6 +41,31 @@ test("the sticky patient context exposes each consultation section and safe comp
   assert.match(consultationSource, /<button type="submit" disabled=\{saving\}/u);
 });
 
+test("a signed consultation locks against duplicate submission and retains its documents", () => {
+  assert.match(consultationSource, /if \(saving \|\| draftCompletionRef\.current\) return;/u);
+  assert.match(consultationSource, /if \(completedSelection\)[\s\S]*?already complete/u);
+  assert.match(
+    consultationSource,
+    /await batch\.commit\(\);[\s\S]*?setCompletedConsultation\([\s\S]*?consultationId[\s\S]*?patientId: selectedPatient\.id/u,
+  );
+  assert.match(consultationSource, /role="status"[\s\S]*?Consultation completed/u);
+  assert.match(consultationSource, /This chart is locked against another submission/u);
+  assert.match(consultationSource, /Print prescription/u);
+  assert.match(consultationSource, /Download PDF/u);
+});
+
+test("completion offers an accessible next-patient handoff without bypassing identity checks", () => {
+  assert.match(consultationSource, /nextActionableConsultationEntry\(queue/u);
+  assert.match(
+    consultationSource,
+    /async function continueToNextPatient\(\)[\s\S]*?showMobileWorkspace\("queue"\)[\s\S]*?beginAppointmentConsultation\(nextQueueEntry\)/u,
+  );
+  assert.match(consultationSource, /Link next chart:/u);
+  assert.match(consultationSource, /Return to queue/u);
+  assert.match(consultationSource, /min-h-12 w-full/u);
+  assert.match(consultationSource, /completedDraftCleanup \? \([\s\S]*?Retry draft cleanup/u);
+});
+
 test("mobile navigation leaves consultation autosave and role protections intact", () => {
   assert.match(consultationSource, /\/api\/staff\/consultation-draft/u);
   assert.match(consultationSource, /confirmConsultationSwitch\(\)/u);
