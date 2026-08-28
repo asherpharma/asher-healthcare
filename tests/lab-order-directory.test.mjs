@@ -5,6 +5,8 @@ import {
   assertLabDirectoryStaff,
   boundedLabOrderDirectory,
   LAB_ORDER_DIRECTORY_FIELDS,
+  labOrderDirectoryForStaff,
+  labOrderPatientIdBatches,
   labOrderDirectoryQuery,
   projectLabOrderDirectory,
 } from "../server/labs/directory.js";
@@ -130,10 +132,14 @@ test("doctor projection includes clinical fields only after patient-scope filter
   const [order] = projectLabOrderDirectory([{
     id: "order-1",
     patientId: "patient-active",
+    clinician: "Dr. Lt Col Shafi Ahamad",
     notes: "Fasting sample",
     resultSummary: "Normal",
     reportStoragePath: "reports/patient-active/report.pdf",
-  }], activePatients, { role: "doctor" });
+  }], activePatients, {
+    role: "doctor",
+    doctorName: "Dr. Lt Col Shafi Ahamad",
+  });
 
   assert.equal(order.notes, "Fasting sample");
   assert.equal(order.resultSummary, "Normal");
@@ -142,4 +148,209 @@ test("doctor projection includes clinical fields only after patient-scope filter
   assert.equal("reportStoragePath" in order, false);
   assert.equal("reportContentType" in order, false);
   assert.equal("reportSize" in order, false);
+});
+
+test("doctor response excludes another clinician's order for the same assigned patient", async () => {
+  const documents = [
+    {
+      id: "own-order",
+      patientId: "shared-patient",
+      clinician: "Dr. Lt Col Shafi Ahamad",
+      notes: "Own clinical note",
+      resultSummary: "Own result",
+    },
+    {
+      id: "other-clinician-order",
+      patientId: "shared-patient",
+      clinician: "Dr. Shaik Reshma",
+      notes: "Other clinician private note",
+      resultSummary: "Other clinician private result",
+    },
+  ];
+  const patient = {
+    id: "shared-patient",
+    fullName: "Shared Patient",
+    doctorName: "Dr. Lt Col Shafi Ahamad",
+  };
+  const doctor = {
+    uid: "doctor-1",
+    role: "doctor",
+    doctorName: "Dr. Lt Col Shafi Ahamad",
+  };
+
+  const result = await labOrderDirectoryForStaff({}, doctor, {
+    async listMaskedLabOrderDocuments() {
+      // Truncation belongs to the bounded source window and must remain true
+      // even when server-side staff projection removes one of its orders.
+      return { documents, truncated: true, limit: 300 };
+    },
+    async resolvePatientDirectoryEntriesForStaff() {
+      return { patients: [patient], unavailableIds: [] };
+    },
+  });
+
+  assert.deepEqual(result.labOrders.map((order) => order.id), ["own-order"]);
+  assert.equal(result.labOrders[0].notes, "Own clinical note");
+  assert.equal(result.labOrders[0].resultSummary, "Own result");
+  assert.equal(JSON.stringify(result).includes("Other clinician private"), false);
+  assert.equal(result.truncated, true);
+  assert.equal(result.limit, 300);
+
+  const receptionOrders = projectLabOrderDirectory(
+    documents,
+    [patient],
+    { role: "reception" },
+  );
+  assert.deepEqual(receptionOrders.map((order) => order.id), [
+    "own-order",
+    "other-clinician-order",
+  ]);
+  receptionOrders.forEach((order) => {
+    assert.equal("notes" in order, false);
+    assert.equal("resultSummary" in order, false);
+  });
+
+  const adminOrders = projectLabOrderDirectory(
+    documents,
+    [patient],
+    { role: "admin" },
+  );
+  assert.deepEqual(adminOrders.map((order) => order.id), [
+    "own-order",
+    "other-clinician-order",
+  ]);
+  assert.equal(adminOrders[1].notes, "Other clinician private note");
+});
+
+test("lab order patient IDs are deduplicated and chunked at the resolver maximum", () => {
+  const documents = Array.from({ length: 121 }, (_, index) => ({
+    id: `order-${index}`,
+    patientId: `patient-${index}`,
+  }));
+  documents.push(
+    { id: "duplicate", patientId: "patient-0" },
+    { id: "empty", patientId: "" },
+  );
+
+  const batches = labOrderPatientIdBatches(documents);
+  assert.deepEqual(batches.map((batch) => batch.length), [50, 50, 21]);
+  assert.equal(batches.flat().length, 121);
+  assert.equal(new Set(batches.flat()).size, 121);
+});
+
+test("lab directory unwraps every exact resolver batch without first-page truncation", async () => {
+  const documents = Array.from({ length: 75 }, (_, index) => ({
+    id: `order-${index}`,
+    patientId: `patient-${index}`,
+    orderNumber: `LAB-${index}`,
+  }));
+  const resolverCalls = [];
+
+  const result = await labOrderDirectoryForStaff(
+    {},
+    { uid: "reception-1", role: "reception" },
+    {
+      async listMaskedLabOrderDocuments() {
+        return { documents, truncated: false, limit: 300 };
+      },
+      async resolvePatientDirectoryEntriesForStaff(_env, _staff, { patientIds }) {
+        resolverCalls.push(patientIds);
+        return {
+          patients: patientIds.map((id) => ({
+            id,
+            patientNumber: `ASH-${id}`,
+            fullName: `Name ${id}`,
+            phone: "9000000000",
+          })),
+          unavailableIds: [],
+        };
+      },
+    },
+  );
+
+  assert.deepEqual(resolverCalls.map((batch) => batch.length), [50, 25]);
+  assert.equal(result.labOrders.length, 75);
+  assert.equal(result.labOrders.at(-1).patientId, "patient-74");
+  assert.equal(result.truncated, false);
+  assert.equal(result.limit, 300);
+});
+
+test("lab directory excludes archived and doctor-out-of-scope exact charts", async () => {
+  const documents = [
+    {
+      id: "visible-order",
+      patientId: "visible-patient",
+      clinician: "Dr. Lt Col Shafi Ahamad",
+    },
+    {
+      id: "archived-order",
+      patientId: "archived-patient",
+      clinician: "Dr. Lt Col Shafi Ahamad",
+    },
+    {
+      id: "other-doctor-order",
+      patientId: "other-doctor-patient",
+      clinician: "Dr. Shaik Reshma",
+    },
+  ];
+  const records = new Map([
+    ["patients/visible-patient", {
+      data: {
+        fullName: "Visible Patient",
+        doctorName: "Dr. Lt Col Shafi Ahamad",
+      },
+    }],
+    ["patients/archived-patient", {
+      data: {
+        fullName: "Archived Patient",
+        doctorName: "Dr. Lt Col Shafi Ahamad",
+        archived: true,
+      },
+    }],
+    ["patients/other-doctor-patient", {
+      data: {
+        fullName: "Other Doctor Patient",
+        doctorName: "Dr. Shaik Reshma",
+      },
+    }],
+  ]);
+
+  const result = await labOrderDirectoryForStaff(
+    {},
+    {
+      uid: "doctor-1",
+      role: "doctor",
+      doctorName: "Dr. Lt Col Shafi Ahamad",
+    },
+    {
+      async listMaskedLabOrderDocuments() {
+        return { documents, truncated: false, limit: 300 };
+      },
+      async getDocument(_env, path) {
+        if (path === "staff/doctor-1") {
+          return {
+            data: {
+              active: true,
+              role: "doctor",
+              doctorName: "Dr. Lt Col Shafi Ahamad",
+            },
+          };
+        }
+        return records.get(path) || null;
+      },
+    },
+  );
+
+  assert.deepEqual(result.labOrders.map((order) => order.id), ["visible-order"]);
+  assert.equal(result.labOrders[0].patientName, "Visible Patient");
+});
+
+test("projection fails closed instead of treating a page object as a patient array", () => {
+  assert.deepEqual(
+    projectLabOrderDirectory(
+      [{ id: "order-1", patientId: "patient-active" }],
+      { patients: activePatients, nextCursor: "next-page", hasMore: true },
+    ),
+    [],
+  );
 });

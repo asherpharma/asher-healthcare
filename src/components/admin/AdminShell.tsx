@@ -74,7 +74,7 @@ function StaffChrome({ children }: { children: ReactNode }) {
       <header className="staff-app-header sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur-xl">
         <div className="staff-app-header-inner mx-auto flex max-w-[1440px] items-center justify-between gap-2 px-3 py-2.5 xl:gap-3 xl:px-8 xl:py-4">
           <Link href="/admin" className="flex min-w-0 items-center gap-2.5 xl:gap-3">
-            <Image src="/images/logo.png" alt="Asher Healthcare" width={44} height={44} className="h-10 w-10 shrink-0 rounded-xl object-contain xl:h-11 xl:w-11" />
+            <Image src="/images/asher-logo-compact-v2.webp" alt="Asher Healthcare" width={44} height={44} className="h-10 w-10 shrink-0 rounded-xl object-contain xl:h-11 xl:w-11" />
             <div className="min-w-0"><p className="truncate font-bold text-[#233A59]"><span className="xl:hidden">Asher Staff</span><span className="hidden xl:inline">Asher Healthcare</span></p><p className="hidden text-xs text-slate-500 xl:block">Secure clinic workspace</p></div>
           </Link>
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2 xl:gap-3">

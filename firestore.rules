@@ -112,19 +112,6 @@ service cloud.firestore {
           && request.resource.data.status in ['checked_in', 'cancelled']);
     }
 
-    // Temporary rollout bridge for the previous production appointment desk.
-    // Remove after all staff clients use the queue workflow: the old UI wrote
-    // confirmed -> completed using only status + updatedAt. Doctor assignment
-    // remains mandatory, and reception never receives this clinical bridge.
-    function validLegacyAppointmentUpdate() {
-      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'status', 'updatedAt'
-        ])
-        && resource.data.status == 'confirmed'
-        && request.resource.data.status == 'completed'
-        && request.resource.data.updatedAt == request.time;
-    }
-
     function patientIsActive(patientId) {
       return exists(/databases/$(database)/documents/patients/$(patientId))
         && (
@@ -461,14 +448,14 @@ service cloud.firestore {
       allow update: if appointmentPatientIsActive()
         && ((
           isAdmin()
-          && (validAppointmentQueueUpdate() || validLegacyAppointmentUpdate())
+          && validAppointmentQueueUpdate()
         ) || (
           isReception()
           && validAppointmentQueueUpdate()
           && validReceptionAppointmentTransition()
         ) || (
           isAssignedAppointmentDoctor()
-          && (validAppointmentQueueUpdate() || validLegacyAppointmentUpdate())
+          && validAppointmentQueueUpdate()
         ));
       // Appointment history is retained; cancellation releases the separate
       // slot lock without erasing the booking audit record.

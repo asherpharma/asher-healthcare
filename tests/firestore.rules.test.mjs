@@ -1530,18 +1530,18 @@ test("a slot is released only with an atomic linked cancellation", async () => {
   await assertSucceeds(batch.commit());
 });
 
-test("legacy completion allows admin and the assigned doctor", async () => {
+test("confirmed appointments cannot bypass the queue and consultation workflow", async () => {
   await seedDocuments([
     ["appointments/legacy-admin", appointment({ doctorId: "obg" })],
     ["appointments/legacy-assigned", appointment()],
   ]);
-  await assertSucceeds(
+  await assertFails(
     updateDoc(doc(staffDb("admin"), "appointments/legacy-admin"), {
       status: "completed",
       updatedAt: serverTimestamp(),
     }),
   );
-  await assertSucceeds(
+  await assertFails(
     updateDoc(doc(staffDb("pediatrics"), "appointments/legacy-assigned"), {
       status: "completed",
       updatedAt: serverTimestamp(),
@@ -1549,7 +1549,7 @@ test("legacy completion allows admin and the assigned doctor", async () => {
   );
 });
 
-test("legacy completion denies reception and other doctors", async () => {
+test("reception and other doctors cannot complete an assigned appointment directly", async () => {
   await seedDocuments([
     ["appointments/legacy-reception", appointment()],
     ["appointments/legacy-other-doctor", appointment()],

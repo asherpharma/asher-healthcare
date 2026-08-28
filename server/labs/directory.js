@@ -1,4 +1,7 @@
-import { patientDirectoryForStaff } from "../patients/directory.js";
+import {
+  MAX_PATIENT_RESOLVER_IDS,
+  resolvePatientDirectoryEntriesForStaff,
+} from "../patients/directory.js";
 import { serviceAccountAccessToken } from "../razorpay/firebase.js";
 import { HttpError } from "../razorpay/http.js";
 
@@ -138,15 +141,26 @@ export function projectLabOrderDirectory(
   activePatients,
   staff = { role: "reception" },
 ) {
+  const safePatients = Array.isArray(activePatients) ? activePatients : [];
   const patientsById = new Map(
-    activePatients.map((patient) => [safeString(patient.id), patient]),
+    safePatients.map((patient) => [safeString(patient.id), patient]),
   );
-  const includeClinical = staff.role === "admin" || staff.role === "doctor";
+  const role = safeString(staff?.role);
+  const doctorName = role === "doctor" ? safeString(staff?.doctorName) : "";
+  const includeClinical = role === "admin" || role === "doctor";
 
   return documents.flatMap((order) => {
     const patientId = safeString(order.patientId);
     const patient = patientsById.get(patientId);
     if (!patientId || !patient) return [];
+    // Patient assignment alone is insufficient: a chart can contain orders
+    // authored by different clinicians over time. Doctors receive only orders
+    // whose stored clinician is the exact canonical doctor on their current
+    // staff record, so another clinician's notes never enter the response.
+    if (
+      role === "doctor"
+      && (!doctorName || safeString(order.clinician) !== doctorName)
+    ) return [];
 
     const operational = {
       id: safeString(order.id),
@@ -175,14 +189,64 @@ export function projectLabOrderDirectory(
   });
 }
 
-export async function labOrderDirectoryForStaff(env, staff) {
+export function labOrderPatientIdBatches(documents) {
+  const safeDocuments = Array.isArray(documents) ? documents : [];
+  const patientIds = [...new Set(
+    safeDocuments
+      .map((order) => safeString(order?.patientId).trim())
+      .filter(Boolean),
+  )];
+
+  return Array.from(
+    { length: Math.ceil(patientIds.length / MAX_PATIENT_RESOLVER_IDS) },
+    (_, index) => patientIds.slice(
+      index * MAX_PATIENT_RESOLVER_IDS,
+      (index + 1) * MAX_PATIENT_RESOLVER_IDS,
+    ),
+  );
+}
+
+export async function resolveLabOrderPatientsForStaff(
+  env,
+  staff,
+  documents,
+  dependencies = {},
+) {
+  const resolvePatients = dependencies.resolvePatientDirectoryEntriesForStaff
+    || resolvePatientDirectoryEntriesForStaff;
+  const patients = [];
+
+  // Keep exact chart reads bounded. Running the batches sequentially also
+  // avoids a 300-order window turning into hundreds of simultaneous Firestore
+  // reads while still resolving every patient referenced by that window.
+  for (const patientIds of labOrderPatientIdBatches(documents)) {
+    const result = await resolvePatients(
+      env,
+      staff,
+      { patientIds },
+      dependencies,
+    );
+    if (Array.isArray(result?.patients)) patients.push(...result.patients);
+  }
+
+  return patients;
+}
+
+export async function labOrderDirectoryForStaff(env, staff, dependencies = {}) {
   assertLabDirectoryStaff(staff);
 
-  // The operational patient directory excludes archived charts. Joining on
-  // that server-owned view prevents stale or archived patient orders from
-  // reaching reception without exposing any clinical patient fields.
-  const activePatients = await patientDirectoryForStaff(env, staff);
-  const window = await listMaskedLabOrderDocuments(env);
+  const listLabOrders = dependencies.listMaskedLabOrderDocuments
+    || listMaskedLabOrderDocuments;
+  const window = await listLabOrders(env);
+  // Resolve only the exact charts referenced by the already-bounded order
+  // window. The resolver revalidates the current staff record and excludes
+  // archived or doctor-out-of-scope charts without enumerating a first page.
+  const activePatients = await resolveLabOrderPatientsForStaff(
+    env,
+    staff,
+    window.documents,
+    dependencies,
+  );
   return {
     labOrders: projectLabOrderDirectory(window.documents, activePatients, staff),
     truncated: window.truncated,

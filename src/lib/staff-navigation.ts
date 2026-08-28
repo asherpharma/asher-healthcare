@@ -52,11 +52,11 @@ export const STAFF_TOOL_REGISTRY: readonly StaffTool[] = [
     id: "dashboard",
     href: "/admin",
     label: "Dashboard",
-    shortLabel: "Home",
-    detail: "Clinic overview, activity, and performance",
+    shortLabel: "Today",
+    detail: "Today’s clinic work, priorities, and performance",
     group: "daily",
-    roles: ADMIN_ONLY,
-    keywords: ["home", "overview", "summary", "analytics", "performance"],
+    roles: ALL_ROLES,
+    keywords: ["home", "today", "queue", "overview", "summary", "analytics", "performance"],
     icon: "dashboard",
   },
   {
@@ -197,8 +197,8 @@ const STAFF_TOOL_BY_ID = new Map(STAFF_TOOL_REGISTRY.map((tool) => [tool.id, too
 
 const PRIMARY_TOOL_IDS: Readonly<Record<StaffRole, readonly string[]>> = {
   admin: ["dashboard", "appointments", "patients"],
-  doctor: ["consultations", "appointments", "patients"],
-  reception: ["reception", "appointments", "patients"],
+  doctor: ["dashboard", "consultations", "patients"],
+  reception: ["dashboard", "reception", "appointments"],
 };
 
 const QUICK_TOOL_IDS: Readonly<Record<StaffRole, readonly string[]>> = {

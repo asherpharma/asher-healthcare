@@ -384,7 +384,7 @@ export default function PatientPortalDashboard() {
       <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur-xl">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-2 px-3 py-2.5 sm:px-6 sm:py-4">
           <Link href="/portal" className="flex min-w-0 items-center gap-2.5 rounded-xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#233A59]">
-            <Image src="/images/logo.png" alt="Asher Healthcare" width={44} height={44} className="h-10 w-10 shrink-0 rounded-xl object-contain" />
+            <Image src="/images/asher-logo-compact-v2.webp" alt="Asher Healthcare" width={44} height={44} className="h-10 w-10 shrink-0 rounded-xl object-contain" />
             <div className="min-w-0">
               <p className="truncate font-bold text-[#233A59]">Asher Family</p>
               <p className="hidden truncate text-xs text-slate-500 min-[360px]:block">Private patient portal</p>

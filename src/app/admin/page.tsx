@@ -1,14 +1,10 @@
 "use client";
 
 import { useStaff } from "@/components/admin/StaffGuard";
-import {
-  STAFF_TOOL_GROUP_TONES,
-  STAFF_TOOL_ICONS,
-} from "@/components/admin/staff-tool-ui";
+import StaffTodayWorkspace from "@/components/admin/StaffTodayWorkspace";
 import { firestore } from "@/firebase/config";
 import { formatAppointmentTime } from "@/lib/appointments";
 import { clinicQueueHealth } from "@/lib/clinic-queue";
-import { quickStaffToolsForRole, staffToolsForRole } from "@/lib/staff-navigation";
 import {
   APPOINTMENT_STATUSES,
   APPOINTMENT_STATUS_OPTIONS,
@@ -516,63 +512,6 @@ async function fetchDashboardData(range: DashboardRange, today: string): Promise
     limitedSources,
     unavailableSources,
   };
-}
-
-function StaffAppHome({ role, displayName }: { role: "doctor" | "reception"; displayName: string }) {
-  const isDoctor = role === "doctor";
-  const actions = quickStaffToolsForRole(role);
-  const workflowIds = isDoctor
-    ? ["consultations", "patients", "lab"]
-    : ["reception", "appointments", "billing"];
-  const roleTools = staffToolsForRole(role);
-  const workflow = workflowIds.flatMap((id) => {
-    const tool = roleTools.find((candidate) => candidate.id === id);
-    return tool ? [tool] : [];
-  });
-
-  return (
-    <div className="mx-auto max-w-4xl space-y-5">
-      <section className="overflow-hidden rounded-[30px] bg-gradient-to-br from-[#16314b] to-[#2f5878] p-6 text-white shadow-xl sm:p-8">
-        <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#efd193]">{isDoctor ? "Doctor workspace" : "Reception workspace"}</p>
-        <h1 className="mt-2 text-3xl font-bold">Hello, {displayName.split(" ")[0] || "team"}.</h1>
-        <p className="mt-3 max-w-xl leading-7 text-white/75">Choose a clinic task below. The phone app keeps your most-used actions one tap away.</p>
-      </section>
-
-      <section className="grid grid-cols-2 gap-3 sm:gap-4">
-        {actions.map((action) => {
-          const Icon = STAFF_TOOL_ICONS[action.icon];
-          return (
-            <Link key={action.id} href={action.href} prefetch={false} className={`flex min-h-36 flex-col justify-between rounded-[24px] p-5 shadow-sm ring-1 ring-black/5 transition active:scale-[0.98] ${STAFF_TOOL_GROUP_TONES[action.group]}`}>
-              <Icon aria-hidden="true" size={26} />
-              <div><h2 className="font-bold sm:text-lg">{action.label}</h2><p className="mt-1 text-xs leading-5 opacity-70 sm:text-sm">{action.detail}</p></div>
-            </Link>
-          );
-        })}
-      </section>
-
-      <section className="rounded-[26px] border border-slate-200 bg-white p-5 shadow-sm sm:p-6" aria-labelledby="suggested-flow-title">
-        <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#A8864A]">Suggested flow</p>
-        <h2 id="suggested-flow-title" className="mt-1 text-xl font-bold text-[#233A59]">
-          {isDoctor ? "Move from queue to follow-up" : "Complete a visit without backtracking"}
-        </h2>
-        <ol className="mt-4 grid gap-2 sm:grid-cols-3">
-          {workflow.map((tool, index) => (
-            <li key={tool.id}>
-              <Link href={tool.href} prefetch={false} className="flex min-h-16 items-center gap-3 rounded-2xl bg-slate-50 p-3 text-sm font-bold text-slate-700 transition hover:bg-blue-50 hover:text-[#233A59]">
-                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#233A59] text-xs text-white">{index + 1}</span>
-                <span>{tool.shortLabel}</span>
-              </Link>
-            </li>
-          ))}
-        </ol>
-      </section>
-
-      <section className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
-        <ShieldAlert className="mt-0.5 shrink-0" size={19} />
-        <p>Clinic-wide financial analytics remain visible only to administrators. Your assigned operational tools are available above.</p>
-      </section>
-    </div>
-  );
 }
 
 function KpiCard({
@@ -1328,7 +1267,7 @@ function DashboardAccess() {
   const { profile } = useStaff();
   return profile.role === "admin"
     ? <AdminDashboard />
-    : <StaffAppHome role={profile.role} displayName={profile.displayName} />;
+    : <StaffTodayWorkspace />;
 }
 
 export default function AdminPage() {

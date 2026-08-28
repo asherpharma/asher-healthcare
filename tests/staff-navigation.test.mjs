@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -14,6 +15,16 @@ import {
   staffToolsForRole,
   updateRecentStaffToolIds,
 } from "../src/lib/staff-navigation.ts";
+
+test("staff authentication is limited to the current browser session", async () => {
+  const source = await readFile(new URL("../src/firebase/config.ts", import.meta.url), "utf8");
+  const staffPersistence = source.match(
+    /setPersistence\(firebaseAuth,\s*([A-Za-z]+Persistence)\)/u,
+  );
+
+  assert.equal(staffPersistence?.[1], "browserSessionPersistence");
+  assert.equal(source.includes("browserLocalPersistence"), false);
+});
 
 test("the registry has one unique entry for every staff workspace route", () => {
   const expectedRoutes = [
@@ -43,14 +54,15 @@ test("role filters prevent staff from discovering restricted workspaces", () => 
   const receptionIds = staffToolsForRole("reception").map(({ id }) => id);
 
   assert.deepEqual(primaryStaffToolsForRole("admin").map(({ id }) => id), ["dashboard", "appointments", "patients"]);
-  assert.deepEqual(primaryStaffToolsForRole("doctor").map(({ id }) => id), ["consultations", "appointments", "patients"]);
-  assert.deepEqual(primaryStaffToolsForRole("reception").map(({ id }) => id), ["reception", "appointments", "patients"]);
+  assert.deepEqual(primaryStaffToolsForRole("doctor").map(({ id }) => id), ["dashboard", "consultations", "patients"]);
+  assert.deepEqual(primaryStaffToolsForRole("reception").map(({ id }) => id), ["dashboard", "reception", "appointments"]);
 
   assert.equal(doctorIds.includes("billing"), false);
   assert.equal(doctorIds.includes("staff"), false);
   assert.equal(doctorIds.includes("settings"), false);
   assert.equal(receptionIds.includes("consultations"), false);
-  assert.equal(receptionIds.includes("dashboard"), false);
+  assert.equal(doctorIds.includes("dashboard"), true);
+  assert.equal(receptionIds.includes("dashboard"), true);
   assert.equal(receptionIds.includes("patient-access"), false);
 
   const receptionQuick = quickStaffToolsForRole("reception");

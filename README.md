@@ -5,8 +5,15 @@ Healthcare, Bengaluru.
 
 ## Current release
 
-The women-and-child-care release adds a unified patient timeline, child growth
-tracking, expanded vaccination records, and structured pregnancy follow-up.
+The Staff Today and reliability release gives receptionists and doctors a live,
+role-scoped daily workspace for queues, assigned follow-ups, and urgent lab work.
+It also limits staff authentication to the current browser session, enforces the
+complete appointment queue sequence, restores tablet-friendly layouts, and
+hardens the secure laboratory directory after the paginated patient migration.
+
+The clinical foundation continues to provide the unified patient timeline,
+child growth tracking, expanded vaccination records, and structured pregnancy
+follow-up.
 
 Production: [asherhealthcare.in](https://asherhealthcare.in)
 

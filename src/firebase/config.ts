@@ -1,6 +1,5 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
 import {
-  browserLocalPersistence,
   browserSessionPersistence,
   getAuth,
   initializeAuth,
@@ -47,8 +46,11 @@ export const patientFirebaseAuth = patientFirebaseApp
     })()
   : null;
 
+// Clinic devices are often shared. Keep staff credentials only for the current
+// browser session so closing the browser or installed app cannot silently
+// restore access to patient, clinical, or billing records later.
 if (firebaseAuth && typeof window !== "undefined") {
-  void setPersistence(firebaseAuth, browserLocalPersistence);
+  void setPersistence(firebaseAuth, browserSessionPersistence);
 }
 
 if (patientFirebaseAuth && typeof window !== "undefined") {

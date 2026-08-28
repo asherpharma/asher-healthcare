@@ -953,20 +953,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
     justify-content: center;
   }
 
-  .staff-app-content form[class*="grid"] {
-    grid-template-columns: minmax(0, 1fr) !important;
-  }
-
-  .staff-app-content form [class*="col-span"],
-  .staff-app-content form [class*="col-start"],
-  .staff-app-content form [class*="col-end"] {
-    grid-column: auto !important;
-  }
-
-  .staff-app-content article[class*="sm:grid-cols"] {
-    grid-template-columns: minmax(0, 1fr) !important;
-  }
-
   .staff-app-content h1 {
     font-size: clamp(1.75rem, 7vw, 2.25rem);
     line-height: 1.08;
@@ -1008,6 +994,20 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .staff-app-content .staff-page-heading > button,
   .staff-app-content form button[type="submit"] {
     width: 100%;
+  }
+
+  .staff-app-content form[class*="grid"] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .staff-app-content form [class*="col-span"],
+  .staff-app-content form [class*="col-start"],
+  .staff-app-content form [class*="col-end"] {
+    grid-column: auto !important;
+  }
+
+  .staff-app-content article[class*="sm:grid-cols"] {
+    grid-template-columns: minmax(0, 1fr) !important;
   }
 
   .staff-app-content input,
