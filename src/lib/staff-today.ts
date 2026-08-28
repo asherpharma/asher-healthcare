@@ -2,6 +2,7 @@ import type { AppointmentStatus } from "@/lib/visit-workflow";
 
 export const STAFF_TODAY_APPOINTMENT_LIMIT = 80;
 export const STAFF_TODAY_TASK_LIMIT = 60;
+export const STAFF_TODAY_LAB_REFRESH_TTL_MS = 30_000;
 
 export type StaffTodayRole = "doctor" | "reception";
 
@@ -36,6 +37,102 @@ export type StaffTodayLabOrder = {
   status: string;
   tests?: string[];
 };
+
+export type StaffTodayLabRefreshCoordinator = {
+  refresh(options?: { force?: boolean }): Promise<void>;
+  dispose(): void;
+};
+
+export function createStaffTodayLabRefreshCoordinator<T>({
+  load,
+  onSuccess,
+  onError,
+  onLoadingChange,
+  now = () => Date.now(),
+  freshForMs = STAFF_TODAY_LAB_REFRESH_TTL_MS,
+}: {
+  load: (signal: AbortSignal) => Promise<T>;
+  onSuccess: (value: T) => void;
+  onError: (error: unknown) => void;
+  onLoadingChange: (loading: boolean) => void;
+  now?: () => number;
+  freshForMs?: number;
+}): StaffTodayLabRefreshCoordinator {
+  const freshnessWindow = Math.max(
+    STAFF_TODAY_LAB_REFRESH_TTL_MS,
+    Number.isFinite(freshForMs) ? freshForMs : STAFF_TODAY_LAB_REFRESH_TTL_MS,
+  );
+  let disposed = false;
+  let generation = 0;
+  let loading = false;
+  let lastSuccessAt: number | null = null;
+  let controller: AbortController | null = null;
+  let inFlight: Promise<void> | null = null;
+
+  const setLoading = (next: boolean) => {
+    if (loading === next) return;
+    loading = next;
+    onLoadingChange(next);
+  };
+
+  const refresh = (options: { force?: boolean } = {}) => {
+    if (disposed) return Promise.resolve();
+    const force = options.force === true;
+    if (!force && inFlight) return inFlight;
+    if (
+      !force
+      && lastSuccessAt !== null
+      && now() - lastSuccessAt < freshnessWindow
+    ) return Promise.resolve();
+
+    if (force && inFlight) controller?.abort();
+    const requestGeneration = ++generation;
+    const requestController = new AbortController();
+    controller = requestController;
+    setLoading(true);
+
+    const request = Promise.resolve()
+      .then(() => load(requestController.signal))
+      .then((value) => {
+        if (
+          disposed
+          || requestController.signal.aborted
+          || generation !== requestGeneration
+        ) return;
+        lastSuccessAt = now();
+        onSuccess(value);
+      })
+      .catch((error: unknown) => {
+        if (
+          disposed
+          || requestController.signal.aborted
+          || generation !== requestGeneration
+        ) return;
+        onError(error);
+      })
+      .finally(() => {
+        if (disposed || generation !== requestGeneration) return;
+        controller = null;
+        inFlight = null;
+        setLoading(false);
+      });
+    inFlight = request;
+    return request;
+  };
+
+  return {
+    refresh,
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      generation += 1;
+      controller?.abort();
+      controller = null;
+      inFlight = null;
+      loading = false;
+    },
+  };
+}
 
 const RECEPTION_STATUS_ORDER: Readonly<Record<AppointmentStatus, number>> = {
   requested: 0,

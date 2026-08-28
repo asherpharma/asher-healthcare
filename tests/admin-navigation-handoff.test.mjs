@@ -22,6 +22,18 @@ test("linked identifiers are handed off once without serializing them", () => {
   assert.equal(consumeAdminNavigationHandoff("/admin/appointments", 1_030), null);
 });
 
+test("an exact lab order is handed off in memory without entering the URL", () => {
+  const payload = {
+    destination: "/admin/lab",
+    intent: "open-lab-order",
+    orderId: "lab-order-private-1",
+  };
+  stageAdminNavigationHandoff(payload, 2_000);
+
+  assert.deepEqual(consumeAdminNavigationHandoff("/admin/lab", 2_010), payload);
+  assert.equal(consumeAdminNavigationHandoff("/admin/lab", 2_020), null);
+});
+
 test("expired and time-invalid handoffs are discarded", () => {
   stageAdminNavigationHandoff({
     destination: "/admin/consultations",
@@ -43,5 +55,10 @@ test("malformed identifiers cannot be staged", () => {
     destination: "/admin/consultations",
     intent: "open-appointment-consultation",
     appointmentId: "appointment\n1",
+  }));
+  assert.throws(() => stageAdminNavigationHandoff({
+    destination: "/admin/lab",
+    intent: "open-lab-order",
+    orderId: " lab-order-1",
   }));
 });

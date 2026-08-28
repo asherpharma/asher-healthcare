@@ -30,7 +30,54 @@ test("lab patient picker uses a recent page and debounced server search", () => 
   );
 });
 
-test("loaded lab-order patients resolve exactly in complete batches of at most 50", () => {
+test("doctor urgent lab pages use an opaque cursor and append unique results", () => {
+  assert.match(labSource, /const DOCTOR_URGENT_PAGE_SIZE = 25;/u);
+  assert.match(labSource, /view: "doctor-urgent",[\s\S]*?pageSize: String\(DOCTOR_URGENT_PAGE_SIZE\)/u);
+  assert.match(labSource, /if \(cursor\) params\.set\("cursor", cursor\);/u);
+  assert.match(
+    labSource,
+    /profile\.role === "doctor"[\s\S]*?fetch\(doctorUrgentDirectoryUrl\(\), \{[\s\S]*?signal: controller\.signal/u,
+  );
+  assert.match(labSource, /setDoctorUrgentNextCursor\(typeof result\.nextCursor === "string" \? result\.nextCursor : ""\)/u);
+  assert.match(labSource, /setDoctorUrgentHasMore\(result\.hasMore === true\)/u);
+  assert.match(labSource, /setOrders\(\(current\) => appendUniqueLabOrders\(current, nextOrders\)\)/u);
+  assert.match(labSource, /new Map\(current\.map\(\(order\) => \[order\.id, order\]\)\)/u);
+  assert.match(labSource, /if \(!added\) return current;/u);
+  assert.doesNotMatch(labSource, /setDoctorUrgentHasMore\([^\n]*labOrders[^\n]*length/u);
+});
+
+test("doctor urgent pagination is scoped, retryable, and mobile accessible", () => {
+  assert.match(labSource, /!doctorUrgentDirectoryMode[\s\S]*?!doctorUrgentHasMore[\s\S]*?doctorUrgentRequestRef\.current[\s\S]*?patientSafetyVerifyingMore/u);
+  assert.match(
+    labSource,
+    /const doctorUrgentDirectoryMode = profile\.role === "doctor"[\s\S]*?priorityFilter === "urgent"[\s\S]*?statusFilter/u,
+  );
+  assert.match(labSource, /doctorUrgentRequestRef\.current = controller;/u);
+  assert.match(labSource, /doctorUrgentLoadMoreError/u);
+  assert.match(labSource, /role="alert"/u);
+  assert.match(labSource, /aria-busy=\{doctorUrgentLoadingMore \|\| patientSafetyVerifyingMore\}/u);
+  assert.match(labSource, /aria-controls="lab-order-list"/u);
+  assert.match(labSource, /id="lab-order-list"/u);
+  assert.match(labSource, /min-h-12 w-full[^"]*sm:w-auto/u);
+  assert.match(labSource, /role="status"/u);
+  assert.match(labSource, /Load more urgent orders/u);
+  assert.match(labSource, /profile\.role === "reception"[\s\S]*?fetch\("\/api\/staff\/labs\/directory"/u);
+  assert.match(
+    labSource,
+    /profile\.role === "reception" \|\| profile\.role === "doctor"[\s\S]*?fetch\("\/api\/staff\/labs\/directory"/u,
+  );
+});
+
+test("urgent navigation hydrates URL filters before loading and aborts fallback requests", () => {
+  assert.match(labSource, /const \[urlFiltersHydrated, setUrlFiltersHydrated\] = useState\(false\)/u);
+  assert.match(labSource, /setPriorityFilter\(requestedPriority\);[\s\S]*?setUrlFiltersHydrated\(true\)/u);
+  assert.match(labSource, /if \(!urlFiltersHydrated\) return;/u);
+  assert.match(labSource, /const fullDirectoryRequestRef = useRef<AbortController \| null>\(null\)/u);
+  assert.match(labSource, /fetch\("\/api\/staff\/labs\/directory", \{[\s\S]*?signal: controller\.signal/u);
+  assert.match(labSource, /fullDirectoryRequestRef\.current\?\.abort\(\)/u);
+});
+
+test("loaded lab-order patients cache exact validation and resolve only new IDs in batches of 50", () => {
   assert.match(labSource, /const PATIENT_SAFETY_BATCH_SIZE = 50;/u);
   assert.match(
     labSource,
@@ -38,16 +85,19 @@ test("loaded lab-order patients resolve exactly in complete batches of at most 5
   );
   assert.match(
     labSource,
-    /patientIds\.slice\([\s\S]*?index \* PATIENT_SAFETY_BATCH_SIZE[\s\S]*?\(index \+ 1\) \* PATIENT_SAFETY_BATCH_SIZE/u,
+    /const unverifiedPatientIds = patientIds\.filter\([\s\S]*?!patientSafetyCheckedIdsRef\.current\.has\(patientId\)/u,
   );
   assert.match(
     labSource,
-    /await Promise\.all\([\s\S]*?batches\.map\(\(batch\) => resolvePatientDirectoryEntries\(user, batch\)\)/u,
+    /unverifiedPatientIds\.slice\([\s\S]*?PATIENT_SAFETY_BATCH_SIZE[\s\S]*?batches\.map\(\(batch\) => resolvePatientDirectoryEntries\(user, batch\)\)/u,
   );
   assert.match(
     labSource,
-    /setPatientSafetyLoading\(true\);[\s\S]*?setPatientSafetyScope\(""\);[\s\S]*?setActiveOrderPatientIds\(new Set\(\)\);/u,
+    /unverifiedPatientIds\.forEach\(\(patientId\) => patientSafetyCheckedIdsRef\.current\.add\(patientId\)\)/u,
   );
+  assert.match(labSource, /resolved\.forEach\(\(patientId\) => patientSafetyActiveIdsRef\.current\.add\(patientId\)\)/u);
+  assert.match(labSource, /if \(!scopeChanged\) setPatientSafetyVerifyingMore\(true\)/u);
+  assert.match(labSource, /disabled=\{doctorUrgentLoadingMore \|\| patientSafetyVerifyingMore\}/u);
 });
 
 test("lab navigation handoff resolves and verifies the exact requested patient", () => {

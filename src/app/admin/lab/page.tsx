@@ -107,6 +107,14 @@ type AyusLinkResponse = {
   error?: string;
 };
 
+type DoctorUrgentDirectoryPage = {
+  labOrders?: LabOrder[];
+  nextCursor?: string;
+  hasMore?: boolean;
+  pageSize?: number;
+  error?: string;
+};
+
 const commonTests = [
   "Complete Blood Count (CBC)",
   "HbA1c",
@@ -152,10 +160,32 @@ function availableStatusTransitions(status: LabStatus, reception: boolean) {
 
 const INITIAL_VISIBLE_ORDERS = 30;
 const PATIENT_SAFETY_BATCH_SIZE = 50;
+const DOCTOR_URGENT_PAGE_SIZE = 25;
 
 const cardClass = "rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm";
 const fieldClass = "mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-[#A8864A] focus:ring-2 focus:ring-[#A8864A]/15";
 const labelClass = "text-sm font-semibold text-slate-700";
+
+function doctorUrgentDirectoryUrl(cursor = "") {
+  const params = new URLSearchParams({
+    view: "doctor-urgent",
+    pageSize: String(DOCTOR_URGENT_PAGE_SIZE),
+  });
+  if (cursor) params.set("cursor", cursor);
+  return `/api/staff/labs/directory?${params.toString()}`;
+}
+
+function appendUniqueLabOrders(current: LabOrder[], incoming: LabOrder[]) {
+  const ordersById = new Map(current.map((order) => [order.id, order]));
+  let added = false;
+  incoming.forEach((order) => {
+    if (ordersById.has(order.id)) return;
+    ordersById.set(order.id, order);
+    added = true;
+  });
+  if (!added) return current;
+  return [...ordersById.values()];
+}
 
 function timestampMillis(value?: Timestamp | string) {
   if (typeof value === "string") return Date.parse(value) || 0;
@@ -210,9 +240,14 @@ function LabDesk() {
   const [patientSearchNotice, setPatientSearchNotice] = useState("");
   const [activeOrderPatientIds, setActiveOrderPatientIds] = useState<Set<string>>(() => new Set());
   const [patientSafetyLoading, setPatientSafetyLoading] = useState(true);
+  const [patientSafetyVerifyingMore, setPatientSafetyVerifyingMore] = useState(false);
   const [patientSafetyScope, setPatientSafetyScope] = useState("");
   const [orders, setOrders] = useState<LabOrder[]>([]);
   const [loading, setLoading] = useState(true);
+  const [doctorUrgentNextCursor, setDoctorUrgentNextCursor] = useState("");
+  const [doctorUrgentHasMore, setDoctorUrgentHasMore] = useState(false);
+  const [doctorUrgentLoadingMore, setDoctorUrgentLoadingMore] = useState(false);
+  const [doctorUrgentLoadMoreError, setDoctorUrgentLoadMoreError] = useState("");
   const [saving, setSaving] = useState(false);
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>("idle");
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -235,6 +270,7 @@ function LabDesk() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | LabStatus>("all");
   const [priorityFilter, setPriorityFilter] = useState<"all" | LabOrder["priority"]>("all");
+  const [urlFiltersHydrated, setUrlFiltersHydrated] = useState(false);
   const [patientSearch, setPatientSearch] = useState("");
   const [patientsLoaded, setPatientsLoaded] = useState(false);
   const [patientDirectoryScope, setPatientDirectoryScope] = useState("");
@@ -244,11 +280,18 @@ function LabDesk() {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [handoffPatientId, setHandoffPatientId] = useState("");
+  const [handoffOrderId, setHandoffOrderId] = useState("");
+  const [highlightedOrderId, setHighlightedOrderId] = useState("");
   const uploadTaskRef = useRef<UploadTask | null>(null);
   const chooseFileRef = useRef<HTMLInputElement | null>(null);
   const cameraFileRef = useRef<HTMLInputElement | null>(null);
   const fileValidationSequence = useRef(0);
   const patientSearchSequence = useRef(0);
+  const patientSafetyCacheScopeRef = useRef("");
+  const patientSafetyCheckedIdsRef = useRef<Set<string>>(new Set());
+  const patientSafetyActiveIdsRef = useRef<Set<string>>(new Set());
+  const doctorUrgentRequestRef = useRef<AbortController | null>(null);
+  const fullDirectoryRequestRef = useRef<AbortController | null>(null);
   const directoryScope = `${profile.role}:${profile.doctorName ?? ""}`;
   const patientDirectoryAvailable = patientsLoaded && patientDirectoryScope === directoryScope;
   const patientSafetyAvailable = !patientSafetyLoading && patientSafetyScope === directoryScope;
@@ -259,22 +302,30 @@ function LabDesk() {
   const canUsePartnerPortal = profile.role === "admin" || profile.labReportOperator === true;
   const isAyusImport = resultWorkflowMode === "ayuslab";
   const resultBusy = uploadPhase !== "idle" || ayusLinkBusy;
+  const doctorUrgentDirectoryMode = profile.role === "doctor"
+    && priorityFilter === "urgent"
+    && ["all", "ordered", "collected", "processing"].includes(statusFilter);
 
   useEffect(() => {
     const requestedPriority = new URLSearchParams(window.location.search).get("priority");
-    if (requestedPriority !== "routine" && requestedPriority !== "urgent") return;
-    const timer = window.setTimeout(() => setPriorityFilter(requestedPriority), 0);
+    const timer = window.setTimeout(() => {
+      if (requestedPriority === "routine" || requestedPriority === "urgent") {
+        setPriorityFilter(requestedPriority);
+      }
+      setUrlFiltersHydrated(true);
+    }, 0);
     return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
-    const consumePatientHandoff = () => {
+    const consumeLabHandoff = () => {
       const handoff = consumeAdminNavigationHandoff("/admin/lab");
       if (handoff?.intent === "create-lab-order") setHandoffPatientId(handoff.patientId);
+      if (handoff?.intent === "open-lab-order") setHandoffOrderId(handoff.orderId);
     };
-    window.addEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumePatientHandoff);
-    consumePatientHandoff();
-    return () => window.removeEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumePatientHandoff);
+    window.addEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumeLabHandoff);
+    consumeLabHandoff();
+    return () => window.removeEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumeLabHandoff);
   }, []);
 
   useEffect(() => {
@@ -352,6 +403,7 @@ function LabDesk() {
   }, [patientSearch, user]);
 
   useEffect(() => {
+    if (!urlFiltersHydrated) return;
     if (profile.role === "doctor" && !profile.doctorName?.trim()) {
       const timer = window.setTimeout(() => {
         setOrders([]);
@@ -361,13 +413,76 @@ function LabDesk() {
       return () => window.clearTimeout(timer);
     }
 
+    if (doctorUrgentDirectoryMode) {
+      let active = true;
+      const loadDoctorUrgentDirectory = async () => {
+        if (doctorUrgentRequestRef.current) return;
+        const controller = new AbortController();
+        doctorUrgentRequestRef.current = controller;
+        setLoading(true);
+        try {
+          const idToken = await user.getIdToken();
+          const response = await fetch(doctorUrgentDirectoryUrl(), {
+            headers: { Authorization: `Bearer ${idToken}` },
+            signal: controller.signal,
+          });
+          const result = await response.json().catch(() => ({})) as DoctorUrgentDirectoryPage;
+          if (!response.ok) {
+            throw new Error(result.error || "The secure urgent laboratory directory could not be loaded.");
+          }
+          if (active && doctorUrgentRequestRef.current === controller) {
+            setOrders(Array.isArray(result.labOrders) ? result.labOrders : []);
+            setDoctorUrgentNextCursor(typeof result.nextCursor === "string" ? result.nextCursor : "");
+            setDoctorUrgentHasMore(result.hasMore === true);
+            setDoctorUrgentLoadMoreError(result.hasMore === true && !result.nextCursor
+              ? "More urgent orders are available, but the next page could not be prepared. Refresh the Lab Desk and try again."
+              : "");
+            setVisibleOrderCount(INITIAL_VISIBLE_ORDERS);
+            setError("");
+            setDoctorUrgentLoadingMore(false);
+            setLoading(false);
+          }
+        } catch (directoryError) {
+          if (active && directoryError instanceof DOMException && directoryError.name === "AbortError") return;
+          if (active && doctorUrgentRequestRef.current === controller) {
+            setOrders([]);
+            setDoctorUrgentNextCursor("");
+            setDoctorUrgentHasMore(false);
+            setDoctorUrgentLoadMoreError("");
+            setError(directoryError instanceof Error
+              ? directoryError.message
+              : "The secure urgent laboratory directory could not be loaded.");
+            setLoading(false);
+          }
+        } finally {
+          if (doctorUrgentRequestRef.current === controller) {
+            doctorUrgentRequestRef.current = null;
+          }
+        }
+      };
+      void loadDoctorUrgentDirectory();
+      return () => {
+        active = false;
+        doctorUrgentRequestRef.current?.abort();
+        doctorUrgentRequestRef.current = null;
+      };
+    }
+
     if (profile.role === "reception" || profile.role === "doctor") {
       let active = true;
       const loadDirectory = async () => {
+        if (fullDirectoryRequestRef.current) return;
+        const controller = new AbortController();
+        fullDirectoryRequestRef.current = controller;
+        setLoading(true);
+        setDoctorUrgentNextCursor("");
+        setDoctorUrgentHasMore(false);
+        setDoctorUrgentLoadMoreError("");
         try {
           const idToken = await user.getIdToken();
           const response = await fetch("/api/staff/labs/directory", {
             headers: { Authorization: `Bearer ${idToken}` },
+            signal: controller.signal,
           });
           const result = await response.json().catch(() => ({})) as {
             labOrders?: LabOrder[];
@@ -378,15 +493,22 @@ function LabDesk() {
           }
           if (active) {
             setOrders(Array.isArray(result.labOrders) ? result.labOrders : []);
+            setVisibleOrderCount(INITIAL_VISIBLE_ORDERS);
+            setError("");
             setLoading(false);
           }
         } catch (directoryError) {
+          if (active && directoryError instanceof DOMException && directoryError.name === "AbortError") return;
           if (active) {
             setOrders([]);
             setError(directoryError instanceof Error
               ? directoryError.message
               : "The secure laboratory directory could not be loaded.");
             setLoading(false);
+          }
+        } finally {
+          if (fullDirectoryRequestRef.current === controller) {
+            fullDirectoryRequestRef.current = null;
           }
         }
       };
@@ -396,6 +518,8 @@ function LabDesk() {
       window.addEventListener("focus", refresh);
       return () => {
         active = false;
+        fullDirectoryRequestRef.current?.abort();
+        fullDirectoryRequestRef.current = null;
         window.clearInterval(interval);
         window.removeEventListener("focus", refresh);
       };
@@ -412,28 +536,93 @@ function LabDesk() {
       setLoading(false);
     });
     return stopOrders;
-  }, [db, directoryRefresh, profile.doctorName, profile.role, user]);
+  }, [db, directoryRefresh, doctorUrgentDirectoryMode, profile.doctorName, profile.role, urlFiltersHydrated, user]);
+
+  async function loadMoreDoctorUrgentOrders() {
+    if (
+      !doctorUrgentDirectoryMode
+      || !doctorUrgentHasMore
+      || doctorUrgentRequestRef.current
+      || patientSafetyVerifyingMore
+    ) return;
+    if (!doctorUrgentNextCursor) {
+      setDoctorUrgentLoadMoreError("More urgent orders are available, but the next page could not be prepared. Refresh the Lab Desk and try again.");
+      return;
+    }
+
+    const controller = new AbortController();
+    doctorUrgentRequestRef.current = controller;
+    setDoctorUrgentLoadingMore(true);
+    setDoctorUrgentLoadMoreError("");
+    try {
+      const idToken = await user.getIdToken();
+      const response = await fetch(doctorUrgentDirectoryUrl(doctorUrgentNextCursor), {
+        headers: { Authorization: `Bearer ${idToken}` },
+        signal: controller.signal,
+      });
+      const result = await response.json().catch(() => ({})) as DoctorUrgentDirectoryPage;
+      if (!response.ok) {
+        throw new Error(result.error || "More urgent laboratory orders could not be loaded.");
+      }
+      if (doctorUrgentRequestRef.current !== controller) return;
+      const nextOrders = Array.isArray(result.labOrders) ? result.labOrders : [];
+      if (result.hasMore === true && !result.nextCursor) {
+        throw new Error("More urgent orders are available, but the next page could not be prepared. Refresh the Lab Desk and try again.");
+      }
+      setOrders((current) => appendUniqueLabOrders(current, nextOrders));
+      setDoctorUrgentNextCursor(typeof result.nextCursor === "string" ? result.nextCursor : "");
+      setDoctorUrgentHasMore(result.hasMore === true);
+    } catch (loadMoreError) {
+      if (loadMoreError instanceof DOMException && loadMoreError.name === "AbortError") return;
+      if (doctorUrgentRequestRef.current === controller) {
+        setDoctorUrgentLoadMoreError(loadMoreError instanceof Error
+          ? loadMoreError.message
+          : "More urgent laboratory orders could not be loaded.");
+      }
+    } finally {
+      if (doctorUrgentRequestRef.current === controller) {
+        doctorUrgentRequestRef.current = null;
+        setDoctorUrgentLoadingMore(false);
+      }
+    }
+  }
 
   useEffect(() => {
     let active = true;
     const patientIds = [...new Set(orders.map((order) => order.patientId).filter(Boolean))];
 
     const verifyLinkedPatients = async () => {
-      setPatientSafetyLoading(true);
-      setPatientSafetyScope("");
-      setActiveOrderPatientIds(new Set());
-      if (patientIds.length === 0) {
-        if (active) {
-          setPatientSafetyScope(directoryScope);
-          setPatientSafetyLoading(false);
-        }
+      const scopeChanged = patientSafetyCacheScopeRef.current !== directoryScope;
+      if (scopeChanged) {
+        patientSafetyCacheScopeRef.current = directoryScope;
+        patientSafetyCheckedIdsRef.current = new Set();
+        patientSafetyActiveIdsRef.current = new Set();
+        setPatientSafetyLoading(true);
+        setPatientSafetyVerifyingMore(false);
+        setPatientSafetyScope("");
+        setActiveOrderPatientIds(new Set());
+      }
+
+      const unverifiedPatientIds = patientIds.filter(
+        (patientId) => !patientSafetyCheckedIdsRef.current.has(patientId),
+      );
+      if (unverifiedPatientIds.length === 0) {
+        if (!active) return;
+        setActiveOrderPatientIds(new Set(
+          patientIds.filter((patientId) => patientSafetyActiveIdsRef.current.has(patientId)),
+        ));
+        setPatientSafetyScope(directoryScope);
+        setPatientSafetyLoading(false);
+        setPatientSafetyVerifyingMore(false);
         return;
       }
+
+      if (!scopeChanged) setPatientSafetyVerifyingMore(true);
       try {
         const resolved = new Set<string>();
         const batches = Array.from(
-          { length: Math.ceil(patientIds.length / PATIENT_SAFETY_BATCH_SIZE) },
-          (_, index) => patientIds.slice(
+          { length: Math.ceil(unverifiedPatientIds.length / PATIENT_SAFETY_BATCH_SIZE) },
+          (_, index) => unverifiedPatientIds.slice(
             index * PATIENT_SAFETY_BATCH_SIZE,
             (index + 1) * PATIENT_SAFETY_BATCH_SIZE,
           ),
@@ -443,17 +632,32 @@ function LabDesk() {
         );
         results.forEach((result) => result.patients.forEach((patient) => resolved.add(patient.id)));
         if (!active) return;
-        setActiveOrderPatientIds(resolved);
+        unverifiedPatientIds.forEach((patientId) => patientSafetyCheckedIdsRef.current.add(patientId));
+        resolved.forEach((patientId) => patientSafetyActiveIdsRef.current.add(patientId));
+        setActiveOrderPatientIds(new Set(
+          patientIds.filter((patientId) => patientSafetyActiveIdsRef.current.has(patientId)),
+        ));
         setPatientSafetyScope(directoryScope);
       } catch (verificationError) {
         if (!active) return;
         setShowCreate(false);
         setResultOrder(null);
+        if (scopeChanged) {
+          patientSafetyCheckedIdsRef.current = new Set();
+          patientSafetyActiveIdsRef.current = new Set();
+          setActiveOrderPatientIds(new Set());
+          setPatientSafetyScope("");
+        }
         setError(verificationError instanceof Error
           ? verificationError.message
-          : "Linked patients could not be verified. Laboratory actions are paused.");
+          : scopeChanged
+            ? "Linked patients could not be verified. Laboratory actions are paused."
+            : "New laboratory orders could not be verified. Existing verified orders remain available.");
       } finally {
-        if (active) setPatientSafetyLoading(false);
+        if (active) {
+          setPatientSafetyLoading(false);
+          setPatientSafetyVerifyingMore(false);
+        }
       }
     };
 
@@ -521,6 +725,41 @@ function LabDesk() {
     if (!patientSafetyAvailable) return [];
     return orders.filter((order) => activeOrderPatientIds.has(order.patientId));
   }, [activeOrderPatientIds, orders, patientSafetyAvailable]);
+
+  useEffect(() => {
+    if (!handoffOrderId || loading || !patientSafetyAvailable) return;
+
+    const timer = window.setTimeout(() => {
+      const requestedOrder = accessibleOrders.find((order) => order.id === handoffOrderId);
+      setHandoffOrderId("");
+      if (!requestedOrder) {
+        setHighlightedOrderId("");
+        setError("This laboratory order changed or is no longer available to your account.");
+        return;
+      }
+
+      setError("");
+      setSearch("");
+      setStatusFilter("all");
+      setPriorityFilter(requestedOrder.priority);
+      setVisibleOrderCount(INITIAL_VISIBLE_ORDERS);
+      setHighlightedOrderId(requestedOrder.id);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [accessibleOrders, handoffOrderId, loading, patientSafetyAvailable]);
+
+  useEffect(() => {
+    if (!highlightedOrderId) return;
+    const frame = window.requestAnimationFrame(() => {
+      const target = document.getElementById(`lab-order-${highlightedOrderId}`);
+      target?.focus({ preventScroll: true });
+      target?.scrollIntoView({
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+        block: "center",
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [highlightedOrderId]);
 
   const selectedOrderPatient = useMemo(
     () => patients.find((patient) => patient.id === patientId) ?? null,
@@ -1135,10 +1374,12 @@ function LabDesk() {
       </section>
 
       <div className="mt-6 grid gap-4 sm:grid-cols-3">
-        <div className={cardClass}><p className="text-sm font-semibold text-slate-500">Active orders</p><p className="mt-2 text-3xl font-bold text-[#233A59]">{stats.active}</p></div>
-        <div className={cardClass}><p className="text-sm font-semibold text-slate-500">Urgent</p><p className="mt-2 text-3xl font-bold text-rose-600">{stats.urgent}</p></div>
-        <div className={cardClass}><p className="text-sm font-semibold text-slate-500">Completed</p><p className="mt-2 text-3xl font-bold text-emerald-600">{stats.completed}</p></div>
+        <div className={cardClass}><p className="text-sm font-semibold text-slate-500">Active orders{doctorUrgentDirectoryMode ? " loaded" : ""}</p><p className="mt-2 text-3xl font-bold text-[#233A59]">{stats.active}{doctorUrgentDirectoryMode && doctorUrgentHasMore ? "+" : ""}</p></div>
+        <div className={cardClass}><p className="text-sm font-semibold text-slate-500">Urgent{doctorUrgentDirectoryMode ? " loaded" : ""}</p><p className="mt-2 text-3xl font-bold text-rose-600">{stats.urgent}{doctorUrgentDirectoryMode && doctorUrgentHasMore ? "+" : ""}</p></div>
+        <div className={cardClass}><p className="text-sm font-semibold text-slate-500">{doctorUrgentDirectoryMode ? "Completed (choose status)" : "Completed"}</p><p className="mt-2 text-3xl font-bold text-emerald-600">{doctorUrgentDirectoryMode ? "—" : stats.completed}</p></div>
       </div>
+
+      {doctorUrgentDirectoryMode ? <p className="mt-4 rounded-2xl bg-rose-50 px-4 py-3 text-sm font-semibold leading-6 text-rose-900 ring-1 ring-rose-100">Showing your assigned active urgent orders. Use Load more until the complete list is loaded; choose a completed status below to review historical results.</p> : null}
 
       <div className={cardClass + " mt-6"}>
         <div className="flex flex-col gap-3 sm:flex-row">
@@ -1158,11 +1399,16 @@ function LabDesk() {
         </div>
       </div>
 
-      <div className="performance-list mt-5 space-y-4">
+      <div id="lab-order-list" className="performance-list mt-5 space-y-4">
         {loading && <div className={cardClass + " flex items-center gap-3 text-slate-600"}><LoaderCircle className="animate-spin" size={20} /> Loading lab orders…</div>}
         {!loading && filteredOrders.length === 0 && <div className={cardClass + " py-12 text-center"}><FlaskConical className="mx-auto text-slate-300" size={42} /><p className="mt-4 font-semibold text-slate-600">No laboratory orders found.</p></div>}
         {visibleOrders.map((order) => (
-          <article key={order.id} className={cardClass + " [content-visibility:auto] [contain-intrinsic-size:0_260px]"}>
+          <article
+            key={order.id}
+            id={`lab-order-${order.id}`}
+            tabIndex={-1}
+            className={`${cardClass} [content-visibility:auto] [contain-intrinsic-size:0_260px] outline-none transition ${highlightedOrderId === order.id ? "border-rose-300 ring-2 ring-rose-300 ring-offset-2" : "focus-visible:ring-2 focus-visible:ring-[#A8864A]"}`}
+          >
             <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -1194,6 +1440,22 @@ function LabDesk() {
           </article>
         ))}
         {visibleOrders.length < filteredOrders.length && <button type="button" onClick={() => setVisibleOrderCount((count) => count + INITIAL_VISIBLE_ORDERS)} className="mx-auto flex min-h-12 items-center justify-center rounded-2xl border border-slate-200 bg-white px-6 text-sm font-bold text-[#233A59] shadow-sm">Load 30 more · {filteredOrders.length - visibleOrders.length} remaining</button>}
+        {doctorUrgentDirectoryMode && patientSafetyAvailable && doctorUrgentHasMore && visibleOrders.length >= filteredOrders.length ? (
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3 sm:p-4">
+            {doctorUrgentLoadMoreError ? <p role="alert" className="mb-3 text-sm font-semibold leading-6 text-rose-800">{doctorUrgentLoadMoreError}</p> : null}
+            <button
+              type="button"
+              onClick={() => void loadMoreDoctorUrgentOrders()}
+              disabled={doctorUrgentLoadingMore || patientSafetyVerifyingMore}
+              aria-busy={doctorUrgentLoadingMore || patientSafetyVerifyingMore}
+              aria-controls="lab-order-list"
+              className="mx-auto inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-rose-700 px-5 text-sm font-bold text-white shadow-sm disabled:cursor-wait disabled:opacity-70 sm:w-auto"
+            >
+              {doctorUrgentLoadingMore ? <><LoaderCircle aria-hidden="true" className="animate-spin" size={17} />Loading more urgent orders…</> : patientSafetyVerifyingMore ? <><LoaderCircle aria-hidden="true" className="animate-spin" size={17} />Checking new orders…</> : doctorUrgentLoadMoreError ? "Retry loading more urgent orders" : "Load more urgent orders"}
+            </button>
+            <p aria-live="polite" role="status" className="sr-only">{doctorUrgentLoadingMore ? "Loading more urgent laboratory orders." : patientSafetyVerifyingMore ? "Checking newly loaded laboratory orders." : ""}</p>
+          </div>
+        ) : null}
       </div>
 
       {showCreate && (

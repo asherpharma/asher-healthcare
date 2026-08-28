@@ -5,11 +5,17 @@ Healthcare, Bengaluru.
 
 ## Current release
 
-The Staff Today and reliability release gives receptionists and doctors a live,
-role-scoped daily workspace for queues, assigned follow-ups, and urgent lab work.
-It also limits staff authentication to the current browser session, enforces the
-complete appointment queue sequence, restores tablet-friendly layouts, and
-hardens the secure laboratory directory after the paginated patient migration.
+The Staff Today and urgent-lab reliability release gives receptionists and
+doctors a live, role-scoped daily workspace for queues, assigned follow-ups, and
+urgent lab work. Doctors receive a small, fast Today snapshot plus a secure,
+cursor-paginated urgent Lab Desk that can reach every assigned active order
+without loading the clinic-wide directory. Refreshes keep the last successful
+snapshot visible, recovery is accessible on mobile, and a selected urgent order
+opens directly in its verified Lab Desk card.
+
+The release also limits staff authentication to the current browser session,
+enforces the complete appointment queue sequence, restores tablet-friendly
+layouts, and keeps clinical and patient-directory reads bounded and role-scoped.
 
 The clinical foundation continues to provide the unified patient timeline,
 child growth tracking, expanded vaccination records, and structured pregnancy

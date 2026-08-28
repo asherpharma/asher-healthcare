@@ -11,11 +11,13 @@ import {
   STAFF_TODAY_TASK_LIMIT,
   appointmentTodayCounts,
   clinicDateInIndia,
+  createStaffTodayLabRefreshCoordinator,
   dueStaffTasks,
   operationalAppointments,
   staffDoctorId,
   urgentDoctorLabs,
   type StaffTodayAppointment,
+  type StaffTodayLabRefreshCoordinator,
   type StaffTodayLabOrder,
   type StaffTodayTask,
 } from "@/lib/staff-today";
@@ -51,7 +53,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const IN_CONSULTATION = "in_consultation";
 
@@ -101,16 +103,20 @@ function SummaryCard({
   icon: Icon,
   tone,
   loading,
+  busy = false,
   unavailable = false,
   incomplete = false,
+  stale = false,
 }: {
   label: string;
   value: number;
   icon: LucideIcon;
   tone: string;
   loading: boolean;
+  busy?: boolean;
   unavailable?: boolean;
   incomplete?: boolean;
+  stale?: boolean;
 }) {
   const displayedValue = loading || unavailable
     ? "—"
@@ -119,12 +125,14 @@ function SummaryCard({
       : value;
   const displayedLabel = unavailable
     ? `${label} unavailable`
+    : stale
+      ? `${label} (needs refresh)`
     : incomplete
       ? `${label} (partial)`
       : label;
 
   return (
-    <article className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+    <article aria-busy={busy} className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
       <span className={`grid h-10 w-10 place-items-center rounded-xl ${tone}`}><Icon aria-hidden="true" size={19} /></span>
       <p className="mt-4 text-2xl font-black tracking-tight text-[#233A59]">{displayedValue}</p>
       <p className="mt-1 text-xs font-bold text-slate-600">{displayedLabel}</p>
@@ -144,15 +152,23 @@ function UnavailablePanel({
   message,
   href,
   action,
+  onRetry,
+  retrying = false,
 }: {
   message: string;
   href: string;
   action: string;
+  onRetry?: () => void;
+  retrying?: boolean;
 }) {
   return (
     <div role="alert" className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-950">
       <p className="flex items-start gap-2 text-sm font-semibold leading-6"><AlertCircle className="mt-0.5 shrink-0" size={17} />{message}</p>
-      <Link href={href} prefetch={false} className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-amber-900 px-4 text-sm font-bold text-white">{action}<ArrowRight size={15} /></Link>
+      {retrying ? <p role="status" aria-live="polite" className="sr-only">Refreshing urgent laboratory work.</p> : null}
+      <div className={`mt-3 grid gap-2 ${onRetry ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1"}`}>
+        {onRetry ? <button type="button" onClick={onRetry} disabled={retrying} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-white px-4 text-sm font-bold text-amber-950 ring-1 ring-amber-300 disabled:cursor-wait disabled:opacity-70">{retrying ? <><LoaderCircle aria-hidden="true" className="animate-spin" size={16} />Retrying…</> : "Retry"}</button> : null}
+        <Link href={href} prefetch={false} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-amber-900 px-4 text-sm font-bold text-white">{action}<ArrowRight size={15} /></Link>
+      </div>
     </div>
   );
 }
@@ -169,10 +185,13 @@ export default function StaffTodayWorkspace() {
   const [appointmentsLoading, setAppointmentsLoading] = useState(true);
   const [tasksLoading, setTasksLoading] = useState(true);
   const [labsLoading, setLabsLoading] = useState(role === "doctor");
+  const [labsHasSucceeded, setLabsHasSucceeded] = useState(false);
   const [labsTruncated, setLabsTruncated] = useState(false);
   const [appointmentsError, setAppointmentsError] = useState("");
   const [tasksError, setTasksError] = useState("");
   const [labsError, setLabsError] = useState("");
+  const labsHaveSuccessfulSnapshotRef = useRef(false);
+  const labRefreshCoordinatorRef = useRef<StaffTodayLabRefreshCoordinator | null>(null);
 
   useEffect(() => {
     if (!firestore) {
@@ -256,6 +275,8 @@ export default function StaffTodayWorkspace() {
       const timer = window.setTimeout(() => {
         setLabOrders([]);
         setLabsLoading(false);
+        labsHaveSuccessfulSnapshotRef.current = false;
+        setLabsHasSucceeded(false);
         setLabsTruncated(false);
         setLabsError("");
       }, 0);
@@ -263,19 +284,22 @@ export default function StaffTodayWorkspace() {
     }
     if (!profile.doctorName?.trim()) {
       const timer = window.setTimeout(() => {
+        setLabOrders([]);
         setLabsLoading(false);
+        labsHaveSuccessfulSnapshotRef.current = false;
+        setLabsHasSucceeded(false);
         setLabsTruncated(false);
         setLabsError("This login is not linked to a clinic doctor.");
       }, 0);
       return () => window.clearTimeout(timer);
     }
 
-    let active = true;
-    const loadLabs = async () => {
-      try {
+    const coordinator = createStaffTodayLabRefreshCoordinator({
+      async load(signal) {
         const idToken = await user.getIdToken();
-        const response = await fetch("/api/staff/labs/directory", {
+        const response = await fetch("/api/staff/labs/directory?view=today-urgent", {
           headers: { Authorization: `Bearer ${idToken}` },
+          signal,
         });
         const result = await response.json().catch(() => ({})) as {
           labOrders?: StaffTodayLabOrder[];
@@ -283,29 +307,42 @@ export default function StaffTodayWorkspace() {
           error?: string;
         };
         if (!response.ok) throw new Error(result.error || "The secure lab directory could not be loaded.");
-        if (!active) return;
+        return result;
+      },
+      onSuccess(result) {
         setLabOrders(Array.isArray(result.labOrders) ? result.labOrders : []);
         setLabsTruncated(result.truncated === true);
+        labsHaveSuccessfulSnapshotRef.current = true;
+        setLabsHasSucceeded(true);
         setLabsError("");
-      } catch (loadError) {
-        if (!active) return;
+      },
+      onError(loadError) {
         console.error("Staff Today lab urgency could not be loaded", loadError);
-        setLabOrders([]);
-        setLabsTruncated(false);
-        setLabsError("Urgent laboratory work could not be checked. Open the lab desk to retry.");
-      } finally {
-        if (active) setLabsLoading(false);
-      }
-    };
+        setLabsError(labsHaveSuccessfulSnapshotRef.current
+          ? "Urgent laboratory work could not be refreshed. Showing the last successful check; retry when ready."
+          : "Urgent laboratory work could not be checked. Retry here or open the lab desk.");
+      },
+      onLoadingChange(loading) {
+        setLabsLoading(loading);
+      },
+    });
+    labRefreshCoordinatorRef.current = coordinator;
 
-    void loadLabs();
-    const refresh = () => void loadLabs();
+    void coordinator.refresh();
+    const refresh = () => void coordinator.refresh();
     window.addEventListener("focus", refresh);
     return () => {
-      active = false;
       window.removeEventListener("focus", refresh);
+      if (labRefreshCoordinatorRef.current === coordinator) {
+        labRefreshCoordinatorRef.current = null;
+      }
+      coordinator.dispose();
     };
   }, [profile.doctorName, role, user]);
+
+  function retryLabs() {
+    void labRefreshCoordinatorRef.current?.refresh({ force: true });
+  }
 
   const queue = useMemo(
     () => operationalAppointments(appointments, role),
@@ -317,6 +354,9 @@ export default function StaffTodayWorkspace() {
     () => urgentDoctorLabs(labOrders, profile.doctorName || ""),
     [labOrders, profile.doctorName],
   );
+  const initialLabsLoading = labsLoading && !labsHasSucceeded && !labsError;
+  const labsUnavailable = Boolean(labsError && !labsHasSucceeded);
+  const labsStale = Boolean(labsError && labsHasSucceeded);
   const firstName = profile.displayName.trim().split(/\s+/u)[0] || "team";
   const appointmentHref = role === "reception" && counts.requested > 0
     ? "/admin/appointments?date=today&status=requested"
@@ -346,6 +386,15 @@ export default function StaffTodayWorkspace() {
     router.push("/admin/consultations");
   }
 
+  function openUrgentLabOrder(order: StaffTodayLabOrder) {
+    stageAdminNavigationHandoff({
+      destination: "/admin/lab",
+      intent: "open-lab-order",
+      orderId: order.id,
+    });
+    router.push("/admin/lab?priority=urgent");
+  }
+
   return (
     <div className="mx-auto max-w-6xl space-y-5">
       <section className="relative overflow-hidden rounded-[30px] bg-gradient-to-br from-[#102b43] via-[#233A59] to-[#315e7f] p-5 text-white shadow-xl sm:p-8">
@@ -370,9 +419,11 @@ export default function StaffTodayWorkspace() {
             <SummaryCard
               key={item.label}
               {...item}
-              loading={labSummary ? labsLoading : appointmentsLoading}
-              unavailable={Boolean(labSummary ? labsError : appointmentsError)}
+              loading={labSummary ? initialLabsLoading : appointmentsLoading}
+              busy={labSummary ? labsLoading : appointmentsLoading}
+              unavailable={labSummary ? labsUnavailable : Boolean(appointmentsError)}
               incomplete={labSummary && labsTruncated}
+              stale={labSummary && labsStale}
             />
           );
         })}
@@ -432,17 +483,19 @@ export default function StaffTodayWorkspace() {
           </section>
 
           {role === "doctor" ? (
-            <section className="rounded-[28px] bg-[#fff4f3] p-5 shadow-sm ring-1 ring-rose-200" aria-labelledby="urgent-labs-title">
+            <section className="rounded-[28px] bg-[#fff4f3] p-5 shadow-sm ring-1 ring-rose-200" aria-labelledby="urgent-labs-title" aria-busy={labsLoading}>
               <div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-rose-700">Clinical attention</p><h2 id="urgent-labs-title" className="mt-1 text-xl font-bold text-[#233A59]">Urgent laboratory work</h2></div><FlaskConical className="text-rose-700" size={24} /></div>
-              {labsLoading ? <p className="mt-4 flex items-center gap-2 text-sm font-semibold text-slate-600"><LoaderCircle className="animate-spin" size={17} />Checking secure lab desk…</p> : labsError ? <div className="mt-4"><UnavailablePanel message={labsError} href="/admin/lab" action="Open lab desk" /></div> : (
+              {initialLabsLoading ? <p role="status" aria-live="polite" className="mt-4 flex items-center gap-2 text-sm font-semibold text-slate-600"><LoaderCircle aria-hidden="true" className="animate-spin" size={17} />Checking secure lab desk…</p> : labsError && !labsHasSucceeded ? <div className="mt-4"><UnavailablePanel message={labsError} href="/admin/lab?priority=urgent" action="Open urgent lab desk" onRetry={retryLabs} retrying={labsLoading} /></div> : (
                 <div className="mt-4 space-y-3">
-                  {labsTruncated ? <p role="status" className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold leading-6 text-amber-950"><AlertCircle className="mt-0.5 shrink-0" size={17} />This is a partial lab snapshot. More than 300 recent orders exist, so older urgent work may not appear here. Open the lab desk and do not treat this summary as all clear.</p> : null}
+                  {labsLoading ? <p role="status" aria-live="polite" className="flex items-center gap-2 rounded-2xl bg-white/70 p-3 text-sm font-semibold text-slate-600 ring-1 ring-rose-100"><LoaderCircle aria-hidden="true" className="animate-spin" size={17} />Refreshing urgent lab work…</p> : null}
+                  {labsError ? <UnavailablePanel message={labsError} href="/admin/lab?priority=urgent" action="Open urgent lab desk" onRetry={retryLabs} retrying={labsLoading} /> : null}
+                  {labsTruncated ? <p role="status" className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold leading-6 text-amber-950"><AlertCircle className="mt-0.5 shrink-0" size={17} />This is a partial lab snapshot. The first 20 assigned urgent orders are shown; open the lab desk for the complete list.</p> : null}
                   {urgentLabs.length === 0 ? (
-                    labsTruncated ? null : <p className="rounded-2xl bg-white/70 p-4 text-sm font-semibold text-emerald-800 ring-1 ring-rose-100">No active urgent lab order is assigned to you.</p>
-                  ) : <div className="space-y-2">{urgentLabs.slice(0, 3).map((order) => <Link key={order.id} href="/admin/lab" prefetch={false} className="block rounded-2xl bg-white p-3 ring-1 ring-rose-200"><div className="flex items-center justify-between gap-2"><p className="truncate text-sm font-bold text-[#233A59]">{order.patientName || "Patient"}</p><span className="shrink-0 rounded-full bg-rose-100 px-2 py-1 text-[10px] font-black uppercase text-rose-800">{order.status}</span></div><p className="mt-1 truncate text-xs text-slate-500">{order.orderNumber} · {order.tests?.length || 0} test{order.tests?.length === 1 ? "" : "s"}</p></Link>)}</div>}
+                    labsTruncated || labsError ? null : <p className="rounded-2xl bg-white/70 p-4 text-sm font-semibold text-emerald-800 ring-1 ring-rose-100">{labsLoading ? "No active urgent lab order in the last successful check." : "No active urgent lab order is assigned to you."}</p>
+                  ) : <div className="space-y-2">{urgentLabs.slice(0, 3).map((order) => <button key={order.id} type="button" onClick={() => openUrgentLabOrder(order)} className="block min-h-11 w-full rounded-2xl bg-white p-3 text-left ring-1 ring-rose-200 transition hover:bg-rose-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"><div className="flex items-center justify-between gap-2"><p className="truncate text-sm font-bold text-[#233A59]">{order.patientName || "Patient"}</p><span className="shrink-0 rounded-full bg-rose-100 px-2 py-1 text-[10px] font-black uppercase text-rose-800">{order.status}</span></div><p className="mt-1 truncate text-xs text-slate-500">{order.orderNumber} · {order.tests?.length || 0} test{order.tests?.length === 1 ? "" : "s"}</p></button>)}</div>}
                 </div>
               )}
-              <Link href="/admin/lab" prefetch={false} className="mt-4 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-rose-700 px-4 text-sm font-bold text-white">Open lab desk <ArrowRight size={15} /></Link>
+              <Link href="/admin/lab?priority=urgent" prefetch={false} className="mt-4 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-rose-700 px-4 text-sm font-bold text-white">Open urgent lab desk <ArrowRight size={15} /></Link>
             </section>
           ) : (
             <section className="rounded-[28px] bg-[#233A59] p-5 text-white shadow-lg">

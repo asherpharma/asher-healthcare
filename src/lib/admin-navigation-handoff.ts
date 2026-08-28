@@ -33,6 +33,11 @@ export type AdminNavigationHandoff =
       destination: "/admin/lab";
       intent: "create-lab-order";
       patientId: string;
+    }
+  | {
+      destination: "/admin/lab";
+      intent: "open-lab-order";
+      orderId: string;
     };
 
 type HandoffEnvelope = {
@@ -53,6 +58,7 @@ function validIdentifier(value: unknown): value is string {
 function validHandoff(payload: AdminNavigationHandoff) {
   if ("patientId" in payload && !validIdentifier(payload.patientId)) return false;
   if ("appointmentId" in payload && !validIdentifier(payload.appointmentId)) return false;
+  if ("orderId" in payload && !validIdentifier(payload.orderId)) return false;
 
   switch (payload.intent) {
     case "open-patient":
@@ -65,6 +71,8 @@ function validHandoff(payload: AdminNavigationHandoff) {
     case "create-invoice":
       return payload.destination === "/admin/billing";
     case "create-lab-order":
+      return payload.destination === "/admin/lab";
+    case "open-lab-order":
       return payload.destination === "/admin/lab";
     default:
       return false;
