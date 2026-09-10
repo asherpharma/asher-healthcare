@@ -13,6 +13,7 @@ export type CareJourney = {
   href: string;
   doctor: string;
   doctorRole: string;
+  appointmentHours: string;
   reasons: readonly string[];
   preparation: readonly string[];
 };
@@ -31,6 +32,7 @@ export const careJourneys: readonly CareJourney[] = [
     href: "/care/pediatrics",
     doctor: "Dr. Lt Col Shafi Ahamad",
     doctorRole: "Consultant Pediatrician",
+    appointmentHours: "Mon–Sat · 5:00 PM–8:00 PM",
     reasons: [
       "Newborn and routine child check-ups",
       "Fever and common childhood illnesses",
@@ -57,6 +59,7 @@ export const careJourneys: readonly CareJourney[] = [
     href: "/care/womens-health",
     doctor: "Dr. Shaik Reshma",
     doctorRole: "Consultant Obstetrician & Gynaecologist",
+    appointmentHours: "Mon–Sat · 7:00 PM–9:00 PM",
     reasons: [
       "Pregnancy, antenatal and postnatal care",
       "Periods, PCOS and hormonal concerns",

@@ -35,7 +35,7 @@ export default function CareDetailPage({ journey }: { journey: CareJourney }) {
                 <a className="button button-ghost" href="tel:+919019263709"><Phone /> Call clinic</a>
               </div>
               <div className="care-detail-facts">
-                <span><Clock3 /> Mon–Sat · 5:00–8:00 PM</span>
+                <span><Clock3 /> {journey.appointmentHours}</span>
                 <span><Stethoscope /> {journey.doctorRole}</span>
               </div>
             </div>

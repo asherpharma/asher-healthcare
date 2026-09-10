@@ -42,8 +42,8 @@ export const DEFAULT_APPOINTMENT_SCHEDULE: AppointmentSchedule = {
     },
     obg: {
       enabled: true,
-      startTime: "17:00",
-      endTime: "20:00",
+      startTime: "19:00",
+      endTime: "21:00",
       slotMinutes: 15,
     },
   },

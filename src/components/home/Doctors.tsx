@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { Baby, CalendarDays, HeartPulse, Stethoscope } from "lucide-react";
+import { Baby, CalendarDays, Clock3, HeartPulse, Stethoscope } from "lucide-react";
 
 const doctors = [
   {
@@ -7,6 +7,7 @@ const doctors = [
     qualifications: "MBBS, MD (Pediatrics)",
     role: "Consultant Pediatrician",
     focus: "Pediatric Allergy & Asthma Specialist",
+    hours: "Mon–Sat · 5:00 PM–8:00 PM",
     image: "/images/dr-shafi-ahamad.jpg",
     imagePosition: "center 24%",
     icon: Baby,
@@ -17,6 +18,7 @@ const doctors = [
     qualifications: "MBBS, MS (OBG)",
     role: "Consultant Obstetrician & Gynaecologist",
     focus: "Laparoscopic Surgeon & Infertility Specialist",
+    hours: "Mon–Sat · 7:00 PM–9:00 PM",
     image: "/images/dr-shaik-reshma.jpg",
     imagePosition: "center 20%",
     icon: HeartPulse,
@@ -57,6 +59,7 @@ export default function Doctors() {
                   <h3>{doctor.name}</h3>
                   <p className="doctor-qualifications">{doctor.qualifications}</p>
                   <p className="doctor-focus">{doctor.focus}</p>
+                  <p className="doctor-hours"><Clock3 /> {doctor.hours}</p>
                   <div className="doctor-actions"><a href="#appointment"><CalendarDays /> Book consultation</a><a href="tel:+919019263709"><Stethoscope /> Call clinic</a></div>
                 </div>
               </article>

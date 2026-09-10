@@ -100,18 +100,24 @@ export default function AppointmentCTA() {
 
   useEffect(() => {
     formStartedAt.current = Date.now();
-    setClinicClock(currentClinicClock());
+    const initialTimer = window.setTimeout(() => setClinicClock(currentClinicClock()), 0);
     const timer = window.setInterval(() => setClinicClock(currentClinicClock()), 30_000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(timer);
+    };
   }, []);
 
   useEffect(() => {
     if (!clinicClock.date) return;
-    setDate((current) => (
-      current && current >= clinicClock.date && dateIsEnabled(schedule, current)
-        ? current
-        : nextEnabledDate(schedule, clinicClock.date)
-    ));
+    const timer = window.setTimeout(() => {
+      setDate((current) => (
+        current && current >= clinicClock.date && dateIsEnabled(schedule, current)
+          ? current
+          : nextEnabledDate(schedule, clinicClock.date)
+      ));
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [clinicClock.date, schedule]);
 
   useEffect(() => {
@@ -254,7 +260,7 @@ export default function AppointmentCTA() {
           </p>
           <div className="booking-points">
             <span><MessageCircle /> Quick confirmation on WhatsApp</span>
-            <span><Clock3 /> Default hours: 5:00 PM–8:00 PM</span>
+            <span><Clock3 /> Dr. Shafi 5–8 PM · Dr. Reshma 7–9 PM</span>
             <span><ShieldCheck /> Live timings set by the clinic</span>
           </div>
           <a className="phone-card" href="tel:+919019263709">

@@ -19,7 +19,7 @@ export default function Hero() {
             <a className="button button-ghost" href="tel:+919019263709"><Phone size={19} /> Call the clinic</a>
           </div>
           <div className="hero-proof">
-            <span><CheckCircle2 /> Specialist slots Mon–Sat, 5–8 PM</span>
+            <span><CheckCircle2 /> Dr. Shafi 5–8 PM · Dr. Reshma 7–9 PM</span>
             <span><CheckCircle2 /> Live 15-minute booking</span>
             <span><CheckCircle2 /> Secure family portal</span>
           </div>

@@ -3,7 +3,7 @@ export const DEFAULT_SCHEDULE = {
   enabledDays: [1, 2, 3, 4, 5, 6],
   doctors: {
     pediatrics: { enabled: true, startTime: "17:00", endTime: "20:00", slotMinutes: 15 },
-    obg: { enabled: true, startTime: "17:00", endTime: "20:00", slotMinutes: 15 },
+    obg: { enabled: true, startTime: "19:00", endTime: "21:00", slotMinutes: 15 },
   },
 };
 

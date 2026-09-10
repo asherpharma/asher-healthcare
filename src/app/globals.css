@@ -189,6 +189,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .doctor-details h3 { margin: 18px 0 7px; color: var(--navy); font-family: var(--font-display); font-size: 1.7rem; line-height: 1.15; }
 .doctor-qualifications { margin: 0; color: #415b6b; font-weight: 700; font-size: .88rem; }
 .doctor-focus { min-height: 50px; margin: 14px 0 28px; color: var(--muted); font-size: .88rem; line-height: 1.55; }
+.doctor-hours { display: flex; align-items: center; gap: 7px; margin: -14px 0 22px; color: #4b6472; font-size: .8rem; font-weight: 800; }
+.doctor-hours svg { width: 16px; color: var(--teal); }
 .doctor-actions { display: flex; flex-wrap: wrap; gap: 14px; }
 .doctor-actions a { display: inline-flex; align-items: center; gap: 7px; color: var(--navy); font-size: .76rem; font-weight: 800; }
 .doctor-actions svg { width: 16px; color: var(--teal); }

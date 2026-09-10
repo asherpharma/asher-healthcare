@@ -64,14 +64,19 @@ test("care detail pages and sitemap remain discoverable", async () => {
 test("public specialist hours are consistent with the default booking schedule", async () => {
   const hero = await readFile(path.join(root, "src/components/home/Hero.tsx"), "utf8");
   const contact = await readFile(path.join(root, "src/components/home/Contact.tsx"), "utf8");
-  const appointments = await readFile(path.join(root, "src/lib/appointments.ts"), "utf8");
+  const faq = await readFile(path.join(root, "src/components/home/FrequentlyAskedQuestions.tsx"), "utf8");
+  const booking = await readFile(path.join(root, "src/components/home/AppointmentCTA.tsx"), "utf8");
+  const doctors = await readFile(path.join(root, "src/components/home/Doctors.tsx"), "utf8");
+  const care = await readFile(path.join(root, "src/lib/public-clinic-content.ts"), "utf8");
+  const publicCopy = `${hero}\n${contact}\n${faq}\n${booking}\n${doctors}\n${care}`;
 
-  assert.match(hero, /Mon–Sat, 5–8 PM/u);
+  assert.match(hero, /Dr\. Shafi 5–8 PM · Dr\. Reshma 7–9 PM/u);
   assert.match(contact, /Monday–Saturday/u);
-  assert.match(contact, /5:00 PM–8:00 PM/u);
-  assert.match(appointments, /startTime: "17:00"/u);
-  assert.match(appointments, /endTime: "20:00"/u);
-  assert.doesNotMatch(`${hero}\n${contact}`, /Open every day|Open daily/u);
+  assert.match(publicCopy, /Dr\. Shafi(?: from|:) 5:00 PM(?:–| to )8:00 PM/u);
+  assert.match(publicCopy, /Dr\. Reshma(?: from|:) 7:00 PM(?:–| to )9:00 PM/u);
+  assert.doesNotMatch(publicCopy, /Specialist slots Mon–Sat, 5–8 PM/u);
+  assert.doesNotMatch(publicCopy, /specialist appointments are normally available[^.]*5:00 PM to 8:00 PM/u);
+  assert.doesNotMatch(publicCopy, /Open every day|Open daily/u);
 });
 
 test("appointment booking keeps its initial server and client markup time-neutral", async () => {
@@ -85,7 +90,10 @@ test("appointment booking keeps its initial server and client markup time-neutra
     appointment,
     /const \[clinicClock, setClinicClock\] = useState\(\{ date: "", time: "" \}\);/u,
   );
-  assert.match(appointment, /setClinicClock\(currentClinicClock\(\)\);/u);
+  assert.match(
+    appointment,
+    /setTimeout\(\(\) => setClinicClock\(currentClinicClock\(\)\), 0\)/u,
+  );
   assert.match(
     appointment,
     /nextEnabledDate\(schedule, clinicClock\.date\)/u,
