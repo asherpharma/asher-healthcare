@@ -1,8 +1,11 @@
 import Image from "next/image";
 import { Baby, CalendarDays, Clock3, HeartPulse, Stethoscope } from "lucide-react";
+import PublicBookingLink from "@/components/home/PublicBookingLink";
+import type { DoctorId } from "@/lib/appointments";
 
 const doctors = [
   {
+    id: "pediatrics" as DoctorId,
     name: "Dr. Lt Col Shafi Ahamad",
     qualifications: "MBBS, MD (Pediatrics)",
     role: "Consultant Pediatrician",
@@ -14,6 +17,7 @@ const doctors = [
     accent: "doctor-blue",
   },
   {
+    id: "obg" as DoctorId,
     name: "Dr. Shaik Reshma",
     qualifications: "MBBS, MS (OBG)",
     role: "Consultant Obstetrician & Gynaecologist",
@@ -60,7 +64,7 @@ export default function Doctors() {
                   <p className="doctor-qualifications">{doctor.qualifications}</p>
                   <p className="doctor-focus">{doctor.focus}</p>
                   <p className="doctor-hours"><Clock3 /> {doctor.hours}</p>
-                  <div className="doctor-actions"><a href="#appointment"><CalendarDays /> Book consultation</a><a href="tel:+919019263709"><Stethoscope /> Call clinic</a></div>
+                  <div className="doctor-actions"><PublicBookingLink doctorId={doctor.id}><CalendarDays /> Book consultation</PublicBookingLink><a href="tel:+919019263709"><Stethoscope /> Call clinic</a></div>
                 </div>
               </article>
             );

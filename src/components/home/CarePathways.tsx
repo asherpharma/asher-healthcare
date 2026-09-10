@@ -14,6 +14,7 @@ import Link from "next/link";
 import { useState } from "react";
 
 import type { DoctorId } from "@/lib/appointments";
+import { publicBookingHref } from "@/lib/public-booking";
 import {
   CARE_SELECTION_EVENT,
   careJourneyById,
@@ -31,6 +32,7 @@ function scrollToBooking() {
     behavior: reduceMotion ? "auto" : "smooth",
     block: "start",
   });
+  document.querySelector<HTMLFormElement>("#appointment form")?.focus({ preventScroll: true });
 }
 
 export default function CarePathways() {
@@ -40,10 +42,7 @@ export default function CarePathways() {
 
   function chooseAndBook(doctorId: DoctorId) {
     setSelectedId(doctorId);
-    const url = new URL(window.location.href);
-    url.searchParams.set("care", doctorId);
-    url.hash = "appointment";
-    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+    window.history.replaceState(null, "", publicBookingHref(doctorId));
     window.dispatchEvent(
       new CustomEvent(CARE_SELECTION_EVENT, { detail: { doctorId } }),
     );

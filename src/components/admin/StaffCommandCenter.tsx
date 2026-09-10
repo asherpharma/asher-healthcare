@@ -73,6 +73,10 @@ function handoffForPatientAction(
       return { destination: "/admin/billing", intent: "create-invoice", patientId };
     case "lab":
       return { destination: "/admin/lab", intent: "create-lab-order", patientId };
+    case "follow-up":
+      return { destination: "/admin/tasks", intent: "create-patient-follow-up", patientId };
+    case "remind":
+      return { destination: "/admin/communications", intent: "open-patient-reminder", patientId };
     case "open":
     default:
       return { destination: "/admin/patients", intent: "open-patient", patientId };

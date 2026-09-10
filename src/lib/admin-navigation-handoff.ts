@@ -15,6 +15,11 @@ export type AdminNavigationHandoff =
       patientId: string;
     }
   | {
+      destination: "/admin/appointments";
+      intent: "open-appointment";
+      appointmentId: string;
+    }
+  | {
       destination: "/admin/consultations";
       intent: "open-patient-consultation";
       patientId: string;
@@ -38,6 +43,16 @@ export type AdminNavigationHandoff =
       destination: "/admin/lab";
       intent: "open-lab-order";
       orderId: string;
+    }
+  | {
+      destination: "/admin/tasks";
+      intent: "create-patient-follow-up";
+      patientId: string;
+    }
+  | {
+      destination: "/admin/communications";
+      intent: "open-patient-reminder";
+      patientId: string;
     };
 
 type HandoffEnvelope = {
@@ -65,6 +80,8 @@ function validHandoff(payload: AdminNavigationHandoff) {
       return payload.destination === "/admin/patients";
     case "create-appointment":
       return payload.destination === "/admin/appointments";
+    case "open-appointment":
+      return payload.destination === "/admin/appointments";
     case "open-patient-consultation":
     case "open-appointment-consultation":
       return payload.destination === "/admin/consultations";
@@ -74,6 +91,10 @@ function validHandoff(payload: AdminNavigationHandoff) {
       return payload.destination === "/admin/lab";
     case "open-lab-order":
       return payload.destination === "/admin/lab";
+    case "create-patient-follow-up":
+      return payload.destination === "/admin/tasks";
+    case "open-patient-reminder":
+      return payload.destination === "/admin/communications";
     default:
       return false;
   }

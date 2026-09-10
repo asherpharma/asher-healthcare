@@ -3,6 +3,13 @@ import { readFile, stat } from "node:fs/promises";
 import { test } from "node:test";
 import path from "node:path";
 
+import {
+  nextPublicBookingDate,
+  PUBLIC_BOOKING_WHATSAPP_URL,
+  publicBookingDoctor,
+  publicBookingHref,
+} from "../src/lib/public-booking.ts";
+
 const root = process.cwd();
 
 const publicImages = [
@@ -101,4 +108,60 @@ test("appointment booking keeps its initial server and client markup time-neutra
   assert.doesNotMatch(appointment, /useState\(currentClinicClock\)/u);
   assert.doesNotMatch(appointment, /useState\(\(\) => nextEnabledDate\(schedule\)\)/u);
   assert.doesNotMatch(appointment, /min=\{clinicDate\(\)\}/u);
+});
+
+test("specialty booking links preserve the intended doctor", () => {
+  assert.equal(publicBookingHref("pediatrics"), "/?care=pediatrics#appointment");
+  assert.equal(publicBookingHref("obg"), "/?care=obg#appointment");
+  assert.equal(publicBookingHref(), "/#appointment");
+  assert.equal(publicBookingDoctor("pediatrics"), "pediatrics");
+  assert.equal(publicBookingDoctor("obg"), "obg");
+  assert.equal(publicBookingDoctor("unknown"), null);
+  assert.equal(publicBookingDoctor(null), null);
+});
+
+test("next clinic day search skips closed days and stays bounded", () => {
+  const mondayToSaturday = { enabledDays: [1, 2, 3, 4, 5, 6] };
+  assert.equal(nextPublicBookingDate(mondayToSaturday, "2026-09-11"), "2026-09-12");
+  assert.equal(nextPublicBookingDate(mondayToSaturday, "2026-09-12"), "2026-09-14");
+  assert.equal(nextPublicBookingDate({ enabledDays: [0] }, "2026-09-14", 3), "");
+  assert.equal(nextPublicBookingDate({ enabledDays: [] }, "2026-09-14", 99), "");
+  assert.equal(nextPublicBookingDate(mondayToSaturday, "not-a-date"), "");
+  assert.equal(nextPublicBookingDate(mondayToSaturday, "2026-02-31"), "");
+  assert.equal(nextPublicBookingDate({ enabledDays: [0] }, "2026-09-14", Number.NaN), "2026-09-20");
+});
+
+test("doctor and service calls to action share the private booking handoff", async () => {
+  const doctors = await readFile(path.join(root, "src/components/home/Doctors.tsx"), "utf8");
+  const services = await readFile(path.join(root, "src/components/home/Services.tsx"), "utf8");
+  const care = await readFile(path.join(root, "src/components/home/CarePathways.tsx"), "utf8");
+  const detail = await readFile(path.join(root, "src/components/care/CareDetailPage.tsx"), "utf8");
+  const bookingLink = await readFile(path.join(root, "src/components/home/PublicBookingLink.tsx"), "utf8");
+
+  assert.match(doctors, /<PublicBookingLink doctorId=\{doctor\.id\}>/u);
+  assert.match(services, /<PublicBookingLink doctorId=\{service\.doctorId\}>/u);
+  assert.match(services, /doctorId: "pediatrics"[\s\S]*?title: "Pediatric Care"/u);
+  assert.match(services, /doctorId: "obg"[\s\S]*?title: "Pregnancy Care"/u);
+  assert.match(care, /publicBookingHref\(doctorId\)/u);
+  assert.match(detail, /publicBookingHref\(journey\.id\)/u);
+  assert.match(bookingLink, /new CustomEvent\(CARE_SELECTION_EVENT/u);
+  assert.match(bookingLink, /prefers-reduced-motion: reduce/u);
+});
+
+test("public booking uses tappable slots and keeps confirmation on the website", async () => {
+  const booking = await readFile(path.join(root, "src/components/home/AppointmentCTA.tsx"), "utf8");
+  const motion = await readFile(path.join(root, "src/components/home/PremiumMotion.tsx"), "utf8");
+  const whatsappMessage = decodeURIComponent(new URL(PUBLIC_BOOKING_WHATSAPP_URL).searchParams.get("text") || "");
+
+  assert.match(booking, /className="booking-slot-grid"/u);
+  assert.match(booking, /type="radio"\s+name="time"/u);
+  assert.doesNotMatch(booking, /<select[\s\S]{0,200}name="time"/u);
+  assert.match(booking, /nextPublicBookingDate\(schedule, date\)/u);
+  assert.match(booking, /if \(submittingRef\.current\) return;/u);
+  assert.match(booking, /submittingRef\.current = true;/u);
+  assert.match(booking, /role=\{result\.tone === "success" \? "status" : "alert"\}/u);
+  assert.match(booking, /WhatsApp clinic \(optional\)/u);
+  assert.doesNotMatch(booking, /window\.open\(whatsappUrl|window\.location\.href = whatsappUrl/u);
+  assert.doesNotMatch(whatsappMessage, /patient|phone|symptom|reason|doctor|date|time/iu);
+  assert.doesNotMatch(motion, /\.appointment-copy > \*|\.booking-card/u);
 });

@@ -361,7 +361,7 @@ export function recentStaffToolsForRole(
   return tools;
 }
 
-export type PatientLauncherActionId = "open" | "book" | "consult" | "bill" | "lab";
+export type PatientLauncherActionId = "open" | "book" | "consult" | "bill" | "lab" | "follow-up" | "remind";
 
 export type PatientLauncherAction = Readonly<{
   id: PatientLauncherActionId;
@@ -375,7 +375,9 @@ export type PatientLauncherAction = Readonly<{
     | "create-appointment"
     | "open-patient-consultation"
     | "create-invoice"
-    | "create-lab-order";
+    | "create-lab-order"
+    | "create-patient-follow-up"
+    | "open-patient-reminder";
 }>;
 
 const PATIENT_LAUNCHER_ACTIONS: readonly PatientLauncherAction[] = [
@@ -423,6 +425,24 @@ const PATIENT_LAUNCHER_ACTIONS: readonly PatientLauncherAction[] = [
     icon: "lab",
     roles: ALL_ROLES,
     intent: "create-lab-order",
+  },
+  {
+    id: "follow-up",
+    href: "/admin/tasks",
+    label: "Follow-up",
+    detail: "Create a linked follow-up task",
+    icon: "tasks",
+    roles: ALL_ROLES,
+    intent: "create-patient-follow-up",
+  },
+  {
+    id: "remind",
+    href: "/admin/communications",
+    label: "Remind",
+    detail: "Open this patient in reminders",
+    icon: "communications",
+    roles: ADMIN_AND_RECEPTION,
+    intent: "open-patient-reminder",
   },
 ] as const;
 

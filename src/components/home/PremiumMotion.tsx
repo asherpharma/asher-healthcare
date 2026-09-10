@@ -18,8 +18,6 @@ const REVEAL_SELECTOR = [
   ".public-journey-intro > *",
   ".public-journey-steps li",
   ".gallery-grid > *",
-  ".appointment-copy > *",
-  ".booking-card",
   ".faq-layout > *",
   ".contact-grid > *",
 ].join(",");

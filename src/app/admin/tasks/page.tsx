@@ -1,7 +1,12 @@
 "use client";
 
 import { useStaff } from "@/components/admin/StaffGuard";
-import { firestore } from "@/firebase/config";
+import { firebaseAuth, firestore } from "@/firebase/config";
+import {
+  ADMIN_NAVIGATION_HANDOFF_EVENT,
+  consumeAdminNavigationHandoff,
+} from "@/lib/admin-navigation-handoff";
+import { resolvePatientDirectoryEntries } from "@/lib/patient-directory";
 import {
   addDoc,
   collection,
@@ -29,7 +34,7 @@ import {
   UserRound,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 type TaskType = "follow_up" | "vaccination" | "lab" | "payment" | "callback" | "general";
 type TaskPriority = "low" | "medium" | "high" | "urgent";
@@ -118,9 +123,13 @@ function TasksContent() {
   const [dueTime, setDueTime] = useState("18:00");
   const [patientName, setPatientName] = useState("");
   const [patientId, setPatientId] = useState("");
+  const [linkedPatient, setLinkedPatient] = useState<{ id: string; fullName: string; patientNumber?: string } | null>(null);
+  const [handoffLoading, setHandoffLoading] = useState(false);
+  const handoffRequestRef = useRef(0);
   const [assignedTo, setAssignedTo] = useState(profile.uid);
 
   useEffect(() => {
+    let active = true;
     const params = new URLSearchParams(window.location.search);
     const requestedStatus = params.get("status");
     const requestedDate = params.get("date");
@@ -132,8 +141,60 @@ function TasksContent() {
         setDateFilter(requestedDate as "all" | "today" | "overdue" | "upcoming");
       }
     }, 0);
-    return () => window.clearTimeout(timer);
-  }, []);
+
+    const consumePatientHandoff = () => {
+      const handoff = consumeAdminNavigationHandoff("/admin/tasks");
+      if (!handoff || handoff.intent !== "create-patient-follow-up") return;
+      const requestId = handoffRequestRef.current + 1;
+      handoffRequestRef.current = requestId;
+      const requestIsCurrent = () => active && handoffRequestRef.current === requestId;
+
+      setFormOpen(true);
+      setHandoffLoading(true);
+      setError("");
+      setSuccess("");
+      setLinkedPatient(null);
+      setPatientId("");
+      setPatientName("");
+      setTitle("Patient follow-up");
+      setType("follow_up");
+      const user = firebaseAuth?.currentUser;
+      const resolution = user
+        ? resolvePatientDirectoryEntries(user, handoff.patientId, {
+            includeArchived: profile.role === "admin",
+          })
+        : Promise.reject(new Error("Your staff session expired. Sign in again."));
+      void resolution
+        .then((result) => {
+          if (!requestIsCurrent()) return;
+          const patient = result.patients.find((candidate) => candidate.id === handoff.patientId);
+          if (!patient || patient.archived === true) {
+            throw new Error("This patient chart is archived or unavailable. A follow-up was not started.");
+          }
+          setLinkedPatient({ id: patient.id, fullName: patient.fullName, patientNumber: patient.patientNumber });
+          setPatientId(patient.id);
+          setPatientName(patient.fullName);
+        })
+        .catch((loadError) => {
+          if (!requestIsCurrent()) return;
+          console.error(loadError);
+          setFormOpen(false);
+          setError(loadError instanceof Error ? loadError.message : "This patient could not be linked to a follow-up.");
+        })
+        .finally(() => {
+          if (requestIsCurrent()) setHandoffLoading(false);
+        });
+    };
+    window.addEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumePatientHandoff);
+    consumePatientHandoff();
+
+    return () => {
+      active = false;
+      handoffRequestRef.current += 1;
+      window.clearTimeout(timer);
+      window.removeEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumePatientHandoff);
+    };
+  }, [profile.role]);
 
   useEffect(() => {
     if (!firestore) {
@@ -213,6 +274,7 @@ function TasksContent() {
   );
 
   function resetForm() {
+    handoffRequestRef.current += 1;
     setTitle("");
     setDetails("");
     setType("follow_up");
@@ -221,6 +283,8 @@ function TasksContent() {
     setDueTime("18:00");
     setPatientName("");
     setPatientId("");
+    setLinkedPatient(null);
+    setHandoffLoading(false);
     setAssignedTo(profile.uid);
   }
 
@@ -243,6 +307,21 @@ function TasksContent() {
       assignedTo === profile.uid ? profile.displayName : selectedStaff?.displayName ?? (assignedTo ? "Clinic staff" : "Team");
 
     try {
+      let patientIdForWrite = patientId.trim();
+      let patientNameForWrite = patientName.trim();
+      if (linkedPatient) {
+        const user = firebaseAuth?.currentUser;
+        if (!user) throw new Error("Your staff session expired. Sign in again.");
+        const resolution = await resolvePatientDirectoryEntries(user, linkedPatient.id, {
+          includeArchived: profile.role === "admin",
+        });
+        const patient = resolution.patients.find((candidate) => candidate.id === linkedPatient.id);
+        if (!patient || patient.archived === true) {
+          throw new Error("This patient chart is archived or unavailable. The follow-up was not saved.");
+        }
+        patientIdForWrite = patient.id;
+        patientNameForWrite = patient.fullName;
+      }
       await addDoc(collection(firestore, "staffTasks"), {
         title: cleanTitle,
         details: details.trim(),
@@ -251,8 +330,8 @@ function TasksContent() {
         status: "open",
         dueDate,
         dueTime,
-        patientId: patientId.trim(),
-        patientName: patientName.trim(),
+        patientId: patientIdForWrite,
+        patientName: patientNameForWrite,
         assignedTo,
         assignedToName,
         createdBy: profile.uid,
@@ -266,7 +345,7 @@ function TasksContent() {
       setSuccess("Task added to the clinic follow-up centre.");
     } catch (saveError) {
       console.error(saveError);
-      setError("The task could not be saved. Please try again.");
+      setError(saveError instanceof Error ? saveError.message : "The task could not be saved. Please try again.");
     } finally {
       setSaving(false);
     }
@@ -370,14 +449,25 @@ function TasksContent() {
               Due time
               <input className={inputClass} type="time" value={dueTime} onChange={(event) => setDueTime(event.target.value)} required />
             </label>
-            <label className="grid gap-2 text-sm font-bold text-slate-700">
-              Patient name <span className="font-normal text-slate-400">(optional)</span>
-              <input className={inputClass} value={patientName} onChange={(event) => setPatientName(event.target.value)} maxLength={100} placeholder="Patient name" />
-            </label>
-            <label className="grid gap-2 text-sm font-bold text-slate-700">
-              Patient ID <span className="font-normal text-slate-400">(optional)</span>
-              <input className={inputClass} value={patientId} onChange={(event) => setPatientId(event.target.value)} maxLength={40} placeholder="ASH-0001" />
-            </label>
+            {handoffLoading ? (
+              <p role="status" aria-live="polite" className="flex min-h-20 items-center gap-2 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm font-semibold text-blue-900 md:col-span-2"><LoaderCircle className="animate-spin" size={17} />Checking the selected patient chart…</p>
+            ) : linkedPatient ? (
+              <div className="flex min-h-20 items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 md:col-span-2">
+                <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white text-emerald-700 ring-1 ring-emerald-200"><UserRound size={20} /></span>
+                <div className="min-w-0"><p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Verified patient</p><p className="truncate font-bold text-[#233A59]">{linkedPatient.fullName}</p><p className="truncate text-xs text-slate-600">{linkedPatient.patientNumber || "Patient chart"}</p></div>
+              </div>
+            ) : (
+              <>
+                <label className="grid gap-2 text-sm font-bold text-slate-700">
+                  Patient name <span className="font-normal text-slate-400">(optional)</span>
+                  <input className={inputClass} value={patientName} onChange={(event) => setPatientName(event.target.value)} maxLength={100} placeholder="Patient name" />
+                </label>
+                <label className="grid gap-2 text-sm font-bold text-slate-700">
+                  Patient ID <span className="font-normal text-slate-400">(optional)</span>
+                  <input className={inputClass} value={patientId} onChange={(event) => setPatientId(event.target.value)} maxLength={40} placeholder="ASH-0001" />
+                </label>
+              </>
+            )}
             <label className="grid gap-2 text-sm font-bold text-slate-700 md:col-span-2">
               Assigned to
               <select className={inputClass} value={assignedTo} onChange={(event) => setAssignedTo(event.target.value)}>
@@ -395,7 +485,7 @@ function TasksContent() {
           </div>
           <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
             <button type="button" onClick={() => { resetForm(); setFormOpen(false); }} className="min-h-12 rounded-xl border border-slate-200 px-5 text-sm font-bold text-slate-700 hover:bg-slate-50">Cancel</button>
-            <button type="submit" disabled={saving} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-[#233A59] px-6 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60">
+            <button type="submit" disabled={saving || handoffLoading} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-[#233A59] px-6 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60">
               {saving ? <LoaderCircle size={18} className="animate-spin" /> : <Check size={18} />}
               Save task
             </button>

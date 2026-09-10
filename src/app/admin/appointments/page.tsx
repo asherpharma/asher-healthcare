@@ -163,6 +163,10 @@ function AppointmentDesk() {
   const profileDoctorId = assignedDoctorId(profile.doctorName);
   const [deskItems, setDeskItems] = useState<Appointment[]>([]);
   const [historyItems, setHistoryItems] = useState<Appointment[]>([]);
+  const [handoffItem, setHandoffItem] = useState<Appointment | null>(null);
+  const [focusedAppointmentId, setFocusedAppointmentId] = useState("");
+  const [handoffLoading, setHandoffLoading] = useState(false);
+  const [handoffError, setHandoffError] = useState("");
   const [activePatientIds, setActivePatientIds] = useState<Set<string>>(new Set());
   const [deskLoading, setDeskLoading] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(true);
@@ -187,10 +191,13 @@ function AppointmentDesk() {
     error: false,
   });
   const patientSafetyRequestRef = useRef(0);
+  const handoffRequestRef = useRef(0);
+  const focusedAppointmentRef = useRef<HTMLElement | null>(null);
   const deskDate = dateFilter || today;
   const loading = deskLoading || historyLoading || archiveLoading;
   const allItems = useMemo(() => {
     const merged = new Map<string, Appointment>();
+    if (handoffItem) merged.set(handoffItem.id, handoffItem);
     historyItems.forEach((appointment) => merged.set(appointment.id, appointment));
     deskItems.forEach((appointment) => merged.set(appointment.id, appointment));
     return Array.from(merged.values()).sort((left, right) => {
@@ -198,7 +205,7 @@ function AppointmentDesk() {
       if (dateDifference !== 0) return dateDifference;
       return right.preferredTime.localeCompare(left.preferredTime);
     });
-  }, [deskItems, historyItems]);
+  }, [deskItems, handoffItem, historyItems]);
   const appointmentPatientIds = useMemo(
     () => uniqueAppointmentPatientIds(allItems),
     [allItems],
@@ -264,10 +271,79 @@ function AppointmentDesk() {
       }
     }, 0);
 
-    const consumePatientHandoff = () => {
+    const consumeAppointmentHandoff = () => {
       const handoff = consumeAdminNavigationHandoff("/admin/appointments");
-      if (!handoff || handoff.intent !== "create-appointment") return;
+      if (!handoff) return;
+      const requestId = handoffRequestRef.current + 1;
+      handoffRequestRef.current = requestId;
+      const requestIsCurrent = () => active && handoffRequestRef.current === requestId;
 
+      if (handoff.intent === "open-appointment") {
+        setShowCreate(false);
+        setHandoffItem(null);
+        setFocusedAppointmentId("");
+        setHandoffError("");
+        setHandoffLoading(true);
+        setSearch("");
+        setStatusFilter("all");
+        setDoctorFilter(profile.role === "doctor" && profileDoctorId ? profileDoctorId : "all");
+        setDateFilter("");
+
+        const database = firestore;
+        const appointmentId = handoff.appointmentId;
+        const exactAppointmentRequest = database
+          ? getDoc(doc(database, "appointments", appointmentId))
+          : Promise.reject(new Error("The appointment desk is not connected."));
+
+        void exactAppointmentRequest
+          .then(async (snapshot) => {
+            if (!requestIsCurrent()) return;
+            if (!snapshot.exists()) throw new Error("This appointment is no longer available.");
+            const appointment = { id: snapshot.id, ...snapshot.data() } as Appointment;
+            if (
+              profile.role === "doctor"
+              && (!profileDoctorId || appointment.doctorId !== profileDoctorId)
+            ) {
+              throw new Error("This appointment is assigned to another doctor.");
+            }
+
+            const patientId = String(appointment.patientId || "").trim();
+            if (patientId) {
+              const user = firebaseAuth?.currentUser;
+              if (!user) throw new Error("Your staff session expired. Sign in again.");
+              const resolution = await resolvePatientDirectoryEntries(user, patientId, {
+                includeArchived: profile.role === "admin",
+              });
+              if (!requestIsCurrent()) return;
+              const patient = resolution.patients.find((entry) => entry.id === patientId);
+              if (!patient || patient.archived === true) {
+                throw new Error("The patient chart linked to this appointment is archived or unavailable.");
+              }
+              setActivePatientIds((current) => new Set(current).add(patientId));
+            }
+
+            if (!requestIsCurrent()) return;
+            setHandoffItem(appointment);
+            setFocusedAppointmentId(appointment.id);
+            setNotice("Opened the exact appointment selected from Today.");
+          })
+          .catch((loadError) => {
+            if (!requestIsCurrent()) return;
+            console.error(loadError);
+            setHandoffError(loadError instanceof Error ? loadError.message : "This appointment could not be opened securely.");
+          })
+          .finally(() => {
+            if (requestIsCurrent()) setHandoffLoading(false);
+          });
+        return;
+      }
+
+      if (handoff.intent !== "create-appointment") return;
+
+      setHandoffLoading(false);
+      setHandoffError("");
+      setFocusedAppointmentId("");
+      setHandoffItem(null);
       setShowCreate(true);
       const patientId = handoff.patientId;
       const user = firebaseAuth?.currentUser;
@@ -276,7 +352,7 @@ function AppointmentDesk() {
         : Promise.reject(new Error("Staff session missing"));
       void directoryRequest
         .then(({ patients }) => {
-          if (!active) return;
+          if (!requestIsCurrent()) return;
           const patient = patients.find((entry) => entry.id === patientId);
           if (!patient || patient.archived === true) {
             setBookingError("This patient record is unavailable or archived. An administrator must restore it before a new appointment can be created.");
@@ -294,19 +370,20 @@ function AppointmentDesk() {
           }));
         })
         .catch(() => {
-          if (active) setBookingError("Patient details could not be prefilled. You can still enter them manually.");
+          if (requestIsCurrent()) setBookingError("Patient details could not be prefilled. You can still enter them manually.");
         });
     };
-    window.addEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumePatientHandoff);
-    consumePatientHandoff();
+    window.addEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumeAppointmentHandoff);
+    consumeAppointmentHandoff();
 
     return () => {
       active = false;
+      handoffRequestRef.current += 1;
       window.clearTimeout(routeTimer);
       window.removeEventListener("asher:new-appointment", openAppointment);
-      window.removeEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumePatientHandoff);
+      window.removeEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumeAppointmentHandoff);
     };
-  }, [profile.role, today]);
+  }, [profile.role, profileDoctorId, today]);
 
   const bookingSlots = useMemo(
     () => dateIsEnabled(schedule, booking.preferredDate)
@@ -448,6 +525,7 @@ function AppointmentDesk() {
   const filteredItems = useMemo(() => {
     const term = search.trim().toLowerCase();
     return items.filter((item) => {
+      if (focusedAppointmentId) return item.id === focusedAppointmentId;
       const matchesSearch = !term || [item.patientName, item.phone, item.reason, doctorNames[item.doctorId] ?? item.doctorId]
         .some((value) => String(value ?? "").toLowerCase().includes(term));
       const matchesStatus = statusFilter === "all" || item.status === statusFilter;
@@ -455,7 +533,16 @@ function AppointmentDesk() {
       const matchesDate = !dateFilter || item.preferredDate === dateFilter;
       return matchesSearch && matchesStatus && matchesDoctor && matchesDate;
     });
-  }, [dateFilter, doctorFilter, items, search, statusFilter]);
+  }, [dateFilter, doctorFilter, focusedAppointmentId, items, search, statusFilter]);
+
+  useEffect(() => {
+    if (!focusedAppointmentId || loading) return;
+    const frame = window.requestAnimationFrame(() => {
+      focusedAppointmentRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      focusedAppointmentRef.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [focusedAppointmentId, loading]);
 
   function appointmentPatientIsUnavailable(item: Appointment) {
     return Boolean(item.patientId && !activePatientIds.has(item.patientId));
@@ -673,6 +760,16 @@ function AppointmentDesk() {
     }
   }
 
+  function openPatientReminder(item: Appointment) {
+    if (!item.patientId) return;
+    stageAdminNavigationHandoff({
+      destination: "/admin/communications",
+      intent: "open-patient-reminder",
+      patientId: item.patientId,
+    });
+    router.push("/admin/communications");
+  }
+
   async function createAppointment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!firestore) return;
@@ -750,13 +847,18 @@ function AppointmentDesk() {
   }
 
   function clearFilters() {
+    handoffRequestRef.current += 1;
     setSearch("");
     setStatusFilter("all");
     setDoctorFilter(profile.role === "doctor" && profileDoctorId ? profileDoctorId : "all");
     setDateFilter("");
+    setFocusedAppointmentId("");
+    setHandoffItem(null);
+    setHandoffError("");
+    setHandoffLoading(false);
   }
 
-  const activeFilters = Boolean(search || dateFilter || doctorFilter !== "all" || statusFilter !== "all");
+  const activeFilters = Boolean(focusedAppointmentId || search || dateFilter || doctorFilter !== "all" || statusFilter !== "all");
 
   return (
     <div>
@@ -867,6 +969,9 @@ function AppointmentDesk() {
       </section>
 
       {notice && <p className="mt-5 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">{notice}</p>}
+      {handoffLoading ? <p role="status" aria-live="polite" className="mt-5 flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-900"><LoaderCircle className="animate-spin" size={17} />Opening the selected appointment securely…</p> : null}
+      {handoffError ? <p role="alert" className="mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800">{handoffError}</p> : null}
+      {focusedAppointmentId ? <div role="status" className="mt-5 flex flex-col gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-900 sm:flex-row sm:items-center sm:justify-between"><span>Showing the exact appointment selected from Today.</span><button type="button" onClick={clearFilters} className="min-h-10 rounded-lg bg-white px-3 font-bold text-[#233A59] ring-1 ring-blue-200">Show all appointments</button></div> : null}
       {profile.role === "admin" && !archiveLoading && !archiveSafetyError && archivedExcludedCount > 0 && (
         <p className="mt-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
           {archivedExcludedCount} appointment {archivedExcludedCount === 1 ? "record is" : "records are"} linked to archived or unavailable patients and hidden from the active desk. Restore the patient record to make it actionable again.
@@ -892,7 +997,12 @@ function AppointmentDesk() {
           const canManageClinical = canManageClinicalAppointment(item);
           const canCheckInToday = item.preferredDate === today;
           return (
-            <article key={item.id} className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+            <article
+              key={item.id}
+              ref={item.id === focusedAppointmentId ? focusedAppointmentRef : undefined}
+              tabIndex={item.id === focusedAppointmentId ? -1 : undefined}
+              className={`rounded-2xl bg-white p-5 shadow-sm ring-1 outline-none transition ${item.id === focusedAppointmentId ? "ring-2 ring-[#A8864A] shadow-lg" : "ring-slate-200"}`}
+            >
               <div className="grid gap-5 xl:grid-cols-[1.05fr_1.15fr_auto] xl:items-center">
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -903,7 +1013,7 @@ function AppointmentDesk() {
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-500"><span>{doctorNames[item.doctorId] || item.doctorId}</span><span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-slate-500">{item.source === "walk-in" ? "Walk-in" : item.source === "phone" ? "Phone" : item.source === "reception" ? "Reception" : "Website"}</span></div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <a href={"tel:" + item.phone} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-100"><Phone size={14} /> Call</a>
-                    {profile.role !== "doctor" ? <button type="button" onClick={() => router.push("/admin/communications")} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800 transition hover:bg-emerald-100"><BellRing size={14} /> Consent-aware reminder</button> : null}
+                    {profile.role !== "doctor" && item.patientId ? <button type="button" onClick={() => openPatientReminder(item)} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800 transition hover:bg-emerald-100"><BellRing size={14} /> Consent-aware reminder</button> : null}
                     <span className="rounded-lg bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">{item.phone}</span>
                   </div>
                 </div>

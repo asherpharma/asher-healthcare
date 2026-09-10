@@ -56,4 +56,6 @@ export const PATIENT_ACTION_TONES: Readonly<Record<PatientLauncherActionId, stri
   consult: "bg-cyan-50 text-cyan-800",
   bill: "bg-emerald-50 text-emerald-800",
   lab: "bg-amber-50 text-amber-800",
+  "follow-up": "bg-orange-50 text-orange-800",
+  remind: "bg-green-50 text-green-800",
 };

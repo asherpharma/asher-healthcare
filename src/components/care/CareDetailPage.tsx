@@ -14,6 +14,7 @@ import Link from "next/link";
 
 import Footer from "@/components/layout/Footer";
 import Navbar from "@/components/layout/Navbar";
+import { publicBookingHref } from "@/lib/public-booking";
 import type { CareJourney } from "@/lib/public-clinic-content";
 
 export default function CareDetailPage({ journey }: { journey: CareJourney }) {
@@ -29,7 +30,7 @@ export default function CareDetailPage({ journey }: { journey: CareJourney }) {
               <h1>{journey.title}</h1>
               <p>{journey.description}</p>
               <div className="care-detail-actions">
-                <Link className="button button-primary" href={`/?care=${journey.id}#appointment`}>
+                <Link className="button button-primary" href={publicBookingHref(journey.id)}>
                   <CalendarDays /> Book this specialist
                 </Link>
                 <a className="button button-ghost" href="tel:+919019263709"><Phone /> Call clinic</a>
@@ -94,7 +95,7 @@ export default function CareDetailPage({ journey }: { journey: CareJourney }) {
               <p>The live booking desk reflects the latest schedule set by the clinic.</p>
             </div>
             <div className="care-detail-cta-actions">
-              <Link className="button" href={`/?care=${journey.id}#appointment`}><CalendarDays /> View live slots</Link>
+              <Link className="button" href={publicBookingHref(journey.id)}><CalendarDays /> View live slots</Link>
               <a href="https://wa.me/919019263709" target="_blank" rel="noreferrer"><MessageCircle /> Ask on WhatsApp</a>
             </div>
           </div>

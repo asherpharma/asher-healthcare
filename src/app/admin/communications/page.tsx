@@ -3,18 +3,27 @@
 import { useStaff } from "@/components/admin/StaffGuard";
 import { firebaseAuth } from "@/firebase/config";
 import {
+  ADMIN_NAVIGATION_HANDOFF_EVENT,
+  consumeAdminNavigationHandoff,
+  stageAdminNavigationHandoff,
+} from "@/lib/admin-navigation-handoff";
+import { resolvePatientDirectoryEntries } from "@/lib/patient-directory";
+import {
   AlertTriangle,
   BellRing,
   CheckCircle2,
   Clock3,
   ExternalLink,
   LoaderCircle,
+  ListTodo,
   MessageCircle,
   RefreshCw,
   Search,
   ShieldCheck,
+  UserRound,
   X,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 type Channel = "whatsapp";
@@ -104,6 +113,7 @@ function statusStyle(status: OutboxItem["status"]) {
 }
 
 export default function CommunicationsPage() {
+  const router = useRouter();
   const { profile } = useStaff();
   const [desk, setDesk] = useState<DeskData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -120,6 +130,10 @@ export default function CommunicationsPage() {
   const [view, setView] = useState<"due" | "outbox">("due");
   const [query, setQuery] = useState("");
   const [outboxStatus, setOutboxStatus] = useState<"all" | OutboxItem["status"]>("all");
+  const [linkedPatient, setLinkedPatient] = useState<{ id: string; fullName: string; patientNumber?: string } | null>(null);
+  const [handoffLoading, setHandoffLoading] = useState(false);
+  const [handoffError, setHandoffError] = useState("");
+  const patientHandoffRequestRef = useRef(0);
   const consentDialog = useRef<HTMLFormElement>(null);
   const consentCloseButton = useRef<HTMLButtonElement>(null);
   const busyRef = useRef("");
@@ -169,18 +183,68 @@ export default function CommunicationsPage() {
     return () => { active = false; };
   }, [request]);
 
+  useEffect(() => {
+    let active = true;
+    const consumePatientHandoff = () => {
+      const handoff = consumeAdminNavigationHandoff("/admin/communications");
+      if (!handoff || handoff.intent !== "open-patient-reminder") return;
+      const requestId = patientHandoffRequestRef.current + 1;
+      patientHandoffRequestRef.current = requestId;
+      const requestIsCurrent = () => active && patientHandoffRequestRef.current === requestId;
+
+      setLinkedPatient(null);
+      setHandoffError("");
+      setHandoffLoading(true);
+      setQuery("");
+      setView("due");
+      const user = firebaseAuth?.currentUser;
+      const resolution = user
+        ? resolvePatientDirectoryEntries(user, handoff.patientId, {
+            includeArchived: profile.role === "admin",
+          })
+        : Promise.reject(new Error("Your staff session expired. Sign in again."));
+      void resolution
+        .then((result) => {
+          if (!requestIsCurrent()) return;
+          const patient = result.patients.find((candidate) => candidate.id === handoff.patientId);
+          if (!patient || patient.archived === true) {
+            throw new Error("This patient chart is archived or unavailable. Reminders were not opened.");
+          }
+          setLinkedPatient({ id: patient.id, fullName: patient.fullName, patientNumber: patient.patientNumber });
+        })
+        .catch((loadError) => {
+          if (!requestIsCurrent()) return;
+          console.error(loadError);
+          setHandoffError(loadError instanceof Error ? loadError.message : "This patient could not be opened in reminders.");
+        })
+        .finally(() => {
+          if (requestIsCurrent()) setHandoffLoading(false);
+        });
+    };
+    window.addEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumePatientHandoff);
+    consumePatientHandoff();
+    return () => {
+      active = false;
+      patientHandoffRequestRef.current += 1;
+      window.removeEventListener(ADMIN_NAVIGATION_HANDOFF_EVENT, consumePatientHandoff);
+    };
+  }, [profile.role]);
+
   const normalizedQuery = query.trim().toLocaleLowerCase("en-IN");
   const visibleCandidates = useMemo(() => desk?.candidates.filter((candidate) => {
+    if (linkedPatient && candidate.patientId !== linkedPatient.id) return false;
     if (!normalizedQuery) return true;
     return [candidate.patientName, candidate.patientNumber, candidate.dueLabel]
       .some((value) => value.toLocaleLowerCase("en-IN").includes(normalizedQuery));
-  }) ?? [], [desk, normalizedQuery]);
+  }) ?? [], [desk, linkedPatient, normalizedQuery]);
   const visibleOutbox = useMemo(() => desk?.outbox.filter((item) => {
+    if (linkedPatient && item.patientId !== linkedPatient.id) return false;
     if (outboxStatus !== "all" && item.status !== outboxStatus) return false;
     if (!normalizedQuery) return true;
     return [item.patientName, item.maskedRecipient, statusLabel(item.status)]
       .some((value) => value.toLocaleLowerCase("en-IN").includes(normalizedQuery));
-  }) ?? [], [desk, normalizedQuery, outboxStatus]);
+  }) ?? [], [desk, linkedPatient, normalizedQuery, outboxStatus]);
+  const handoffBlocked = handoffLoading || Boolean(handoffError);
 
   useEffect(() => {
     busyRef.current = busy;
@@ -348,6 +412,24 @@ export default function CommunicationsPage() {
     );
   }
 
+  function clearPatientHandoff() {
+    patientHandoffRequestRef.current += 1;
+    setLinkedPatient(null);
+    setHandoffLoading(false);
+    setHandoffError("");
+    setQuery("");
+  }
+
+  function openLinkedPatientFollowUp() {
+    if (!linkedPatient) return;
+    stageAdminNavigationHandoff({
+      destination: "/admin/tasks",
+      intent: "create-patient-follow-up",
+      patientId: linkedPatient.id,
+    });
+    router.push("/admin/tasks");
+  }
+
   return (
     <div className="min-w-0">
       <section className="overflow-hidden rounded-[24px] bg-[#233A59] p-5 text-white shadow-xl sm:rounded-[28px] sm:p-8">
@@ -381,8 +463,8 @@ export default function CommunicationsPage() {
       </section>
 
       <div role="tablist" aria-label="Reminder desk views" className="mt-5 grid grid-cols-2 gap-2 rounded-2xl bg-white p-2 ring-1 ring-slate-200">
-        <button type="button" role="tab" aria-selected={view === "due"} onClick={() => setView("due")} className={`${actionButton} min-w-0 px-2 sm:px-4 ${view === "due" ? "bg-[#233A59] text-white" : "text-slate-600 hover:bg-slate-50"}`}><BellRing aria-hidden="true" size={17} /><span className="truncate">Due reminders</span></button>
-        <button type="button" role="tab" aria-selected={view === "outbox"} onClick={() => setView("outbox")} className={`${actionButton} min-w-0 px-2 sm:px-4 ${view === "outbox" ? "bg-[#233A59] text-white" : "text-slate-600 hover:bg-slate-50"}`}><Clock3 aria-hidden="true" size={17} /><span className="truncate">Outbox &amp; history</span></button>
+        <button type="button" role="tab" disabled={handoffBlocked} aria-selected={view === "due"} onClick={() => setView("due")} className={`${actionButton} min-w-0 px-2 sm:px-4 ${view === "due" ? "bg-[#233A59] text-white" : "text-slate-600 hover:bg-slate-50"}`}><BellRing aria-hidden="true" size={17} /><span className="truncate">Due reminders</span></button>
+        <button type="button" role="tab" disabled={handoffBlocked} aria-selected={view === "outbox"} onClick={() => setView("outbox")} className={`${actionButton} min-w-0 px-2 sm:px-4 ${view === "outbox" ? "bg-[#233A59] text-white" : "text-slate-600 hover:bg-slate-50"}`}><Clock3 aria-hidden="true" size={17} /><span className="truncate">Outbox &amp; history</span></button>
       </div>
 
       <details className="group mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
@@ -392,6 +474,14 @@ export default function CommunicationsPage() {
 
       {notice ? <p role="status" aria-live="polite" className="mt-5 break-words rounded-2xl bg-emerald-50 p-4 text-sm font-semibold leading-6 text-emerald-900 [overflow-wrap:anywhere]">{notice}</p> : null}
       {error ? <div role="alert" className="mt-5 rounded-2xl border border-red-200 bg-red-50 p-4 text-red-900"><p className="break-words text-sm font-semibold leading-6 [overflow-wrap:anywhere]">{error}</p><button type="button" onClick={() => void refresh()} disabled={loading} className="mt-3 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-white px-4 text-sm font-bold text-[#233A59] ring-1 ring-red-200 disabled:opacity-60"><RefreshCw aria-hidden="true" className={loading ? "animate-spin" : ""} size={16} />Try again</button></div> : null}
+      {handoffLoading ? <div role="status" aria-live="polite" className="mt-5 flex flex-col gap-3 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm font-semibold text-blue-900 sm:flex-row sm:items-center sm:justify-between"><span className="flex items-center gap-2"><LoaderCircle className="animate-spin" size={17} />Checking the selected patient chart…</span><button type="button" onClick={clearPatientHandoff} className="min-h-10 rounded-xl bg-white px-4 font-bold text-[#233A59] ring-1 ring-blue-200">Show all reminders</button></div> : null}
+      {handoffError ? <div role="alert" className="mt-5 flex flex-col gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800 sm:flex-row sm:items-center sm:justify-between"><span>{handoffError}</span><button type="button" onClick={clearPatientHandoff} className="min-h-10 rounded-xl bg-white px-4 font-bold text-[#233A59] ring-1 ring-red-200">Show all reminders</button></div> : null}
+      {linkedPatient ? (
+        <section aria-label="Selected reminder patient" className="mt-5 flex flex-col gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-center gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white text-emerald-700 ring-1 ring-emerald-200"><UserRound size={20} /></span><div className="min-w-0"><p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Verified patient</p><p className="truncate font-bold text-[#233A59]">{linkedPatient.fullName}</p><p className="truncate text-xs text-slate-600">{linkedPatient.patientNumber || "Patient chart"} · showing only this patient</p></div></div>
+          <button type="button" onClick={clearPatientHandoff} className="min-h-11 rounded-xl bg-white px-4 text-sm font-bold text-[#233A59] ring-1 ring-emerald-200">Show all reminders</button>
+        </section>
+      ) : null}
       {desk && (desk.excluded.unlinked > 0 || desk.excluded.archived > 0) ? (
         <p className="mt-5 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-600">
           {desk.excluded.unlinked} unlinked and {desk.excluded.archived} archived/unavailable source records were excluded automatically.
@@ -402,7 +492,7 @@ export default function CommunicationsPage() {
         <div className="mt-10 flex items-center justify-center gap-3 py-16 text-slate-600"><LoaderCircle className="animate-spin" /> Loading secure reminder desk…</div>
       ) : null}
 
-      {desk ? (
+      {desk && !handoffBlocked ? (
         <section aria-label="Find reminders" className="mt-5 grid gap-3 rounded-2xl bg-white p-3 ring-1 ring-slate-200 sm:grid-cols-[minmax(0,1fr)_auto] sm:p-4">
           <label className="relative block min-w-0">
             <span className="sr-only">Search by patient name, patient number or reminder</span>
@@ -426,10 +516,10 @@ export default function CommunicationsPage() {
         </section>
       ) : null}
 
-      {view === "due" && desk ? (
+      {view === "due" && desk && !handoffBlocked ? (
         <section className="mt-5 space-y-4" aria-label="Due reminders and recalls">
           {visibleCandidates.length === 0 ? (
-            <div className="rounded-3xl bg-white p-8 text-center ring-1 ring-slate-200 sm:p-10"><CheckCircle2 className="mx-auto text-emerald-600" size={38} /><h2 className="mt-4 text-xl font-bold text-[#233A59]">{query ? "No matching reminders" : "No reminders are due"}</h2><p className="mt-2 text-sm text-slate-600">{query ? "Try another patient name or number." : "Today’s follow-ups and appointments for the next 48 hours will appear here."}</p>{query ? <button type="button" onClick={() => setQuery("")} className="mt-4 inline-flex min-h-11 items-center justify-center rounded-xl bg-slate-100 px-4 text-sm font-bold text-[#233A59]">Clear search</button> : null}</div>
+            <div className="rounded-3xl bg-white p-8 text-center ring-1 ring-slate-200 sm:p-10"><CheckCircle2 className="mx-auto text-emerald-600" size={38} /><h2 className="mt-4 text-xl font-bold text-[#233A59]">{linkedPatient ? "No reminder is due for this patient" : query ? "No matching reminders" : "No reminders are due"}</h2><p className="mt-2 text-sm text-slate-600">{linkedPatient ? "Create a linked follow-up task if the clinic needs to contact this patient later." : query ? "Try another patient name or number." : "Today’s follow-ups and appointments for the next 48 hours will appear here."}</p>{linkedPatient ? <button type="button" onClick={openLinkedPatientFollowUp} className={`${actionButton} mt-4 bg-[#233A59] text-white`}><ListTodo size={17} />Create follow-up task</button> : query ? <button type="button" onClick={() => setQuery("")} className="mt-4 inline-flex min-h-11 items-center justify-center rounded-xl bg-slate-100 px-4 text-sm font-bold text-[#233A59]">Clear search</button> : null}</div>
           ) : visibleCandidates.map((candidate) => (
             <article key={candidate.key} className="min-w-0 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200 sm:p-6">
               <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
@@ -472,7 +562,7 @@ export default function CommunicationsPage() {
         </section>
       ) : null}
 
-      {view === "outbox" && desk ? (
+      {view === "outbox" && desk && !handoffBlocked ? (
         <section className="mt-5 space-y-4" aria-label="Communication outbox">
           {visibleOutbox.length === 0 ? (
             <div className="rounded-3xl bg-white p-8 text-center ring-1 ring-slate-200 sm:p-10"><Clock3 className="mx-auto text-slate-400" size={38} /><h2 className="mt-4 text-xl font-bold text-[#233A59]">{query || outboxStatus !== "all" ? "No matching outbox items" : "Outbox is empty"}</h2><p className="mt-2 text-sm text-slate-600">{query || outboxStatus !== "all" ? "Clear the search or status filter to see other items." : "Prepare a consent-approved reminder from the Due reminders tab."}</p>{query || outboxStatus !== "all" ? <button type="button" onClick={() => { setQuery(""); setOutboxStatus("all"); }} className="mt-4 inline-flex min-h-11 items-center justify-center rounded-xl bg-slate-100 px-4 text-sm font-bold text-[#233A59]">Clear filters</button> : null}</div>

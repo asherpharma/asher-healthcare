@@ -1,14 +1,16 @@
 import { Activity, Baby, Heart, HeartHandshake, Microscope, ShieldPlus, Sparkles, Stethoscope } from "lucide-react";
+import PublicBookingLink from "@/components/home/PublicBookingLink";
+import type { DoctorId } from "@/lib/appointments";
 
 const services = [
-  { icon: Baby, title: "Pediatric Care", text: "Thoughtful consultations for newborns, infants, children and adolescents." },
-  { icon: ShieldPlus, title: "Vaccinations", text: "Age-appropriate immunisation guidance with clear follow-up schedules." },
-  { icon: Activity, title: "Allergy & Asthma", text: "Specialist assessment and long-term care plans for respiratory and allergic conditions." },
-  { icon: Heart, title: "Pregnancy Care", text: "Personal antenatal and postnatal support throughout your pregnancy journey." },
-  { icon: Stethoscope, title: "Women's Health", text: "Routine gynaecology, menstrual health, PCOS and preventive wellness care." },
-  { icon: Sparkles, title: "Fertility Support", text: "Sensitive infertility evaluation, counselling and coordinated treatment planning." },
-  { icon: Microscope, title: "Laparoscopic Care", text: "Evaluation and surgical guidance with a minimally invasive approach where suitable." },
-  { icon: HeartHandshake, title: "Growth & Nutrition", text: "Growth monitoring, developmental review and practical nutrition guidance for children." },
+  { doctorId: "pediatrics" as DoctorId, icon: Baby, title: "Pediatric Care", text: "Thoughtful consultations for newborns, infants, children and adolescents." },
+  { doctorId: "pediatrics" as DoctorId, icon: ShieldPlus, title: "Vaccinations", text: "Age-appropriate immunisation guidance with clear follow-up schedules." },
+  { doctorId: "pediatrics" as DoctorId, icon: Activity, title: "Allergy & Asthma", text: "Specialist assessment and long-term care plans for respiratory and allergic conditions." },
+  { doctorId: "obg" as DoctorId, icon: Heart, title: "Pregnancy Care", text: "Personal antenatal and postnatal support throughout your pregnancy journey." },
+  { doctorId: "obg" as DoctorId, icon: Stethoscope, title: "Women's Health", text: "Routine gynaecology, menstrual health, PCOS and preventive wellness care." },
+  { doctorId: "obg" as DoctorId, icon: Sparkles, title: "Fertility Support", text: "Sensitive infertility evaluation, counselling and coordinated treatment planning." },
+  { doctorId: "obg" as DoctorId, icon: Microscope, title: "Laparoscopic Care", text: "Evaluation and surgical guidance with a minimally invasive approach where suitable." },
+  { doctorId: "pediatrics" as DoctorId, icon: HeartHandshake, title: "Growth & Nutrition", text: "Growth monitoring, developmental review and practical nutrition guidance for children." },
 ];
 
 export default function Services() {
@@ -32,7 +34,7 @@ export default function Services() {
                 <div className="service-icon"><Icon /></div>
                 <h3>{service.title}</h3>
                 <p>{service.text}</p>
-                <a href="#appointment">Book this service <span>→</span></a>
+                <PublicBookingLink doctorId={service.doctorId}>Book this service <span>→</span></PublicBookingLink>
               </article>
             );
           })}

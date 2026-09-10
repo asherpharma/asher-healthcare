@@ -10,6 +10,7 @@ import {
   CalendarPlus,
   FlaskConical,
   IndianRupee,
+  ListTodo,
   Phone,
   Stethoscope,
   type LucideIcon,
@@ -84,13 +85,35 @@ export default function PatientQuickActions({ patient }: PatientQuickActionsProp
       tone: "bg-amber-50 text-amber-700",
       roles: ["admin", "doctor", "reception"],
     },
+    {
+      label: "Follow-up",
+      handoff: {
+        destination: "/admin/tasks",
+        intent: "create-patient-follow-up",
+        patientId: patient.id,
+      },
+      icon: ListTodo,
+      tone: "bg-orange-50 text-orange-700",
+      roles: ["admin", "doctor", "reception"],
+    },
+    {
+      label: "Remind",
+      handoff: {
+        destination: "/admin/communications",
+        intent: "open-patient-reminder",
+        patientId: patient.id,
+      },
+      icon: BellRing,
+      tone: "bg-green-50 text-green-700",
+      roles: ["admin", "reception"],
+    },
   ];
   const routeActions = allRouteActions.filter((action) => action.roles.includes(profile.role));
   const phoneNumber = normalisePhone(patient.phone);
 
   return (
     <section aria-label="Patient quick actions" className="border-b border-slate-200 bg-slate-50/80 p-3 sm:p-4">
-      <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-7">
         {routeActions.map(({ label, handoff, icon: Icon, tone }) => (
           <button
             key={label}
@@ -118,18 +141,6 @@ export default function PatientQuickActions({ patient }: PatientQuickActionsProp
           Call
         </a>
 
-        {profile.role !== "doctor" ? (
-          <button
-            type="button"
-            onClick={() => router.push("/admin/communications")}
-            className="group flex min-h-16 flex-col items-center justify-center gap-1.5 rounded-2xl bg-white px-2 py-2.5 text-center text-xs font-bold text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:-translate-y-0.5 hover:ring-[#A8864A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#233A59]"
-          >
-            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-green-50 text-green-700">
-              <BellRing aria-hidden="true" size={17} />
-            </span>
-            Remind
-          </button>
-        ) : null}
       </div>
     </section>
   );

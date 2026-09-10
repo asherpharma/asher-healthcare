@@ -75,3 +75,42 @@ test("navigation handoffs resolve the exact patient instead of proving it from a
     /patients\.find\(\(candidate\) => candidate\.id === handoffPatientId\)/u,
   );
 });
+
+test("patient shortcuts preserve identity in memory and re-verify it at each target", async () => {
+  const [quickActions, appointments, tasks, communications] = await Promise.all([
+    readFile(new URL("../src/components/admin/PatientQuickActions.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/app/admin/appointments/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/app/admin/tasks/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/app/admin/communications/page.tsx", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(quickActions, /intent: "create-patient-follow-up"[\s\S]*?patientId: patient\.id/u);
+  assert.match(quickActions, /intent: "open-patient-reminder"[\s\S]*?patientId: patient\.id/u);
+  assert.match(appointments, /getDoc\(doc\(database, "appointments", appointmentId\)\)/u);
+  assert.match(appointments, /resolvePatientDirectoryEntries\(user, patientId/u);
+  assert.match(tasks, /consumeAdminNavigationHandoff\("\/admin\/tasks"\)/u);
+  assert.match(tasks, /resolvePatientDirectoryEntries\(user, linkedPatient\.id/u);
+  assert.match(tasks, /patientId: patientIdForWrite,[\s\S]*?patientName: patientNameForWrite/u);
+  assert.match(communications, /consumeAdminNavigationHandoff\("\/admin\/communications"\)/u);
+  assert.match(communications, /candidate\.patientId !== linkedPatient\.id/u);
+  assert.doesNotMatch(quickActions, /patientId=.*(?:URLSearchParams|sessionStorage|localStorage)/u);
+});
+
+test("rapid patient handoffs ignore stale lookups and reminders fail closed while unresolved", async () => {
+  const [appointments, tasks, communications] = await Promise.all([
+    readFile(new URL("../src/app/admin/appointments/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/app/admin/tasks/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/app/admin/communications/page.tsx", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(appointments, /handoffRequestRef\.current = requestId;[\s\S]*?handoffRequestRef\.current === requestId/u);
+  assert.match(tasks, /handoffRequestRef\.current = requestId;[\s\S]*?handoffRequestRef\.current === requestId/u);
+  assert.match(communications, /patientHandoffRequestRef\.current = requestId;[\s\S]*?patientHandoffRequestRef\.current === requestId/u);
+  assert.match(appointments, /handoffRequestRef\.current \+= 1;[\s\S]*?removeEventListener/u);
+  assert.match(tasks, /handoffRequestRef\.current \+= 1;[\s\S]*?removeEventListener/u);
+  assert.match(communications, /patientHandoffRequestRef\.current \+= 1;[\s\S]*?removeEventListener/u);
+  assert.match(communications, /const handoffBlocked = handoffLoading \|\| Boolean\(handoffError\)/u);
+  assert.match(communications, /view === "due" && desk && !handoffBlocked/u);
+  assert.match(communications, /view === "outbox" && desk && !handoffBlocked/u);
+  assert.match(communications, /onClick=\{clearPatientHandoff\}[\s\S]*?Show all reminders/u);
+});

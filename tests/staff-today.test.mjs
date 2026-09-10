@@ -243,6 +243,11 @@ test("the staff Today screen uses bounded live reads and delegates all writes", 
   assert.match(source, /stageAdminNavigationHandoff/u);
   assert.match(
     source,
+    /intent: "open-appointment",[\s\S]*?appointmentId: appointment\.id,[\s\S]*?router\.push\("\/admin\/appointments"\)/u,
+  );
+  assert.match(source, /onClick=\{\(\) => openFrontDeskAppointment\(appointment\)\}/u);
+  assert.match(
+    source,
     /intent: "open-lab-order",[\s\S]*?orderId: order\.id,[\s\S]*?router\.push\("\/admin\/lab\?priority=urgent"\)/u,
   );
   assert.match(source, /href="\/admin\/lab\?priority=urgent"/u);

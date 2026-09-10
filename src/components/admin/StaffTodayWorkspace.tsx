@@ -386,6 +386,15 @@ export default function StaffTodayWorkspace() {
     router.push("/admin/consultations");
   }
 
+  function openFrontDeskAppointment(appointment: StaffTodayAppointment) {
+    stageAdminNavigationHandoff({
+      destination: "/admin/appointments",
+      intent: "open-appointment",
+      appointmentId: appointment.id,
+    });
+    router.push("/admin/appointments");
+  }
+
   function openUrgentLabOrder(order: StaffTodayLabOrder) {
     stageAdminNavigationHandoff({
       destination: "/admin/lab",
@@ -462,7 +471,7 @@ export default function StaffTodayWorkspace() {
                       {role === "doctor" ? (
                         <button type="button" onClick={() => openDoctorAppointment(appointment)} className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#233A59] px-4 text-xs font-bold text-white"><Stethoscope size={15} />{actionLabel}</button>
                       ) : (
-                        <Link href={appointment.status === "requested" ? "/admin/appointments?date=today&status=requested" : "/admin/appointments?date=today"} prefetch={false} className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#233A59] px-4 text-xs font-bold text-white">{actionLabel}<ArrowRight size={15} /></Link>
+                        <button type="button" onClick={() => openFrontDeskAppointment(appointment)} className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#233A59] px-4 text-xs font-bold text-white">{actionLabel}<ArrowRight size={15} /></button>
                       )}
                     </article>
                   );

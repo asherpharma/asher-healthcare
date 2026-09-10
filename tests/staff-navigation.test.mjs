@@ -114,10 +114,13 @@ test("recent tools move to the front, deduplicate, discard invalid IDs, and stay
 });
 
 test("patient launcher permissions expose only safe actions for each role", () => {
-  assert.deepEqual(patientLauncherActionsForRole("admin").map(({ id }) => id), ["open", "book", "consult", "bill", "lab"]);
-  assert.deepEqual(patientLauncherActionsForRole("doctor").map(({ id }) => id), ["open", "book", "consult", "lab"]);
-  assert.deepEqual(patientLauncherActionsForRole("reception").map(({ id }) => id), ["open", "book", "bill", "lab"]);
+  assert.deepEqual(patientLauncherActionsForRole("admin").map(({ id }) => id), ["open", "book", "consult", "bill", "lab", "follow-up", "remind"]);
+  assert.deepEqual(patientLauncherActionsForRole("doctor").map(({ id }) => id), ["open", "book", "consult", "lab", "follow-up"]);
+  assert.deepEqual(patientLauncherActionsForRole("reception").map(({ id }) => id), ["open", "book", "bill", "lab", "follow-up", "remind"]);
 
   assert.equal(patientLauncherActionsForRole("doctor").some(({ href }) => href === "/admin/billing"), false);
+  assert.equal(patientLauncherActionsForRole("doctor").some(({ href }) => href === "/admin/communications"), false);
   assert.equal(patientLauncherActionsForRole("reception").some(({ href }) => href === "/admin/consultations"), false);
+  assert.equal(patientLauncherActionsForRole("reception").find(({ id }) => id === "follow-up")?.intent, "create-patient-follow-up");
+  assert.equal(patientLauncherActionsForRole("admin").find(({ id }) => id === "remind")?.intent, "open-patient-reminder");
 });

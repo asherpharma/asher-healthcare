@@ -14,6 +14,11 @@ import {
 } from "@/lib/appointments";
 import { CARE_SELECTION_EVENT } from "@/lib/public-clinic-content";
 import {
+  nextPublicBookingDate,
+  PUBLIC_BOOKING_WHATSAPP_URL,
+  publicBookingDoctor,
+} from "@/lib/public-booking";
+import {
   collection,
   onSnapshot,
   query,
@@ -30,7 +35,17 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-type Result = { tone: "success" | "error"; message: string } | null;
+type BookingConfirmation = {
+  date: string;
+  doctorName: string;
+  time: string;
+};
+
+type Result = {
+  tone: "success" | "error";
+  message: string;
+  confirmation?: BookingConfirmation;
+} | null;
 
 type Availability = {
   key: string;
@@ -57,6 +72,19 @@ function currentClinicClock() {
   };
 }
 
+function friendlyAppointmentDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) return value;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString("en-IN", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
 export default function AppointmentCTA() {
   const { schedule, loading: scheduleLoading, error: scheduleError } = useAppointmentSchedule();
   const [doctorId, setDoctorId] = useState<DoctorId>("pediatrics");
@@ -76,6 +104,8 @@ export default function AppointmentCTA() {
   const [submitting, setSubmitting] = useState(false);
   const [clinicClock, setClinicClock] = useState({ date: "", time: "" });
   const formStartedAt = useRef(0);
+  const feedback = useRef<HTMLElement>(null);
+  const submittingRef = useRef(false);
 
   const allSlots = useMemo(
     () => date && clinicClock.date && dateIsEnabled(schedule, date)
@@ -97,6 +127,8 @@ export default function AppointmentCTA() {
     [allSlots, availabilityError, occupiedSlots],
   );
   const selectedTime = availableSlots.includes(time) ? time : "";
+  const selectedDoctor = DOCTORS.find((doctor) => doctor.id === doctorId) ?? DOCTORS[0];
+  const nextClinicDate = date ? nextPublicBookingDate(schedule, date) : "";
 
   useEffect(() => {
     formStartedAt.current = Date.now();
@@ -107,6 +139,10 @@ export default function AppointmentCTA() {
       window.clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    if (result) feedback.current?.focus();
+  }, [result]);
 
   useEffect(() => {
     if (!clinicClock.date) return;
@@ -131,8 +167,10 @@ export default function AppointmentCTA() {
       );
     }
 
-    const careFromUrl = new URLSearchParams(window.location.search).get("care");
-    if (careFromUrl === "pediatrics" || careFromUrl === "obg") selectCare(careFromUrl);
+    const careFromUrl = publicBookingDoctor(
+      new URLSearchParams(window.location.search).get("care"),
+    );
+    if (careFromUrl) selectCare(careFromUrl);
 
     const onCareSelection = (event: Event) => {
       const doctorIdFromEvent = (event as CustomEvent<{ doctorId?: DoctorId }>).detail?.doctorId;
@@ -170,6 +208,7 @@ export default function AppointmentCTA() {
 
   async function submitBooking(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (submittingRef.current) return;
     if (availabilityLoading || availabilityError) {
       setResult({ tone: "error", message: "Live availability is still being checked. Please wait a moment and try again." });
       return;
@@ -195,6 +234,7 @@ export default function AppointmentCTA() {
       formElapsedMs: formStartedAt.current > 0 ? Date.now() - formStartedAt.current : 0,
     };
 
+    submittingRef.current = true;
     setSubmitting(true);
     setResult(null);
     try {
@@ -208,19 +248,6 @@ export default function AppointmentCTA() {
         throw new Error(responseBody.error || "The appointment could not be reserved.");
       }
 
-      const message = [
-        "Hello Asher Healthcare, I have reserved an appointment slot.",
-        "",
-        `Patient: ${payload.patientName}`,
-        `Phone: ${payload.phone}`,
-        `Doctor: ${doctor?.label || doctorId}`,
-        `Date: ${date}`,
-        `Time: ${formatAppointmentTime(selectedTime)}`,
-        `Reason: ${payload.reason || "Not specified"}`,
-      ].join("\n");
-      const whatsappUrl = `https://wa.me/919019263709?text=${encodeURIComponent(message)}`;
-      const whatsapp = window.open(whatsappUrl, "_blank", "noopener,noreferrer");
-
       setAvailability((current) => ({
         key: availabilityKey,
         slots: new Set(current.key === availabilityKey ? current.slots : []).add(selectedTime),
@@ -229,10 +256,15 @@ export default function AppointmentCTA() {
       setResult({
         tone: "success",
         message: `Your ${formatAppointmentTime(selectedTime)} slot is reserved. The clinic will confirm it shortly.`,
+        confirmation: {
+          date,
+          doctorName: doctor?.name || "Clinic doctor",
+          time: selectedTime,
+        },
       });
+      setTime("");
       formElement.reset();
       formStartedAt.current = Date.now();
-      if (!whatsapp) window.location.href = whatsappUrl;
     } catch (bookingError) {
       setResult({
         tone: "error",
@@ -241,6 +273,7 @@ export default function AppointmentCTA() {
           : "The appointment could not be reserved. Please call the clinic.",
       });
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   }
@@ -248,28 +281,29 @@ export default function AppointmentCTA() {
   const selectedDayEnabled = Boolean(date) && dateIsEnabled(schedule, date);
   const scheduleText = scheduleSummary(schedule, doctorId);
 
+  function checkNextClinicDay() {
+    if (!nextClinicDate) return;
+    setDate(nextClinicDate);
+    setTime("");
+    setResult(null);
+  }
+
+  const slotStatus = scheduleLoading
+    ? "Loading clinic timings…"
+    : availabilityLoading
+      ? "Checking live availability…"
+      : availabilityError
+        ? "Live availability is temporarily unavailable."
+        : !selectedDayEnabled
+          ? "Appointments are closed on this day."
+          : allSlots.length === 0
+            ? "No appointment starts remain on this day."
+            : `${availableSlots.length} of ${allSlots.length} appointment times available.`;
+
   return (
     <section id="appointment" className="section appointment-section">
       <div className="site-shell appointment-shell">
-        <div className="appointment-copy">
-          <span className="section-kicker">Book in under a minute</span>
-          <h2>Choose a live appointment slot.</h2>
-          <p>
-            Appointments are available Monday to Saturday. Select a doctor, date,
-            and one of the currently available times.
-          </p>
-          <div className="booking-points">
-            <span><MessageCircle /> Quick confirmation on WhatsApp</span>
-            <span><Clock3 /> Dr. Shafi 5–8 PM · Dr. Reshma 7–9 PM</span>
-            <span><ShieldCheck /> Live timings set by the clinic</span>
-          </div>
-          <a className="phone-card" href="tel:+919019263709">
-            <span><Phone /></span>
-            <div><small>Prefer to call?</small><strong>+91 90192 63709</strong></div>
-          </a>
-        </div>
-
-        <form className="booking-card" onSubmit={submitBooking}>
+        <form className="booking-card appointment-form-panel" onSubmit={submitBooking} tabIndex={-1} aria-label="Book an appointment">
           <div
             aria-hidden="true"
             style={{ position: "absolute", left: "-10000px", width: 1, height: 1, overflow: "hidden" }}
@@ -309,6 +343,7 @@ export default function AppointmentCTA() {
                   setResult(null);
                 }}
               required
+              id="appointment-specialist"
             >
               {DOCTORS.map((doctor) => (
                 <option key={doctor.id} value={doctor.id}>{doctor.label}</option>
@@ -318,48 +353,70 @@ export default function AppointmentCTA() {
           </label>
 
           <div className="form-row">
-            <label>
-              Appointment date
-              <input
-                name="date"
-                type="date"
-                min={clinicClock.date || undefined}
-                value={date}
-                onChange={(event) => {
-                  setDate(event.target.value);
-                  setTime("");
-                  setResult(null);
-                }}
-                required
-              />
-            </label>
-            <label>
-              Available time
-              <select
-                name="time"
-                value={selectedTime}
-                onChange={(event) => setTime(event.target.value)}
-                disabled={!selectedDayEnabled || availabilityLoading || availableSlots.length === 0}
-                required
-              >
-                <option value="">
-                  {availabilityLoading
-                    ? "Checking availability…"
-                    : availabilityError
-                      ? "Availability temporarily unavailable"
-                    : !selectedDayEnabled
-                      ? "Clinic closed this day"
-                      : availableSlots.length === 0
-                        ? "No slots available"
-                        : "Select a time"}
-                </option>
-                {allSlots.map((slot) => (
-                  <option key={appointmentSlotId(doctorId, date, slot)} value={slot} disabled={occupiedSlots.has(slot)}>
-                    {formatAppointmentTime(slot)}{occupiedSlots.has(slot) ? " — Booked" : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="booking-date-field">
+              <label>
+                Appointment date
+                <input
+                  name="date"
+                  type="date"
+                  min={clinicClock.date || undefined}
+                  value={date}
+                  onChange={(event) => {
+                    setDate(event.target.value);
+                    setTime("");
+                    setResult(null);
+                  }}
+                  required
+                />
+              </label>
+              {nextClinicDate ? (
+                <div className="booking-date-actions">
+                  <button type="button" className="booking-next-day" onClick={checkNextClinicDay}>
+                    Check next clinic day · {friendlyAppointmentDate(nextClinicDate)}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+            <fieldset
+              className="booking-slot-fieldset"
+              disabled={!selectedDayEnabled || scheduleLoading || availabilityLoading || availabilityError}
+              aria-busy={scheduleLoading || availabilityLoading}
+              aria-describedby="booking-slot-status"
+            >
+              <legend className="booking-slot-legend">Available time</legend>
+              <p id="booking-slot-status" className="booking-slot-state" role="status" aria-live="polite">
+                {slotStatus}
+              </p>
+              {!scheduleLoading && !availabilityLoading && !availabilityError && allSlots.length > 0 ? (
+                <div className="booking-slot-grid">
+                  {allSlots.map((slot) => {
+                    const booked = occupiedSlots.has(slot);
+                    const slotId = `appointment-${appointmentSlotId(doctorId, date, slot)}`;
+                    return (
+                      <label className="booking-slot-choice" htmlFor={slotId} key={slotId}>
+                        <input
+                          className="booking-slot-input"
+                          id={slotId}
+                          type="radio"
+                          name="time"
+                          value={slot}
+                          checked={selectedTime === slot}
+                          disabled={booked}
+                          onChange={() => {
+                            setTime(slot);
+                            setResult(null);
+                          }}
+                        />
+                        <span className="booking-slot-time">
+                          <strong>{formatAppointmentTime(slot)}</strong>
+                          {booked ? <small>Booked</small> : <small>Available</small>}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </fieldset>
           </div>
 
           {date && !selectedDayEnabled && (
@@ -382,10 +439,18 @@ export default function AppointmentCTA() {
             Reason for visit <span className="optional">Optional</span>
             <textarea name="reason" rows={3} maxLength={500} placeholder="Briefly tell us how we can help" />
           </label>
-          <label className="flex-row">
+          <label className="booking-consent">
             <input name="consent" type="checkbox" required style={{ width: 18, height: 18 }} />
             <span>I agree that the clinic may use these details to arrange my appointment.</span>
           </label>
+          {selectedTime ? (
+            <section className="booking-review" aria-label="Review appointment selection">
+              <p><small>Review your appointment</small></p>
+              <p><strong>{selectedDoctor.name}</strong></p>
+              <p>{friendlyAppointmentDate(date)} at {formatAppointmentTime(selectedTime)}</p>
+              <p>{scheduleText}</p>
+            </section>
+          ) : null}
           <button
             className="button button-primary booking-submit"
             type="submit"
@@ -394,16 +459,56 @@ export default function AppointmentCTA() {
             {submitting ? <LoaderCircle className="animate-spin" /> : <CalendarCheck />}
             {submitting ? "Reserving slot…" : "Reserve appointment"}
           </button>
-          {result && (
-            <p className={result.tone === "success" ? "form-success" : "rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700"}>
-              {result.tone === "success" && <CheckCircle2 />} {result.message}
-            </p>
-          )}
+          {result ? (
+            <section
+              ref={feedback}
+              tabIndex={-1}
+              role={result.tone === "success" ? "status" : "alert"}
+              aria-live={result.tone === "success" ? "polite" : "assertive"}
+              className={`booking-feedback booking-feedback-${result.tone}`}
+            >
+              <div className="booking-feedback-heading">
+                {result.tone === "success" ? <CheckCircle2 aria-hidden="true" /> : null}
+                <p>{result.message}</p>
+              </div>
+              {result.confirmation ? (
+                <p>
+                  <strong>{result.confirmation.doctorName}</strong><br />
+                  {friendlyAppointmentDate(result.confirmation.date)} · {formatAppointmentTime(result.confirmation.time)}
+                </p>
+              ) : null}
+              {result.tone === "success" ? (
+                <div className="booking-success-actions">
+                  <a className="button button-primary" href={PUBLIC_BOOKING_WHATSAPP_URL} target="_blank" rel="noreferrer">
+                    <MessageCircle aria-hidden="true" /> WhatsApp clinic (optional)
+                  </a>
+                  <button className="button button-ghost" type="button" onClick={() => setResult(null)}>Book another appointment</button>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
           <p className="form-note">
             The selected time is held for you after submission and confirmed by the clinic.
             For emergencies, contact local emergency services.
           </p>
         </form>
+        <div className="appointment-copy appointment-info-panel">
+          <span className="section-kicker">Simple online booking</span>
+          <h2>Choose a live appointment slot.</h2>
+          <p>
+            Appointments are available Monday to Saturday. Select a doctor, date,
+            and one of the currently available times.
+          </p>
+          <div className="booking-points">
+            <span><MessageCircle /> Optional WhatsApp help</span>
+            <span><Clock3 /> Dr. Shafi 5–8 PM · Dr. Reshma 7–9 PM</span>
+            <span><ShieldCheck /> Live timings set by the clinic</span>
+          </div>
+          <a className="phone-card" href="tel:+919019263709">
+            <span><Phone /></span>
+            <div><small>Prefer to call?</small><strong>+91 90192 63709</strong></div>
+          </a>
+        </div>
       </div>
     </section>
   );

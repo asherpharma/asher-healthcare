@@ -13,6 +13,19 @@ import {
   resolvePatientDirectoryEntries,
   searchPatientDirectory,
 } from "@/lib/patient-directory";
+import {
+  createPatientRecordLoadState,
+  markPatientRecordSectionError,
+  markPatientRecordSectionReady,
+  patientRecordSectionCount,
+  patientRecordSectionLabels,
+  patientRecordSectionsAreReady,
+  patientRecordSectionsForTab,
+  preparePatientRecordSections,
+  type PatientRecordLoadState,
+  type PatientRecordSection,
+  type PatientRecordTab,
+} from "@/lib/patient-record-loading";
 import { patientSearchReady } from "@/lib/patient-search-readiness";
 import {
   MAX_REPORT_FILE_BYTES,
@@ -68,7 +81,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Gender = "female" | "male" | "other";
 type CaseType = "general" | "specialist";
@@ -188,7 +201,7 @@ type TimelineItem = {
   detail: string;
   status?: string;
 };
-type TabKey = "overview" | "timeline" | "visits" | "prescriptions" | "growth" | "vaccinations" | "pregnancy" | "reports";
+type TabKey = PatientRecordTab;
 const inputClass = "mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 font-normal text-slate-900 outline-none transition focus:border-[#233A59] focus:ring-2 focus:ring-[#233A59]/10";
 const labelClass = "text-sm font-bold text-slate-700";
 const cardClass = "rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200";
@@ -228,6 +241,55 @@ function doctorIdForName(doctorName?: string) {
   return "";
 }
 
+function PatientRecordSectionBoundary({
+  children,
+  onRetry,
+  sections,
+  state,
+}: {
+  children: ReactNode;
+  onRetry: () => void;
+  sections: PatientRecordSection[];
+  state: PatientRecordLoadState;
+}) {
+  const failedSections = sections.filter((section) => state[section].phase === "error");
+  if (failedSections.length > 0) {
+    return (
+      <div role="alert" className="rounded-3xl border border-rose-200 bg-rose-50 p-6 text-rose-950">
+        <div className="flex items-start gap-3">
+          <TriangleAlert className="mt-0.5 shrink-0 text-rose-700" size={22} />
+          <div>
+            <h3 className="font-bold">Some patient records could not be loaded</h3>
+            <ul className="mt-2 space-y-1 text-sm leading-6 text-rose-900">
+              {failedSections.map((section) => <li key={section}>{state[section].error}</li>)}
+            </ul>
+            <p className="mt-2 text-xs font-semibold text-rose-800">No empty result is being shown because these records have not been verified.</p>
+            <button type="button" onClick={onRetry} className="mt-4 inline-flex min-h-11 items-center justify-center rounded-xl bg-rose-800 px-4 py-2.5 text-sm font-bold text-white hover:bg-rose-900">
+              Retry loading records
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const readyCount = sections.filter((section) => state[section].phase === "ready").length;
+  const isLoading = sections.some((section) => state[section].phase === "idle" || state[section].phase === "loading");
+  if (isLoading) {
+    return (
+      <div role="status" aria-live="polite" className="flex min-h-48 items-center justify-center rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+        <div>
+          <LoaderCircle className="mx-auto animate-spin text-[#233A59]" size={28} />
+          <p className="mt-4 font-bold text-[#233A59]">Loading patient records…</p>
+          <p className="mt-1 text-sm text-slate-500">{sections.length > 1 ? `${readyCount} of ${sections.length} sections ready` : `Loading ${patientRecordSectionLabels[sections[0]]}`}</p>
+        </div>
+      </div>
+    );
+  }
+
+  return <>{children}</>;
+}
+
 function PatientRegister() {
   const { user, profile } = useStaff();
   const router = useRouter();
@@ -260,6 +322,8 @@ function PatientRegister() {
   const [reports, setReports] = useState<ReportRecord[]>([]);
   const [invoices, setInvoices] = useState<InvoiceRecord[]>([]);
   const [labOrders, setLabOrders] = useState<LabRecord[]>([]);
+  const [recordLoadState, setRecordLoadState] = useState<PatientRecordLoadState>(createPatientRecordLoadState);
+  const [recordReloadVersion, setRecordReloadVersion] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [reportAction, setReportAction] = useState<{ id: string; mode: "view" | "download" | "print" } | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<Patient | null>(null);
@@ -291,6 +355,8 @@ function PatientRegister() {
     setReports([]);
     setInvoices([]);
     setLabOrders([]);
+    setRecordLoadState(createPatientRecordLoadState());
+    setRecordReloadVersion(0);
   }, [cancelPendingReportAccess]);
 
   const clearSelectedPatientData = useCallback((reason?: string) => {
@@ -303,6 +369,7 @@ function PatientRegister() {
   }, [resetPatientDetailData]);
 
   const selectPatient = useCallback((patientId: string) => {
+    if (selectedPatientIdRef.current === patientId) return;
     resetPatientDetailData();
     setHydratedPatientId("");
     selectedPatientIdRef.current = patientId;
@@ -478,6 +545,26 @@ function PatientRegister() {
     && (canEditDemographics || canEditClinical)
     && selectedPatient.archived !== true
     && selectedProfileIsHydrated;
+  const recordAccess = useMemo(() => ({
+    canViewClinical: canEditClinical,
+    canViewInvoices: profile.role !== "doctor",
+  }), [canEditClinical, profile.role]);
+  const requiredRecordSections = useMemo(
+    () => patientRecordSectionsForTab(activeTab, recordAccess),
+    [activeTab, recordAccess],
+  );
+  const timelineRecordSections = useMemo(
+    () => patientRecordSectionsForTab("timeline", recordAccess),
+    [recordAccess],
+  );
+  const openPatientTab = useCallback((tab: TabKey) => {
+    setRecordLoadState(preparePatientRecordSections(patientRecordSectionsForTab(tab, recordAccess)));
+    setActiveTab(tab);
+  }, [recordAccess]);
+  const retryPatientRecords = useCallback(() => {
+    setRecordLoadState(preparePatientRecordSections(requiredRecordSections));
+    setRecordReloadVersion((version) => version + 1);
+  }, [requiredRecordSections]);
 
   useEffect(() => {
     if (!selectedId || profile.role !== "reception") return;
@@ -502,9 +589,12 @@ function PatientRegister() {
   useEffect(() => {
     if (!selectedId || (profile.role === "doctor" && !profile.doctorName)) return;
     if (profile.role !== "admin" && profile.role !== "doctor") return;
-    return onSnapshot(
-      doc(db, "patients", selectedId),
+    const patientId = selectedId;
+    let active = true;
+    const unsubscribe = onSnapshot(
+      doc(db, "patients", patientId),
       (snapshot) => {
+        if (!active || selectedPatientIdRef.current !== patientId) return;
         if (!snapshot.exists()) {
           clearSelectedPatientData("This patient record is no longer available.");
           return;
@@ -540,68 +630,145 @@ function PatientRegister() {
         setHydratedPatientId(freshPatient.id);
       },
       (loadError) => {
+        if (!active || selectedPatientIdRef.current !== patientId) return;
         console.error("Assigned patient clinical profile could not be loaded", loadError);
         clearSelectedPatientData("Access to this patient record is no longer available.");
       },
     );
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, [clearSelectedPatientData, db, profile.doctorName, profile.role, selectedId]);
 
   useEffect(() => {
-    if (!selectedId) return;
-    const subscribe = <T extends BaseRecord>(name: string, setter: (items: T[]) => void) =>
-      onSnapshot(
-        query(collection(db, "patients", selectedId, name), orderBy("createdAt", "desc"), limit(50)),
-        (snapshot) => setter(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as T)),
-        () => setter([]),
-      );
+    if (!selectedId || !selectedProfileIsHydrated) return;
+
+    const patientId = selectedId;
+    let active = true;
     const unsubscribers: Array<() => void> = [];
-    if (profile.role !== "doctor") {
-      unsubscribers.push(onSnapshot(
-        query(collection(db, "invoices"), where("patientId", "==", selectedId), limit(50)),
-        (snapshot) => setInvoices(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as InvoiceRecord)),
-        () => setInvoices([]),
+    if (requiredRecordSections.length === 0) return;
+
+    const isCurrentSelection = () => active && selectedPatientIdRef.current === patientId;
+    const markReady = (section: PatientRecordSection) => {
+      if (!isCurrentSelection()) return;
+      setRecordLoadState((current) => markPatientRecordSectionReady(current, section));
+    };
+    const markError = (section: PatientRecordSection, loadError: unknown) => {
+      if (!isCurrentSelection()) return;
+      console.error(`Patient ${patientRecordSectionLabels[section]} could not be loaded`, loadError);
+      setRecordLoadState((current) => markPatientRecordSectionError(
+        current,
+        section,
+        `Could not load ${patientRecordSectionLabels[section]}. Check your connection and try again.`,
       ));
+    };
+    const subscribePatientSubcollection = <T extends BaseRecord>(
+      section: PatientRecordSection,
+      setter: (items: T[]) => void,
+    ) => {
+      try {
+        unsubscribers.push(onSnapshot(
+          query(collection(db, "patients", patientId, section), orderBy("createdAt", "desc"), limit(50)),
+          (snapshot) => {
+            if (!isCurrentSelection()) return;
+            setter(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as T));
+            markReady(section);
+          },
+          (loadError) => markError(section, loadError),
+        ));
+      } catch (loadError) {
+        markError(section, loadError);
+      }
+    };
+
+    if (requiredRecordSections.includes("visits")) {
+      subscribePatientSubcollection<VisitRecord>("visits", setVisits);
+    }
+    if (requiredRecordSections.includes("prescriptions")) {
+      subscribePatientSubcollection<PrescriptionRecord>("prescriptions", setPrescriptions);
+    }
+    if (requiredRecordSections.includes("growthRecords")) {
+      subscribePatientSubcollection<GrowthRecord>("growthRecords", setGrowthRecords);
+    }
+    if (requiredRecordSections.includes("vaccinations")) {
+      subscribePatientSubcollection<VaccinationRecord>("vaccinations", setVaccinations);
+    }
+    if (requiredRecordSections.includes("pregnancyRecords")) {
+      subscribePatientSubcollection<PregnancyRecord>("pregnancyRecords", setPregnancyRecords);
+    }
+    if (requiredRecordSections.includes("reports")) {
+      subscribePatientSubcollection<ReportRecord>("reports", setReports);
+    }
+    if (requiredRecordSections.includes("invoices")) {
+      try {
+        unsubscribers.push(onSnapshot(
+          query(collection(db, "invoices"), where("patientId", "==", patientId), limit(50)),
+          (snapshot) => {
+            if (!isCurrentSelection()) return;
+            setInvoices(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as InvoiceRecord));
+            markReady("invoices");
+          },
+          (loadError) => markError("invoices", loadError),
+        ));
+      } catch (loadError) {
+        markError("invoices", loadError);
+      }
+    }
+    if (requiredRecordSections.includes("labOrders")) {
+      try {
+        const labOrdersQuery = profile.role === "doctor" && profile.doctorName
+          ? query(
+              collection(db, "labOrders"),
+              where("patientId", "==", patientId),
+              where("clinician", "==", profile.doctorName),
+              limit(50),
+            )
+          : query(collection(db, "labOrders"), where("patientId", "==", patientId), limit(50));
+        unsubscribers.push(onSnapshot(
+          labOrdersQuery,
+          (snapshot) => {
+            if (!isCurrentSelection()) return;
+            setLabOrders(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as LabRecord));
+            markReady("labOrders");
+          },
+          (loadError) => markError("labOrders", loadError),
+        ));
+      } catch (loadError) {
+        markError("labOrders", loadError);
+      }
     }
 
-    const labOrdersQuery = profile.role === "doctor" && profile.doctorName
-      ? query(
-          collection(db, "labOrders"),
-          where("patientId", "==", selectedId),
-          where("clinician", "==", profile.doctorName),
-          limit(50),
-        )
-      : query(collection(db, "labOrders"), where("patientId", "==", selectedId), limit(50));
-    unsubscribers.push(onSnapshot(
-      labOrdersQuery,
-      (snapshot) => setLabOrders(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as LabRecord)),
-      () => setLabOrders([]),
-    ));
-    if (canEditClinical) {
-      unsubscribers.push(
-        subscribe<VisitRecord>("visits", setVisits),
-        subscribe<PrescriptionRecord>("prescriptions", setPrescriptions),
-        subscribe<VaccinationRecord>("vaccinations", setVaccinations),
-        subscribe<PregnancyRecord>("pregnancyRecords", setPregnancyRecords),
-        subscribe<GrowthRecord>("growthRecords", setGrowthRecords),
-        subscribe<ReportRecord>("reports", setReports),
-      );
-    }
-    return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
-  }, [canEditClinical, db, profile.doctorName, profile.role, selectedId]);
+    return () => {
+      active = false;
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [
+    db,
+    profile.doctorName,
+    profile.role,
+    recordReloadVersion,
+    requiredRecordSections,
+    selectedId,
+    selectedProfileIsHydrated,
+  ]);
 
   const timeline = useMemo<TimelineItem[]>(() => {
-    const items: TimelineItem[] = [
+    const clinicalItems: TimelineItem[] = recordAccess.canViewClinical ? [
       ...visits.map((record) => ({ id: `visit-${record.id}`, kind: "visit" as const, date: record.visitDate || timestampDate(record.createdAt), title: record.diagnosis || "Clinical visit", detail: `${record.doctorName}${record.chiefComplaint ? ` · ${record.chiefComplaint}` : ""}`, status: record.followUpDate ? `Follow-up ${friendlyDate(record.followUpDate)}` : undefined })),
       ...prescriptions.map((record) => ({ id: `prescription-${record.id}`, kind: "prescription" as const, date: record.prescribedDate || timestampDate(record.createdAt), title: "Prescription issued", detail: `${record.doctorName} · ${Array.isArray(record.medicines) ? record.medicines.filter((medicine) => medicine && typeof medicine === "object").map((medicine) => medicine.name).filter(Boolean).join(", ") || "Medication recorded" : "Medication record needs review"}` })),
       ...vaccinations.map((record) => ({ id: `vaccination-${record.id}`, kind: "vaccination" as const, date: record.administeredDate || timestampDate(record.createdAt), title: `${record.vaccineName}${record.doseNumber ? ` · Dose ${record.doseNumber}` : ""}`, detail: record.batchNumber ? `Batch ${record.batchNumber}` : "Vaccination recorded", status: record.nextDueDate ? `Next due ${friendlyDate(record.nextDueDate)}` : undefined })),
       ...pregnancyRecords.map((record) => ({ id: `pregnancy-${record.id}`, kind: "pregnancy" as const, date: record.recordedDate || timestampDate(record.createdAt), title: record.gestationalWeeks || "Antenatal follow-up", detail: [record.bloodPressure && `BP ${record.bloodPressure}`, record.weight && `${record.weight} kg`, record.fetalHeartRate && `FHR ${record.fetalHeartRate}`].filter(Boolean).join(" · ") || "Pregnancy care update", status: record.nextVisitDate ? `Next visit ${friendlyDate(record.nextVisitDate)}` : undefined })),
       ...growthRecords.map((record) => ({ id: `growth-${record.id}`, kind: "growth" as const, date: record.measuredDate || timestampDate(record.createdAt), title: "Growth measurement", detail: [record.weightKg && `${record.weightKg} kg`, record.heightCm && `${record.heightCm} cm`, record.headCircumferenceCm && `HC ${record.headCircumferenceCm} cm`].filter(Boolean).join(" · ") || "Measurement recorded", status: record.milestone || undefined })),
       ...reports.map((record) => ({ id: `report-${record.id}`, kind: "report" as const, date: record.reportDate || timestampDate(record.createdAt), title: record.category || "Medical report", detail: record.fileName })),
+    ] : [];
+    const items: TimelineItem[] = [
+      ...clinicalItems,
       ...labOrders.map((record) => ({ id: `lab-${record.id}`, kind: "lab" as const, date: timestampDate(record.orderedAt || record.createdAt), title: `Lab order ${record.orderNumber}`, detail: record.tests?.join(", ") || "Tests ordered", status: record.status })),
-      ...invoices.map((record) => ({ id: `invoice-${record.id}`, kind: "invoice" as const, date: timestampDate(record.createdAt), title: `Invoice ${record.invoiceNumber}`, detail: `₹${record.amountPaid || 0} received of ₹${record.total || 0}`, status: record.paymentStatus })),
+      ...(recordAccess.canViewInvoices ? invoices.map((record) => ({ id: `invoice-${record.id}`, kind: "invoice" as const, date: timestampDate(record.createdAt), title: `Invoice ${record.invoiceNumber}`, detail: `₹${record.amountPaid || 0} received of ₹${record.total || 0}`, status: record.paymentStatus })) : []),
     ];
     return items.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  }, [growthRecords, invoices, labOrders, pregnancyRecords, prescriptions, reports, vaccinations, visits]);
+  }, [growthRecords, invoices, labOrders, pregnancyRecords, prescriptions, recordAccess, reports, vaccinations, visits]);
 
   const visiblePatients = useMemo(
     () => search.trim() ? (patientSearchReady(search) ? searchResults : []) : patientPool,
@@ -980,14 +1147,19 @@ function PatientRegister() {
 
   const tabs: Array<{ key: TabKey; label: string; icon: typeof Activity; count?: number }> = [
     { key: "overview", label: "Overview", icon: UserRound },
-    { key: "timeline", label: "Timeline", icon: History, count: timeline.length },
+    {
+      key: "timeline",
+      label: "Timeline",
+      icon: History,
+      count: patientRecordSectionsAreReady(recordLoadState, timelineRecordSections) ? timeline.length : undefined,
+    },
     ...(canEditClinical ? [
-      { key: "visits" as const, label: "Visits", icon: Stethoscope, count: visits.length },
-      { key: "prescriptions" as const, label: "Prescriptions", icon: FileHeart, count: prescriptions.length },
-      { key: "growth" as const, label: "Growth", icon: ChartNoAxesCombined, count: growthRecords.length },
-      { key: "vaccinations" as const, label: "Vaccinations", icon: Syringe, count: vaccinations.length },
-      { key: "pregnancy" as const, label: "Pregnancy", icon: Baby, count: pregnancyRecords.length },
-      { key: "reports" as const, label: "Reports", icon: FileText, count: reports.length },
+      { key: "visits" as const, label: "Visits", icon: Stethoscope, count: patientRecordSectionCount(recordLoadState, "visits", visits.length) },
+      { key: "prescriptions" as const, label: "Prescriptions", icon: FileHeart, count: patientRecordSectionCount(recordLoadState, "prescriptions", prescriptions.length) },
+      { key: "growth" as const, label: "Growth", icon: ChartNoAxesCombined, count: patientRecordSectionCount(recordLoadState, "growthRecords", growthRecords.length) },
+      { key: "vaccinations" as const, label: "Vaccinations", icon: Syringe, count: patientRecordSectionCount(recordLoadState, "vaccinations", vaccinations.length) },
+      { key: "pregnancy" as const, label: "Pregnancy", icon: Baby, count: patientRecordSectionCount(recordLoadState, "pregnancyRecords", pregnancyRecords.length) },
+      { key: "reports" as const, label: "Reports", icon: FileText, count: patientRecordSectionCount(recordLoadState, "reports", reports.length) },
     ] : []),
   ];
 
@@ -1076,21 +1248,32 @@ function PatientRegister() {
                   </div>
                 </div>
               </div>
-              {selectedPatient.archived === true ? (
+              {!selectedProfileIsHydrated ? (
+                <div role="status" aria-live="polite" className="flex items-center gap-3 border-b border-slate-200 bg-blue-50 px-5 py-4 text-sm font-semibold text-blue-950 sm:px-7">
+                  <LoaderCircle size={18} className="shrink-0 animate-spin" /> Verifying this patient record for your account…
+                </div>
+              ) : selectedPatient.archived === true ? (
                 <div className="border-b border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-950 sm:px-7"><strong>Archived record.</strong> Daily actions and clinical editing are paused. {selectedPatient.archiveReason ? `Reason: ${selectedPatient.archiveReason}` : "Restore the patient to resume care."}</div>
               ) : <PatientQuickActions patient={selectedPatient} />}
               <div className="sticky top-[65px] z-20 flex gap-2 overflow-x-auto border-b border-slate-200 bg-white p-2.5 shadow-sm sm:top-[69px]">
-                {tabs.map(({ key, label, icon: Icon, count }) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={"inline-flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-bold " + (activeTab === key ? "bg-[#233A59] text-white" : "text-slate-600 hover:bg-slate-100")}><Icon size={16} />{label}{typeof count === "number" && <span className="rounded-full bg-white/15 px-1.5 text-xs">{count}</span>}</button>)}
+                {tabs.map(({ key, label, icon: Icon, count }) => <button key={key} type="button" onClick={() => openPatientTab(key)} className={"inline-flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-bold " + (activeTab === key ? "bg-[#233A59] text-white" : "text-slate-600 hover:bg-slate-100")}><Icon size={16} />{label}{typeof count === "number" && <span className="rounded-full bg-white/15 px-1.5 text-xs">{count}</span>}</button>)}
               </div>
               <div className="p-5 sm:p-7">
-                {activeTab === "overview" && <Overview canEditDemographics={canEditDemographics && canEditSelectedProfile} canEditClinical={canModifySelectedPatient} canEditProfile={canEditSelectedProfile} canViewClinical={canEditClinical} patient={selectedPatient} showEdit={showEdit} setShowEdit={setShowEdit} editPatient={editPatient} saving={saving} />}
-                {activeTab === "timeline" && <TimelinePanel items={timeline} vaccinations={vaccinations} pregnancyRecords={pregnancyRecords} />}
-                {activeTab === "visits" && <VisitsPanel canEdit={canModifySelectedPatient} signedDoctorName={profile.role === "doctor" ? profile.doctorName : undefined} records={visits} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "visits", { visitDate: text(form, "visitDate"), doctorName: text(form, "doctorName"), chiefComplaint: text(form, "chiefComplaint"), vitals: text(form, "vitals"), diagnosis: text(form, "diagnosis"), treatment: text(form, "treatment"), followUpDate: text(form, "followUpDate"), notes: text(form, "notes") }); }} />}
-                {activeTab === "prescriptions" && <PrescriptionsPanel canEdit={canModifySelectedPatient} signedDoctorName={profile.role === "doctor" ? profile.doctorName : undefined} patient={selectedPatient} records={prescriptions} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "prescriptions", { prescribedDate: text(form, "prescribedDate"), doctorName: text(form, "doctorName"), medicines: [{ name: text(form, "medicineName"), dose: text(form, "dose"), frequency: text(form, "frequency"), duration: text(form, "duration"), instructions: text(form, "instructions") }], advice: text(form, "advice") }); }} />}
-                {activeTab === "growth" && <GrowthPanel canEdit={canModifySelectedPatient} records={growthRecords} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); const weightKg = numericValue(form, "weightKg"); const heightCm = numericValue(form, "heightCm"); const headCircumferenceCm = numericValue(form, "headCircumferenceCm"); if (!weightKg && !heightCm && !headCircumferenceCm) { event.preventDefault(); setMessage("Add at least one growth measurement before saving."); return Promise.resolve(); } const bmi = weightKg && heightCm ? Number((weightKg / ((heightCm / 100) ** 2)).toFixed(1)) : null; return saveRecord(event, "growthRecords", { measuredDate: text(form, "measuredDate"), weightKg, heightCm, headCircumferenceCm, bmi, milestone: text(form, "milestone"), nutritionNotes: text(form, "nutritionNotes"), clinician: text(form, "clinician") }); }} />}
-                {activeTab === "vaccinations" && <VaccinationsPanel canEdit={canModifySelectedPatient} records={vaccinations} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "vaccinations", { vaccineName: text(form, "vaccineName"), doseNumber: text(form, "doseNumber"), administeredDate: text(form, "administeredDate"), nextDueDate: text(form, "nextDueDate"), batchNumber: text(form, "batchNumber"), manufacturer: text(form, "manufacturer"), expiryDate: text(form, "expiryDate"), route: text(form, "route"), site: text(form, "site"), administeredBy: text(form, "administeredBy"), adverseEvents: text(form, "adverseEvents"), notes: text(form, "notes") }); }} />}
-                {activeTab === "pregnancy" && <PregnancyPanel canEdit={canModifySelectedPatient} records={pregnancyRecords} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "pregnancyRecords", { recordedDate: text(form, "recordedDate"), lmpDate: text(form, "lmpDate"), eddDate: text(form, "eddDate"), gestationalWeeks: text(form, "gestationalWeeks"), bloodPressure: text(form, "bloodPressure"), weight: text(form, "weight"), fetalHeartRate: text(form, "fetalHeartRate"), nextVisitDate: text(form, "nextVisitDate"), gravida: text(form, "gravida"), para: text(form, "para"), riskLevel: text(form, "riskLevel"), riskFactors: text(form, "riskFactors"), symptoms: text(form, "symptoms"), fundalHeight: text(form, "fundalHeight"), fetalMovement: text(form, "fetalMovement"), investigations: text(form, "investigations"), carePlan: text(form, "carePlan"), notes: text(form, "notes") }); }} />}
-                {activeTab === "reports" && <ReportsPanel records={reports} uploading={uploading} action={reportAction} onUpload={canModifySelectedPatient ? uploadReport : undefined} onAccess={accessReport} />}
+                {activeTab === "overview" && (selectedProfileIsHydrated
+                  ? <Overview canEditDemographics={canEditDemographics && canEditSelectedProfile} canEditClinical={canModifySelectedPatient} canEditProfile={canEditSelectedProfile} canViewClinical={canEditClinical} patient={selectedPatient} showEdit={showEdit} setShowEdit={setShowEdit} editPatient={editPatient} saving={saving} />
+                  : <div role="status" className="flex min-h-48 items-center justify-center rounded-3xl border border-slate-200 bg-white p-8 text-center"><div><LoaderCircle className="mx-auto animate-spin text-[#233A59]" size={28} /><p className="mt-4 font-bold text-[#233A59]">Loading patient profile…</p></div></div>)}
+                {activeTab !== "overview" && activeTab !== "timeline" && !canEditClinical && <p role="status" className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-700">Your current role does not have access to this section. Choose Overview or Timeline to continue.</p>}
+                {activeTab !== "overview" && (activeTab === "timeline" || canEditClinical) && (
+                  <PatientRecordSectionBoundary sections={requiredRecordSections} state={recordLoadState} onRetry={retryPatientRecords}>
+                    {activeTab === "timeline" && <TimelinePanel items={timeline} vaccinations={canEditClinical ? vaccinations : []} pregnancyRecords={canEditClinical ? pregnancyRecords : []} />}
+                    {activeTab === "visits" && <VisitsPanel canEdit={canModifySelectedPatient} signedDoctorName={profile.role === "doctor" ? profile.doctorName : undefined} records={visits} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "visits", { visitDate: text(form, "visitDate"), doctorName: text(form, "doctorName"), chiefComplaint: text(form, "chiefComplaint"), vitals: text(form, "vitals"), diagnosis: text(form, "diagnosis"), treatment: text(form, "treatment"), followUpDate: text(form, "followUpDate"), notes: text(form, "notes") }); }} />}
+                    {activeTab === "prescriptions" && <PrescriptionsPanel canEdit={canModifySelectedPatient} signedDoctorName={profile.role === "doctor" ? profile.doctorName : undefined} patient={selectedPatient} records={prescriptions} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "prescriptions", { prescribedDate: text(form, "prescribedDate"), doctorName: text(form, "doctorName"), medicines: [{ name: text(form, "medicineName"), dose: text(form, "dose"), frequency: text(form, "frequency"), duration: text(form, "duration"), instructions: text(form, "instructions") }], advice: text(form, "advice") }); }} />}
+                    {activeTab === "growth" && <GrowthPanel canEdit={canModifySelectedPatient} records={growthRecords} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); const weightKg = numericValue(form, "weightKg"); const heightCm = numericValue(form, "heightCm"); const headCircumferenceCm = numericValue(form, "headCircumferenceCm"); if (!weightKg && !heightCm && !headCircumferenceCm) { event.preventDefault(); setMessage("Add at least one growth measurement before saving."); return Promise.resolve(); } const bmi = weightKg && heightCm ? Number((weightKg / ((heightCm / 100) ** 2)).toFixed(1)) : null; return saveRecord(event, "growthRecords", { measuredDate: text(form, "measuredDate"), weightKg, heightCm, headCircumferenceCm, bmi, milestone: text(form, "milestone"), nutritionNotes: text(form, "nutritionNotes"), clinician: text(form, "clinician") }); }} />}
+                    {activeTab === "vaccinations" && <VaccinationsPanel canEdit={canModifySelectedPatient} records={vaccinations} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "vaccinations", { vaccineName: text(form, "vaccineName"), doseNumber: text(form, "doseNumber"), administeredDate: text(form, "administeredDate"), nextDueDate: text(form, "nextDueDate"), batchNumber: text(form, "batchNumber"), manufacturer: text(form, "manufacturer"), expiryDate: text(form, "expiryDate"), route: text(form, "route"), site: text(form, "site"), administeredBy: text(form, "administeredBy"), adverseEvents: text(form, "adverseEvents"), notes: text(form, "notes") }); }} />}
+                    {activeTab === "pregnancy" && <PregnancyPanel canEdit={canModifySelectedPatient} records={pregnancyRecords} saving={saving} onSave={(event) => { const form = new FormData(event.currentTarget); return saveRecord(event, "pregnancyRecords", { recordedDate: text(form, "recordedDate"), lmpDate: text(form, "lmpDate"), eddDate: text(form, "eddDate"), gestationalWeeks: text(form, "gestationalWeeks"), bloodPressure: text(form, "bloodPressure"), weight: text(form, "weight"), fetalHeartRate: text(form, "fetalHeartRate"), nextVisitDate: text(form, "nextVisitDate"), gravida: text(form, "gravida"), para: text(form, "para"), riskLevel: text(form, "riskLevel"), riskFactors: text(form, "riskFactors"), symptoms: text(form, "symptoms"), fundalHeight: text(form, "fundalHeight"), fetalMovement: text(form, "fetalMovement"), investigations: text(form, "investigations"), carePlan: text(form, "carePlan"), notes: text(form, "notes") }); }} />}
+                    {activeTab === "reports" && <ReportsPanel records={reports} uploading={uploading} action={reportAction} onUpload={canModifySelectedPatient ? uploadReport : undefined} onAccess={accessReport} />}
+                  </PatientRecordSectionBoundary>
+                )}
               </div>
             </div>
           )}
