@@ -558,9 +558,10 @@ function PatientRegister() {
     [recordAccess],
   );
   const openPatientTab = useCallback((tab: TabKey) => {
+    if (tab === activeTab) return;
     setRecordLoadState(preparePatientRecordSections(patientRecordSectionsForTab(tab, recordAccess)));
     setActiveTab(tab);
-  }, [recordAccess]);
+  }, [activeTab, recordAccess]);
   const retryPatientRecords = useCallback(() => {
     setRecordLoadState(preparePatientRecordSections(requiredRecordSections));
     setRecordReloadVersion((version) => version + 1);

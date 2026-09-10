@@ -86,6 +86,7 @@ test("patient page guards subscriptions against stale selection and exposes retr
   assert.match(source, /const clinicalItems: TimelineItem\[\] = recordAccess\.canViewClinical/);
   assert.match(source, /recordAccess\.canViewInvoices \? invoices\.map/);
   assert.match(source, /PatientRecordSectionBoundary/);
+  assert.match(source, /if \(tab === activeTab\) return;/);
   assert.match(source, /activeTab !== "overview" && \(activeTab === "timeline" \|\| canEditClinical\)/);
   assert.match(source, /vaccinations=\{canEditClinical \? vaccinations : \[\]\}/);
   assert.match(source, /pregnancyRecords=\{canEditClinical \? pregnancyRecords : \[\]\}/);
