@@ -11,6 +11,7 @@
 - Loading, verified empty, and error states are distinct. Unverified counts are not displayed as zero.
 - Today opens the exact appointment. Follow-up and Reminder actions retain the verified patient without exposing identifiers in URLs or persistent browser storage.
 - Rapid handoff requests ignore stale responses. Reminder actions stay unavailable until the linked patient is verified.
+- Appointment reminders explicitly use the existing descending date index. This corrects the live Reminder desk loading error without changing indexes or permissions.
 
 ## Unchanged safeguards
 
@@ -23,3 +24,11 @@ Run the complete unit suite, ESLint, and a production build. Check public bookin
 Before production promotion, an authenticated clinic reviewer should verify Today → exact appointment, Patient → Follow-up, Patient → Remind, and patient switching across individual record tabs and Timeline. Live authenticated write flows require an approved disposable profile; passing code tests alone is not evidence that every production workflow has been exercised.
 
 Local visual builds can use a non-production demo Firebase identifier. Only the Git source is pushed; Cloudflare rebuilds with the existing deployment configuration. Local generated `out` and `.next` directories must never be committed or uploaded as a production release.
+
+## Signed-in preview checks — 11 September 2026
+
+- Patient directory, overview, visit history and all eight Timeline sections loaded successfully. Repeatedly tapping the active Visits tab kept its verified empty state ready.
+- Patient → Follow-up opened a form with the correct verified patient and no identity in the URL. The form was cancelled without saving.
+- Patient → Remind preserved the correct patient filter. This check exposed the appointment date-query/index mismatch addressed by the regression fix above; the corrected preview must be checked again after deployment.
+- No patient, appointment, task, reminder, payment or clinical record was created, edited or deleted by these checks.
+- Exact Today → appointment navigation and switching between two distinct active patients could not be exercised with the available live records. They remain covered by automated tests, not by a live multi-patient smoke check. Saving tasks, sending reminders and non-admin role sessions were not exercised.

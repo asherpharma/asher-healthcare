@@ -1,13 +1,52 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
   assertCommunicationStaff,
   communicationStaffPrecondition,
+  dueAppointmentQuery,
   normalizeCommunicationPhone,
   projectCommunicationDesk,
   validateConsentGrant,
 } from "../server/communications/workflow.js";
+
+test("appointment reminder lookup uses the deployed descending date index", () => {
+  const query = dueAppointmentQuery("2026-08-14");
+  assert.deepEqual(query.where.fieldFilter, {
+    field: { fieldPath: "preferredDate" },
+    op: "EQUAL",
+    value: { stringValue: "2026-08-14" },
+  });
+  assert.deepEqual(query.orderBy, [{
+    field: { fieldPath: "preferredDate" },
+    direction: "DESCENDING",
+  }]);
+  assert.deepEqual(query.select.fields.map(({ fieldPath }) => fieldPath), [
+    "patientId",
+    "patientName",
+    "phone",
+    "doctorId",
+    "preferredDate",
+    "preferredTime",
+    "status",
+    "source",
+  ]);
+  assert.equal(query.limit, 150);
+
+  const indexes = JSON.parse(
+    readFileSync(new URL("../firestore.indexes.json", import.meta.url), "utf8"),
+  );
+  const preferredDateOverride = indexes.fieldOverrides.find((override) => (
+    override.collectionGroup === "appointments"
+    && override.fieldPath === "preferredDate"
+  ));
+  assert.ok(preferredDateOverride);
+  assert.ok(preferredDateOverride.indexes.some((index) => (
+    index.queryScope === "COLLECTION"
+    && index.order === query.orderBy[0].direction
+  )));
+});
 
 test("only administrators and reception may operate the reminder desk", () => {
   assert.equal(assertCommunicationStaff({ role: "admin" }).role, "admin");

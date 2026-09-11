@@ -259,10 +259,14 @@ function maskedRecipient(value, channel) {
   return digits.length >= 4 ? `••••••${digits.slice(-4)}` : "";
 }
 
-function dueAppointmentQuery(date) {
+export function dueAppointmentQuery(date) {
   return {
     from: [{ collectionId: "appointments" }],
     where: filter("preferredDate", "EQUAL", { stringValue: date }),
+    orderBy: [{
+      field: { fieldPath: "preferredDate" },
+      direction: "DESCENDING",
+    }],
     select: { fields: [
       "patientId", "patientName", "phone", "doctorId", "preferredDate",
       "preferredTime", "status", "source",
