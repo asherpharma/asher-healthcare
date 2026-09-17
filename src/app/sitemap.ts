@@ -29,6 +29,11 @@ export default function sitemap(): MetadataRoute.Sitemap {
       images: [`${origin}/images/womens-care-consultation-v2.webp`],
     },
     {
+      url: `${origin}/care/general-care-lab-tests`,
+      changeFrequency: "monthly",
+      priority: 0.8,
+    },
+    {
       url: `${origin}/patient-rights`,
       changeFrequency: "yearly",
       priority: 0.4,

@@ -1,5 +1,6 @@
 import Navbar from "@/components/layout/Navbar";
 import Hero from "@/components/home/Hero";
+import GeneralCare from "@/components/home/GeneralCare";
 import Services from "@/components/home/Services";
 import CarePathways from "@/components/home/CarePathways";
 import WhyChooseUs from "@/components/home/WhyChooseUs";
@@ -81,6 +82,7 @@ export default function Home() {
       <Navbar />
       <main id="main-content">
         <Hero />
+        <GeneralCare />
         <Services />
         <CarePathways />
         <WhyChooseUs />
