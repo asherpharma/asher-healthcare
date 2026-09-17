@@ -24,6 +24,7 @@ export default function Footer() {
           <Link href="/#care">Care guide</Link>
           <Link href="/care/pediatrics">Pediatrics</Link>
           <Link href="/care/womens-health">Women&apos;s health</Link>
+          <Link href="/care/general-care-lab-tests">General care &amp; lab tests</Link>
           <Link href="/#doctors">Doctors</Link>
           <Link href="/#appointment">Appointments</Link>
         </div>
