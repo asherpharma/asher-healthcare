@@ -16,7 +16,7 @@ export default function PrivacyPage() {
     >
       <section>
         <h2>Information we collect</h2>
-        <p>When you book an appointment or receive care, we may collect your name, phone number, age or date of birth, appointment preferences, clinical records, prescriptions, reports and payment information. Website analytics may collect limited technical information such as device type and pages visited.</p>
+        <p>When you book an appointment or receive care, we may collect your name, phone number, age or date of birth, appointment preferences, clinical records, prescriptions, reports and payment information. We do not use appointment-form or medical details for advertising measurement.</p>
       </section>
       <section>
         <h2>How information is used</h2>
@@ -36,7 +36,12 @@ export default function PrivacyPage() {
       </section>
       <section>
         <h2>Service providers</h2>
-        <p>We use carefully selected providers to operate the service, including Firebase for secure application infrastructure, Cloudflare for website delivery and protection, Google Analytics for limited website measurement, and Razorpay when online payment services are enabled. These providers process information under their own security and privacy terms.</p>
+        <p>We use carefully selected providers to operate the service, including Firebase for secure application infrastructure, Cloudflare for website delivery and protection, Google Ads for optional advertising measurement, and Razorpay when online payment services are enabled. These providers process information under their own security and privacy terms.</p>
+      </section>
+      <section>
+        <h2>Optional advertising measurement</h2>
+        <p>Google Ads measurement is used only on the homepage and remains off until you choose to allow it there. After you opt in, the homepage immediately loads the Google Ads tag and begins technical requests. Google may use cookies and receives the homepage address and title, plus information such as the IP address, browser details and advertising-click information. Clicking the clinic phone or directions link sends a separate click-measurement event. We count these as link clicks, not as completed calls, appointments or clinic visits. We do not intentionally send appointment-form fields, medical details or patient identifiers, and advertising personalisation remains disabled.</p>
+        <p>You can decline without losing access to any website feature. From the homepage, you can reopen “Measurement preferences” and stop future measurement; the page reloads with the Google tag blocked.</p>
       </section>
       <section>
         <h2>Security and retention</h2>
