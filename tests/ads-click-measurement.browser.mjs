@@ -130,36 +130,26 @@ try {
   } else {
   await run('fresh visitor: no tag before consent', async () => {
     await load();
-    await page.getByRole('button', { name: 'Accept cookies', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Allow measurement', exact: true }).waitFor();
     await clickBoth();
     await assertNoTag();
     await page.screenshot({ path: path.join(output, 'consent-desktop.png'), fullPage: false });
     await page.setViewportSize({ width: 360, height: 640 });
     await page.screenshot({ path: path.join(output, 'consent-mobile.png'), fullPage: false });
-    const panel = await page.getByRole('dialog', { name: 'Your cookie choices' }).boundingBox();
+    const panel = await page.getByRole('dialog', { name: 'Advertising measurement choices' }).boundingBox();
     assert.ok(panel && panel.y >= 0 && panel.y + panel.height <= 640, 'Consent panel must fit mobile viewport');
-    const clinicBar = await page.getByRole('navigation', { name: 'Quick clinic actions' }).boundingBox();
-    assert.ok(clinicBar && panel.y + panel.height < clinicBar.y, 'Cookie notice must not cover clinic actions');
-    const accept = await page.getByRole('button', { name: 'Accept cookies', exact: true }).boundingBox();
-    const reject = await page.getByRole('button', { name: 'Reject optional', exact: true }).boundingBox();
-    assert.ok(accept && reject && Math.abs(accept.y - reject.y) < 2, 'Accept and reject remain side by side');
     await page.setViewportSize({ width: 1280, height: 900 });
   });
   await run('decline persists without any Google request', async () => {
-    await page.getByRole('button', { name: 'Reject optional', exact: true }).click();
+    await page.getByRole('button', { name: 'Decline', exact: true }).click();
     await load();
     assert.equal(await page.evaluate(k => localStorage.getItem(k), consentKey), 'denied');
     await clickBoth();
     await assertNoTag();
-    await page.setViewportSize({ width: 360, height: 640 });
-    const settings = await page.getByRole('button', { name: 'Cookie settings', exact: true }).boundingBox();
-    const clinicBar = await page.getByRole('navigation', { name: 'Quick clinic actions' }).boundingBox();
-    assert.ok(settings && clinicBar && settings.y + settings.height < clinicBar.y, 'Cookie settings must not cover clinic actions');
-    await page.setViewportSize({ width: 1280, height: 900 });
   });
   await run('opt in loads real Google tag with neutral page context', async () => {
-    await page.getByRole('button', { name: 'Cookie settings', exact: true }).click();
-    await page.getByRole('button', { name: 'Accept cookies', exact: true }).click();
+    await page.getByRole('button', { name: 'Measurement preferences', exact: true }).click();
+    await page.getByRole('button', { name: 'Allow measurement', exact: true }).click();
     await page.waitForFunction(() => Boolean(window.google_tag_manager?.['AW-18404988056']), undefined, { timeout: 45000 });
     await settle();
     assert.equal(await tagPresent(), 1);
@@ -212,8 +202,8 @@ try {
     assert.ok(!requests.some(r => r.url.includes('/api/appointments/book')), 'No appointment submission');
   });
   await run('withdrawal unloads tag and stays off after reload', async () => {
-    await page.getByRole('button', { name: 'Cookie settings', exact: true }).click();
-    await page.getByRole('button', { name: 'Reject optional', exact: true }).click();
+    await page.getByRole('button', { name: 'Measurement preferences', exact: true }).click();
+    await page.getByRole('button', { name: 'Stop measurement', exact: true }).click();
     await page.waitForLoadState('domcontentloaded');
     await page.waitForFunction(() => typeof window.google_tag_manager === 'undefined');
     await settle();

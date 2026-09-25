@@ -148,7 +148,7 @@ test("general-care landing page is discoverable without changing specialist book
   assert.match(sitemap, /\/care\/general-care-lab-tests/u);
 });
 
-test("optional Ads click measurement fails closed and records only fixed clinic links", async () => {
+test("legacy Ads code remains unmounted while production uses first-party measurement", async () => {
   const layout = await readFile(path.join(root, "src/app/layout.tsx"), "utf8");
   const measurement = await readFile(
     path.join(root, "src/components/analytics/AdsClickMeasurement.tsx"),
@@ -156,7 +156,8 @@ test("optional Ads click measurement fails closed and records only fixed clinic 
   );
 
   assert.match(layout, /<meta content="no-referrer" name="referrer" \/>/u);
-  assert.match(layout, /<AdsClickMeasurement \/>/u);
+  assert.doesNotMatch(layout, /AdsClickMeasurement/u);
+  assert.match(layout, /<HomepageMeasurement \/>/u);
   assert.match(measurement, /NEXT_PUBLIC_GOOGLE_ADS_ID/u);
   assert.match(measurement, /NEXT_PUBLIC_GOOGLE_ADS_CLICK_MEASUREMENT_ENABLED/u);
   assert.match(measurement, /NEXT_PUBLIC_GOOGLE_ADS_PHONE_CLICK_LABEL/u);
@@ -238,13 +239,10 @@ test("Ads tag is opt-in only, non-personalised, and insulated from care context"
   );
   assert.match(measurement, /this homepage immediately loads Google Ads/u);
   assert.match(measurement, /this homepage\s+address and title/u);
-  assert.match(privacy, /used only on the homepage/u);
-  assert.match(privacy, /immediately loads the Google Ads tag and begins technical requests/u);
-  assert.match(privacy, /homepage address and title/u);
-  assert.match(privacy, /IP address, browser details and advertising-click information/u);
-  assert.match(privacy, /link clicks, not as completed calls, appointments or clinic visits/u);
-  assert.match(privacy, /advertising personalisation remains disabled/u);
-  assert.match(privacy, /From the homepage, you can reopen “Cookie settings”/u);
+  assert.match(privacy, /Cookie-free homepage statistics/u);
+  assert.match(privacy, /store only daily totals/u);
+  assert.match(privacy, /not a completed call, appointment or clinic visit/u);
+  assert.match(privacy, /no longer loads the Google Ads measurement tag/u);
 });
 
 test("homepage measurement boundaries render as native document links", async () => {

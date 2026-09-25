@@ -227,7 +227,7 @@ test("no Google script or events before consent, after decline, or without confi
     assert.equal(app.commands.length, 0);
   }
   const app = harness();
-  app.button("Reject optional");
+  app.button("Decline");
   assert.equal(app.storage.get(consentKey), "denied");
   assert.equal(app.scripts.length, 0);
   assert.equal(app.click(phone).defaultPrevented, false, "declining preserves links");
@@ -239,7 +239,7 @@ test("initialization rereads consent instead of trusting a stale hydration or op
   assert.equal(staleHydration.scripts.length, 0);
   assert.equal(staleHydration.commands.length, 0);
   const staleOptIn = harness({ revokeAfterConsentWrite: true });
-  staleOptIn.button("Accept cookies");
+  staleOptIn.button("Allow measurement");
   assert.equal(staleOptIn.storage.get(consentKey), "denied");
   assert.equal(staleOptIn.scripts.length, 0);
   assert.equal(staleOptIn.commands.length, 0);
@@ -247,7 +247,7 @@ test("initialization rereads consent instead of trusting a stale hydration or op
 
 test("opt-in queues official Arguments commands with neutral context before script insertion", () => {
   const app = harness({ url: "https://asherhealthcare.in/?gclid=synthetic#contact" });
-  app.button("Accept cookies");
+  app.button("Allow measurement");
   assert.equal(app.scripts.length, 1);
   assert.equal(app.scripts[0].referrerPolicy, "no-referrer");
   assert.equal(app.scripts[0].src, "https://www.googletagmanager.com/gtag/js?id=AW-123456789");
@@ -266,8 +266,8 @@ test("opt-in queues official Arguments commands with neutral context before scri
     assert.ok(normalized.some(([command, key, value]) => command === "set" && key === signal && value === false));
   }
   assert.doesNotMatch(JSON.stringify(normalized), /synthetic|private-referrer|private page title|general-care-lab-tests/);
-  app.button("Cookie settings");
-  app.button("Keep accepted");
+  app.button("Measurement preferences");
+  app.button("Keep measurement on");
   assert.equal(app.scripts.length, 1, "rerenders must not duplicate script initialization");
 });
 
@@ -288,8 +288,8 @@ test("only exact clinic phone/directions links emit minimal intent events and pr
 
 test("withdrawal blocks later clicks, clears only ad cookies, and reloads to unload Google", () => {
   const app = harness({ choice: "granted" });
-  app.button("Cookie settings");
-  app.button("Reject optional");
+  app.button("Measurement preferences");
+  app.button("Stop measurement");
   assert.equal(app.storage.get(consentKey), "denied");
   assert.equal(app.window.__asherAdsClickMeasurementEnabled, false);
   assert.equal(app.reloads, 1);
@@ -445,7 +445,7 @@ test("unmount cleanup removes conversion click handlers", () => {
 
 test("inaccessible consent storage fails closed on explicit opt-in", () => {
   const app = harness({ storageFails: true });
-  app.button("Accept cookies");
+  app.button("Allow measurement");
   assert.equal(app.scripts.length, 0);
   assert.equal(app.conversions.length, 0);
 });
