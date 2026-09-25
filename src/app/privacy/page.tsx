@@ -41,7 +41,7 @@ export default function PrivacyPage() {
       <section>
         <h2>Optional advertising measurement</h2>
         <p>Google Ads measurement is used only on the homepage and remains off until you choose to allow it there. After you opt in, the homepage immediately loads the Google Ads tag and begins technical requests. Google may use cookies and receives the homepage address and title, plus information such as the IP address, browser details and advertising-click information. Clicking the clinic phone or directions link sends a separate click-measurement event. We count these as link clicks, not as completed calls, appointments or clinic visits. We do not intentionally send appointment-form fields, medical details or patient identifiers, and advertising personalisation remains disabled.</p>
-        <p>You can decline without losing access to any website feature. From the homepage, you can reopen “Measurement preferences” and stop future measurement; the page reloads with the Google tag blocked.</p>
+        <p>You can decline without losing access to any website feature. From the homepage, you can reopen “Cookie settings” and select “Reject optional” to stop future Google Ads measurement; the page reloads with the Google tag blocked. These controls apply only to optional Google Ads measurement, not essential site cookies or separate Cloudflare analytics.</p>
       </section>
       <section>
         <h2>Security and retention</h2>
