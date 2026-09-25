@@ -33,7 +33,9 @@ jobs:
         run: npm ci
 
       - name: Install locked booking alert worker dependencies
-        run: npm ci --prefix notification-functions --ignore-scripts --no-audit --no-fund
+        # npm 10 misresolves the reviewed nested gaxios -> uuid override.
+        # Pin only this installer; preserve the lockfile and UUID security patch.
+        run: npm exec --yes --package=npm@11.6.0 --ignore-scripts --no-audit --no-fund -- npm ci --prefix notification-functions --ignore-scripts --no-audit --no-fund
 
       - name: Check booking alert worker without sending notifications
         working-directory: notification-functions
