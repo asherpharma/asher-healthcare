@@ -147,3 +147,135 @@ test("general-care landing page is discoverable without changing specialist book
   assert.match(footer, /href="\/care\/general-care-lab-tests"/u);
   assert.match(sitemap, /\/care\/general-care-lab-tests/u);
 });
+
+test("optional Ads click measurement fails closed and records only fixed clinic links", async () => {
+  const layout = await readFile(path.join(root, "src/app/layout.tsx"), "utf8");
+  const measurement = await readFile(
+    path.join(root, "src/components/analytics/AdsClickMeasurement.tsx"),
+    "utf8",
+  );
+
+  assert.match(layout, /<meta content="no-referrer" name="referrer" \/>/u);
+  assert.match(layout, /<AdsClickMeasurement \/>/u);
+  assert.match(measurement, /NEXT_PUBLIC_GOOGLE_ADS_ID/u);
+  assert.match(measurement, /NEXT_PUBLIC_GOOGLE_ADS_CLICK_MEASUREMENT_ENABLED/u);
+  assert.match(measurement, /NEXT_PUBLIC_GOOGLE_ADS_PHONE_CLICK_LABEL/u);
+  assert.match(measurement, /NEXT_PUBLIC_GOOGLE_ADS_DIRECTIONS_CLICK_LABEL/u);
+  assert.match(measurement, /if \(!isConfigured \|\| blockedHere \|\| !isReady\) return null;/u);
+  assert.match(measurement, /const PHONE_HREF = "tel:\+919019263709";/u);
+  assert.match(
+    measurement,
+    /const DIRECTIONS_HREF = "https:\/\/maps\.app\.goo\.gl\/cvFLUCkF6nRPAHUx5";/u,
+  );
+  assert.match(measurement, /href === PHONE_HREF/u);
+  assert.match(measurement, /href === DIRECTIONS_HREF/u);
+  assert.match(measurement, /window\.gtag\("event", "conversion"/u);
+  assert.match(measurement, /send_to: `\$\{adsId\}\/\$\{label\}`/u);
+  assert.doesNotMatch(
+    measurement,
+    /\bvalue\s*:|\bcurrency\s*:|gtag\([^)]*["']set["'][^)]*["']user_data["']|enhanced_conversions/u,
+  );
+});
+
+test("Ads tag is opt-in only, non-personalised, and insulated from care context", async () => {
+  const measurement = await readFile(
+    path.join(root, "src/components/analytics/AdsClickMeasurement.tsx"),
+    "utf8",
+  );
+  const carePathways = await readFile(
+    path.join(root, "src/components/home/CarePathways.tsx"),
+    "utf8",
+  );
+  const privacy = await readFile(path.join(root, "src/app/privacy/page.tsx"), "utf8");
+
+  const grantIndex = measurement.indexOf('choice !== "granted"');
+  const initializeIndex = measurement.lastIndexOf("initializeAdsMeasurement()");
+  const scriptIndex = measurement.indexOf('document.createElement("script")');
+  assert.ok(grantIndex >= 0 && initializeIndex > grantIndex);
+  assert.ok(scriptIndex >= 0);
+  assert.match(measurement, /ad_storage: "denied"/u);
+  assert.match(measurement, /ad_user_data: "denied"/u);
+  assert.match(measurement, /ad_personalization: "denied"/u);
+  assert.match(measurement, /analytics_storage: "denied"/u);
+  assert.match(measurement, /allow_ad_personalization_signals", false/u);
+  assert.match(measurement, /allow_google_signals", false/u);
+  assert.match(measurement, /allow_interest_groups", false/u);
+  assert.match(measurement, /ads_data_redaction", true/u);
+  assert.match(measurement, /function gtag\(\) \{/u);
+  assert.match(measurement, /window\.dataLayer\?\.push\(arguments\)/u);
+  assert.match(measurement, /page_location: "https:\/\/asherhealthcare\.in\/"/u);
+  assert.match(measurement, /page_referrer: ""/u);
+  assert.match(measurement, /page_title: "Asher Healthcare"/u);
+  assert.match(measurement, /const allowedPublicPaths = new Set\(\["\/"\]\);/u);
+  assert.doesNotMatch(measurement, /allowedPublicPathPrefixes/u);
+  assert.match(measurement, /const blockedHere = !isAllowedPublicPath\(pathname\)/u);
+  assert.match(measurement, /hasAllowedInitialHomepageUrlContext/u);
+  assert.match(measurement, /readStoredChoice\(\) !== "granted"/u);
+  assert.match(measurement, /forceHomepageDocumentBoundary/u);
+  assert.match(measurement, /destinationHasAllowedHomepageContext/u);
+  assert.match(measurement, /entersUnsafeHomepageContext/u);
+  assert.match(measurement, /event\.persisted/u);
+  assert.match(measurement, /documentBoundaryChanged \|\|/u);
+  assert.match(measurement, /!tagBlocked \|\|/u);
+  assert.match(measurement, /!window\.__asherAdsClickMeasurementEnabled/u);
+  assert.match(measurement, /window\.location\.reload\(\)/u);
+  assert.match(measurement, /function readStoredChoice/u);
+  assert.match(measurement, /function storeChoice/u);
+  assert.match(
+    measurement,
+    /hasOnlyAllowedQueryKeys\(new URLSearchParams\(window\.location\.search\)\)/u,
+  );
+  assert.match(measurement, /allowedHashes\.has\(window\.location\.hash\)/u);
+  assert.match(measurement, /!hasAllowedHomepageUrlContext\(\)/u);
+  for (const hash of ["#care", "#journey", "#clinic", "#main-content"]) {
+    assert.ok(measurement.includes(`"${hash}"`), `${hash} should remain a safe homepage anchor`);
+  }
+  assert.doesNotMatch(carePathways, /history\.replaceState|searchParams\.set\("care"/u);
+  assert.match(carePathways, /new CustomEvent\(CARE_SELECTION_EVENT/u);
+  assert.doesNotMatch(
+    measurement,
+    /window\.location\.href|document\.(?:title|referrer)|patientName|doctorId|appointmentReason/u,
+  );
+  assert.match(measurement, /this homepage immediately loads Google Ads/u);
+  assert.match(measurement, /this homepage\s+address and title/u);
+  assert.match(privacy, /used only on the homepage/u);
+  assert.match(privacy, /immediately loads the Google Ads tag and begins technical requests/u);
+  assert.match(privacy, /homepage address and title/u);
+  assert.match(privacy, /IP address, browser details and advertising-click information/u);
+  assert.match(privacy, /link clicks, not as completed calls, appointments or clinic visits/u);
+  assert.match(privacy, /advertising personalisation remains disabled/u);
+  assert.match(privacy, /From the homepage, you can reopen “Measurement preferences”/u);
+});
+
+test("homepage measurement boundaries render as native document links", async () => {
+  const fullyNativeFiles = [
+    "src/components/layout/Navbar.tsx",
+    "src/components/layout/Footer.tsx",
+    "src/components/home/CarePathways.tsx",
+    "src/components/home/GeneralCare.tsx",
+    "src/components/home/PatientJourney.tsx",
+    "src/components/care/CareDetailPage.tsx",
+    "src/components/legal/LegalPage.tsx",
+    "src/app/admin/login/page.tsx",
+    "src/app/error.tsx",
+    "src/app/not-found.tsx",
+  ];
+
+  for (const file of fullyNativeFiles) {
+    const source = await readFile(path.join(root, file), "utf8");
+    assert.doesNotMatch(source, /from "next\/link"|<Link\b/u, file);
+  }
+
+  const portalLogin = await readFile(path.join(root, "src/app/portal/login/page.tsx"), "utf8");
+  const portalDashboard = await readFile(
+    path.join(root, "src/components/portal/PatientPortalDashboard.tsx"),
+    "utf8",
+  );
+  const generalCarePage = await readFile(
+    path.join(root, "src/app/care/general-care-lab-tests/page.tsx"),
+    "utf8",
+  );
+  assert.match(portalLogin, /<a href="\/"/u);
+  assert.match(portalDashboard, /<a href="\/#appointment"/u);
+  assert.match(generalCarePage, /<a className=\{styles\.backLink\} href="\/#general-care"/u);
+});
