@@ -32,6 +32,18 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
 
+      - name: Install locked booking alert worker dependencies
+        run: npm ci --prefix notification-functions --ignore-scripts --no-audit --no-fund
+
+      - name: Check booking alert worker without sending notifications
+        working-directory: notification-functions
+        env:
+          ALERTS_ENABLED: "false"
+        run: |
+          npm run check
+          npm run test:dependencies
+          node --input-type=module -e "import { getApps } from 'firebase-admin/app'; const worker = await import('./index.mjs'); if (typeof worker.appointmentBooked !== 'function') throw new Error('Missing appointment trigger export'); if (getApps().length !== 0) throw new Error('Worker must not initialize Firebase during module import');"
+
       - name: Set up Java for Firebase emulators
         uses: actions/setup-java@v4
         with:
@@ -43,6 +55,9 @@ jobs:
 
       - name: Run unit tests
         run: npm run test:unit
+
+      - name: Verify booking alert privacy and delivery
+        run: npm run test:booking-alerts
 
       - name: Run lint checks
         run: npm run lint

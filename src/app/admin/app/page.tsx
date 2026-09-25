@@ -1,6 +1,7 @@
 "use client";
 
 import { InstallAppButton } from "@/components/pwa/PwaRegister";
+import BookingAlertsPanel from "@/components/admin/BookingAlertsPanel";
 import {
   Apple,
   BellRing,
@@ -21,7 +22,7 @@ const appFeatures = [
   { icon: ScanLine, title: "Fast reception", text: "Register patients, collect fees, and print documents from the phone." },
   { icon: LockKeyhole, title: "Role-protected", text: "Every staff member signs in separately with only the tools allowed for their role." },
   { icon: Wifi, title: "Always current", text: "Appointments, patient records, payments, and reports stay synchronized with the clinic." },
-  { icon: BellRing, title: "App-ready alerts", text: "The installed experience is prepared for reminders and staff notifications." },
+  { icon: BellRing, title: "Booking alerts", text: "Administrators can enable private phone notifications after the delivery service is activated." },
 ];
 
 export default function StaffAppPage() {
@@ -69,6 +70,7 @@ export default function StaffAppPage() {
           </div>
         </section>
 
+        <BookingAlertsPanel />
         <section className="rounded-[28px] bg-white p-6 shadow-sm ring-1 ring-slate-200 sm:p-7" aria-labelledby="staff-sign-in-title">
           <div className="flex items-start gap-3">
             <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-blue-50 text-[#233A59]"><KeyRound size={23} /></span>

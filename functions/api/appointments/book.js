@@ -19,6 +19,15 @@ import {
   timeSlots,
 } from "../../../server/appointments/schedule.js";
 import { validDocumentId } from "../../../server/razorpay/payments.js";
+import { prepareBookingPushOutbox } from "../../../server/notifications/booking-alerts.js";
+import { createPushDeliveryService } from "../../../server/notifications/push-delivery.js";
+
+const pushDelivery = createPushDeliveryService();
+const BOOKING_DEPENDENCIES = {
+  commitWrites, getDocument, requireActiveStaff,
+  now: () => new Date(),
+  deliverPush: (env, id) => pushDelivery.deliver(env, id),
+};
 
 const DOCTORS = ["pediatrics", "obg"];
 const STAFF_SOURCES = ["reception", "phone", "walk-in"];
@@ -108,7 +117,12 @@ function clinicClock(now = new Date()) {
   };
 }
 
-export async function onRequestPost(context) {
+export function createBookingHandler(overrides = {}) {
+  const dependencies = { ...BOOKING_DEPENDENCIES, ...overrides };
+  return (context) => handleBooking(context, dependencies);
+}
+
+async function handleBooking(context, dependencies) {
   try {
     assertSameOrigin(context.request);
     const body = await readJson(context.request);
@@ -121,7 +135,7 @@ export async function onRequestPost(context) {
     const preferredTime = cleanText(body.preferredTime, 5);
     const reason = cleanText(body.reason, 500);
     const source = cleanText(body.source || "website", 20);
-    const now = new Date();
+    const now = dependencies.now();
     const clinicNow = clinicClock(now);
 
     if (patientName.length < 2) throw new HttpError(400, "Enter the patient’s full name.");
@@ -156,7 +170,7 @@ export async function onRequestPost(context) {
     let patientDocument = null;
     if (source !== "website") {
       if (!STAFF_SOURCES.includes(source)) throw new HttpError(400, "Choose a valid booking source.");
-      const staff = await requireActiveStaff(context.request, context.env);
+      const staff = await dependencies.requireActiveStaff(context.request, context.env);
       actorUid = staff.uid;
       status = "confirmed";
       if (requestedPatientId) {
@@ -164,7 +178,7 @@ export async function onRequestPost(context) {
           throw new HttpError(400, "Select a valid patient record.");
         }
         patientDocument = assertActivePatientDocument(
-          await getDocument(context.env, `patients/${requestedPatientId}`),
+          await dependencies.getDocument(context.env, `patients/${requestedPatientId}`),
           {
             missingStatus: 400,
             missingMessage: "The selected patient record no longer exists.",
@@ -181,7 +195,7 @@ export async function onRequestPost(context) {
       }
     }
 
-    const scheduleDocument = await getDocument(
+    const scheduleDocument = await dependencies.getDocument(
       context.env,
       "clinicSettings/appointmentSchedule",
     );
@@ -224,8 +238,10 @@ export async function onRequestPost(context) {
           createDocumentWrite(context.env, guard.path, guard.data)
         ))
       : [];
-    await commitWrites(context.env, [
+    const pushOutboxWrite = prepareBookingPushOutbox(context.env, context.request, { appointmentId, source, now });
+    await dependencies.commitWrites(context.env, [
       ...guardWrites,
+      ...(pushOutboxWrite ? [pushOutboxWrite] : []),
       ...(patientId && patientDocument
         ? [verifyDocumentWrite(
             context.env,
@@ -252,6 +268,9 @@ export async function onRequestPost(context) {
         reason,
         status,
         source,
+        // Server-owned provenance prevents preview/test bookings from triggering
+        // production notifications even when they share the same database.
+        requestOrigin: new URL(context.request.url).origin,
         privacyAccepted: source === "website",
         consent,
         slotId,
@@ -260,6 +279,18 @@ export async function onRequestPost(context) {
         updatedAt: now,
       }),
     ]);
+
+    // The outbox was saved atomically. Delivery never blocks the booking response.
+    if (pushOutboxWrite && typeof context.waitUntil === "function") {
+      let scheduled = false;
+      const attempt = Promise.resolve()
+        .then(() => scheduled ? dependencies.deliverPush(context.env, appointmentId) : undefined)
+        .catch(() => undefined);
+      try {
+        context.waitUntil(attempt);
+        scheduled = true;
+      } catch { /* An administrator can retry the pending outbox later. */ }
+    }
 
     return json({ appointmentId, slotId, status }, 201);
   } catch (error) {
@@ -271,3 +302,5 @@ export async function onRequestPost(context) {
     return errorResponse(error);
   }
 }
+
+export const onRequestPost = createBookingHandler();

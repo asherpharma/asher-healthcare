@@ -3,6 +3,7 @@
 import StaffAccessManager from "@/components/admin/StaffAccessManager";
 import PatientSearchUpgradePanel from "@/components/admin/PatientSearchUpgradePanel";
 import SystemHealthPanel from "@/components/admin/SystemHealthPanel";
+import BookingAlertsPanel from "@/components/admin/BookingAlertsPanel";
 import { useStaff } from "@/components/admin/StaffGuard";
 import { firestore } from "@/firebase/config";
 import { useAppointmentSchedule } from "@/hooks/useAppointmentSchedule";
@@ -468,6 +469,7 @@ function SettingsContent() {
         <p className="mt-3 max-w-3xl text-slate-600">Manage patient booking times, reception consultation fees, and secure staff access.</p>
       </div>
       <div className="mt-8 space-y-6">
+        <BookingAlertsPanel />
         <SystemHealthPanel />
         <PatientSearchUpgradePanel />
         <ScheduleEditor />
