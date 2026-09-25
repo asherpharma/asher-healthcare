@@ -336,7 +336,7 @@ try {
     assert.equal(errors.length, 0, 'No unexpected page errors');
   });
   }
-} catch (error) {
+} catch {
   await page.screenshot({ path: path.join(output, 'failure.png'), timeout: 5000 }).catch(() => {});
   process.exitCode = 1;
 } finally {

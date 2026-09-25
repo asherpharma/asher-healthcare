@@ -136,9 +136,9 @@ function harness({
     },
   };
   const jsx = (type, props) => ({ type, props });
-  const module = { exports: {} };
+  const compiledModule = { exports: {} };
   const context = vm.createContext({
-    module, exports: module.exports, window, document, Element, HTMLAnchorElement: Anchor,
+    module: compiledModule, exports: compiledModule.exports, window, document, Element, HTMLAnchorElement: Anchor,
     URL, URLSearchParams, console,
     process: { env: configured ? {
       NEXT_PUBLIC_GOOGLE_ADS_CLICK_MEASUREMENT_ENABLED: "true",
@@ -166,7 +166,7 @@ function harness({
       if (dirty) {
         dirty = false;
         cursor = 0;
-        tree = module.exports.AdsClickMeasurement();
+        tree = compiledModule.exports.AdsClickMeasurement();
       }
       for (const run of pending.splice(0)) run();
     }
