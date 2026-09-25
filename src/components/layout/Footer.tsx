@@ -1,5 +1,5 @@
+/* eslint-disable @next/next/no-html-link-for-pages -- Full-page navigation isolates optional Ads measurement. */
 import Image from "next/image";
-import Link from "next/link";
 import { ArrowUp, Camera, Heart, MessageCircle, Phone } from "lucide-react";
 
 export default function Footer() {
@@ -15,31 +15,31 @@ export default function Footer() {
           <div className="footer-social">
             <a href="tel:+919019263709" aria-label="Call Asher Healthcare"><Phone /></a>
             <a href="https://wa.me/919019263709" target="_blank" rel="noreferrer" aria-label="WhatsApp Asher Healthcare"><MessageCircle /></a>
-            <Link href="/#clinic" aria-label="View clinic gallery"><Camera /></Link>
+            <a href="/#clinic" aria-label="View clinic gallery"><Camera /></a>
           </div>
         </div>
         <div>
           <h3>Explore</h3>
-          <Link href="/#services">Services</Link>
-          <Link href="/#care">Care guide</Link>
-          <Link href="/care/pediatrics">Pediatrics</Link>
-          <Link href="/care/womens-health">Women&apos;s health</Link>
-          <Link href="/care/general-care-lab-tests">General care &amp; lab tests</Link>
-          <Link href="/#doctors">Doctors</Link>
-          <Link href="/#appointment">Appointments</Link>
+          <a href="/#services">Services</a>
+          <a href="/#care">Care guide</a>
+          <a href="/care/pediatrics">Pediatrics</a>
+          <a href="/care/womens-health">Women&apos;s health</a>
+          <a href="/care/general-care-lab-tests">General care &amp; lab tests</a>
+          <a href="/#doctors">Doctors</a>
+          <a href="/#appointment">Appointments</a>
         </div>
         <div>
           <h3>Patient information</h3>
-          <Link href="/patient-rights">Patient rights</Link>
-          <Link href="/privacy">Privacy policy</Link>
-          <Link href="/terms">Website terms</Link>
-          <Link href="/#contact">Contact the clinic</Link>
+          <a href="/patient-rights">Patient rights</a>
+          <a href="/privacy">Privacy policy</a>
+          <a href="/terms">Website terms</a>
+          <a href="/#contact">Contact the clinic</a>
         </div>
         <div>
           <h3>Clinic</h3>
           <a href="https://maps.app.goo.gl/cvFLUCkF6nRPAHUx5" target="_blank" rel="noreferrer">Get directions</a>
           <a href="tel:+919019263709">+91 90192 63709</a>
-          <Link href="/admin/login">Staff login</Link>
+          <a href="/admin/login">Staff login</a>
           <a href="#top"><ArrowUp /> Back to top</a>
         </div>
       </div>
