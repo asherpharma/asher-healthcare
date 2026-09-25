@@ -198,6 +198,85 @@ test("transport rejects SSRF endpoints, expired subscriptions and mismatched VAP
   assert.equal(calls, 0);
 });
 
+test("REST device lookup calls fetch without a dependency-object receiver and projects names only", async () => {
+  const signal = new AbortController().signal;
+  let calls = 0;
+  const store = createPushStore({
+    serviceAccountAccessToken: async () => "synthetic-test-token",
+    fetch: async function (url, init) {
+      calls += 1;
+      // Workerd rejects a dependency object as the receiver of its global fetch.
+      assert.equal(this, undefined);
+      assert.equal(url, "https://firestore.googleapis.com/v1/projects/asher-healthcare-clinic/databases/(default)/documents:runQuery");
+      assert.equal(init.method, "POST");
+      assert.equal(init.redirect, "manual");
+      assert.equal(init.signal, signal);
+      assert.equal(init.headers.Authorization, "Bearer synthetic-test-token");
+      assert.deepEqual(JSON.parse(init.body), { structuredQuery: {
+        from: [{ collectionId: "adminPushDevices" }],
+        select: { fields: [{ fieldPath: "__name__" }] },
+        where: { fieldFilter: { field: { fieldPath: "active" }, op: "EQUAL", value: { booleanValue: true } } },
+        orderBy: [{ field: { fieldPath: "__name__" }, direction: "ASCENDING" }],
+        limit: PUSH_MAX_DEVICES + 1,
+      } });
+      return Response.json([
+        { readTime: "2026-09-25T10:00:00Z" },
+        { document: { name: `projects/asher-healthcare-clinic/databases/(default)/documents/adminPushDevices/${idFor(0)}` } },
+      ]);
+    },
+  });
+  assert.deepEqual(await store.listDevices(env, PUSH_MAX_DEVICES + 1, signal), [idFor(0)]);
+  assert.equal(calls, 1);
+});
+
+test("delivery reaches transport through the real REST device-list implementation", async () => {
+  const h = harness();
+  let queries = 0;
+  const rest = createPushStore({
+    serviceAccountAccessToken: async () => "synthetic-test-token",
+    fetch: async function (_url, init) {
+      assert.equal(this, undefined);
+      queries += 1;
+      assert.deepEqual(JSON.parse(init.body).structuredQuery.select, { fields: [{ fieldPath: "__name__" }] });
+      return Response.json([{ document: {
+        name: `projects/asher-healthcare-clinic/databases/(default)/documents/adminPushDevices/${idFor(0)}`,
+      } }]);
+    },
+  });
+  h.store.listDevices = rest.listDevices;
+  assert.deepEqual(await h.run(), { status: "sent", sent: 1, pending: 0, skipped: 0, failed: 0 });
+  assert.equal(queries, 1);
+  assert.equal(h.sends.length, 1);
+  assert.equal(h.docs.get(outboxPath).reason, "delivery_finished");
+  await h.run();
+  assert.equal(h.sends.length, 1, "completed attempts must not resend");
+});
+
+test("REST device lookup handles an empty result and keeps provider error bodies private", async () => {
+  const store = createPushStore({
+    serviceAccountAccessToken: async () => "synthetic-test-token",
+    fetch: async () => Response.json([{ readTime: "2026-09-25T10:00:00Z" }]),
+  });
+  assert.deepEqual(await store.listDevices(env, PUSH_MAX_DEVICES + 1), []);
+  let readBody = false;
+  const failed = createPushStore({
+    serviceAccountAccessToken: async () => "synthetic-test-token",
+    fetch: async () => ({ ok: false, async json() { readBody = true; return { error: "PRIVATE PROVIDER DETAILS" }; } }),
+  });
+  await assert.rejects(failed.listDevices(env, PUSH_MAX_DEVICES + 1), { message: "Notification devices could not be read." });
+  assert.equal(readBody, false);
+});
+
+test("REST device lookup does not fetch after dispatch cancellation", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const store = createPushStore({
+    serviceAccountAccessToken: async () => "synthetic-test-token",
+    fetch: async () => assert.fail("an aborted dispatch must not query devices"),
+  });
+  await assert.rejects(store.listDevices(env, PUSH_MAX_DEVICES + 1, controller.signal), /dispatch time expired/);
+});
+
 test("REST store retries only conflicting conditional writes and preserves immutable data", async () => {
   let writes = 0; let document = { data: { createdAt: "fixed", status: "pending" }, updateTime: "v1" };
   const store = createPushStore({ getDocument: async () => document,

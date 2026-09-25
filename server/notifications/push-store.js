@@ -7,12 +7,15 @@ const DEFAULTS = { commitWrites, createDocumentWrite, getDocument, serviceAccoun
 /** Optimistic Firestore REST transactions. All paths/data are server-owned. */
 export function createPushStore(overrides = {}) {
   const dependencies = { ...DEFAULTS, ...overrides };
+  // Workerd's global fetch rejects a dependency object as its `this` receiver.
+  // Invoke the function directly, just like the push transport and REST helper.
+  const fetchRequest = dependencies.fetch;
   return {
     async get(env, path) { return dependencies.getDocument(env, path); },
     async listDevices(env, limit, signal) {
       const token = await dependencies.serviceAccountAccessToken(env);
       if (signal?.aborted) throw new Error("Notification dispatch time expired.");
-      const response = await dependencies.fetch(
+      const response = await fetchRequest(
         `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents:runQuery`,
         {
           method: "POST", signal, redirect: "manual",
