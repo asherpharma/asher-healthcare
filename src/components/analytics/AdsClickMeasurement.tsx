@@ -450,28 +450,14 @@ export function AdsClickMeasurement() {
     <>
       {showPanel ? (
         <section
-          aria-labelledby="asher-cookie-title"
-          aria-describedby="asher-cookie-summary"
+          aria-label="Advertising measurement choices"
           className={styles.panel}
           role="dialog"
         >
           <div className={styles.copy}>
-            <div className={styles.heading}>
-              <svg className={styles.cookie} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-                <path d="M20.5 13a5 5 0 0 1-5.5-5.5A5 5 0 0 1 10 3a9 9 0 1 0 10.5 10Z" />
-                <circle cx="8" cy="10" r=".8" /><circle cx="8" cy="16" r=".8" /><circle cx="14" cy="16" r=".8" />
-              </svg>
-              <h2 id="asher-cookie-title">Your cookie choices</h2>
-            </div>
-            <p id="asher-cookie-summary">
-              Optional Google Ads cookies help us measure homepage call and
-              directions clicks. Google receives homepage and technical
-              information. No personalised ads. Booking works either way.
-            </p>
-            <details className={styles.details}>
-              <summary>About these cookies</summary>
-              <p>
-              If you accept, this homepage immediately loads Google Ads
+            <h2>Optional advertising measurement</h2>
+            <p>
+              If you allow it, this homepage immediately loads Google Ads
               measurement. Google may use cookies and receives this homepage
               address and title, plus technical browser, network and
               advertising-click information. Clicking the clinic
@@ -479,11 +465,8 @@ export function AdsClickMeasurement() {
               We do not intentionally send appointment-form or medical details,
               and we do not use this for personalised ads. Declining does not
               affect the site.
-              </p>
-              <p>These controls apply only to optional Google Ads measurement,
-                not essential site cookies or separate Cloudflare analytics.</p>
-              <a href="/privacy">Read the privacy policy</a>
-            </details>
+            </p>
+            <a href="/privacy">Read the privacy policy</a>
           </div>
           <div className={styles.actions}>
             {choice === "granted" ? (
@@ -493,14 +476,14 @@ export function AdsClickMeasurement() {
                   onClick={stopMeasurement}
                   type="button"
                 >
-                  Reject optional
+                  Stop measurement
                 </button>
                 <button
                   className={styles.primary}
                   onClick={() => setPreferencesOpen(false)}
                   type="button"
                 >
-                  Keep accepted
+                  Keep measurement on
                 </button>
               </>
             ) : (
@@ -510,14 +493,14 @@ export function AdsClickMeasurement() {
                   onClick={() => saveChoice("granted")}
                   type="button"
                 >
-                  Accept cookies
+                  Allow measurement
                 </button>
                 <button
                   className={styles.secondary}
                   onClick={() => saveChoice("denied")}
                   type="button"
                 >
-                  Reject optional
+                  {choice === "denied" ? "Keep measurement off" : "Decline"}
                 </button>
               </>
             )}
@@ -529,7 +512,7 @@ export function AdsClickMeasurement() {
           onClick={() => setPreferencesOpen(true)}
           type="button"
         >
-          Cookie settings
+          Measurement preferences
         </button>
       )}
     </>
