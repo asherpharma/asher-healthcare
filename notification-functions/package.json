@@ -1,0 +1,23 @@
+{
+  "name": "asher-appointment-alerts",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.mjs",
+  "engines": { "node": "22" },
+  "scripts": {
+    "check": "node --check index.mjs && node --check delivery.mjs && node --check firestore-store.mjs",
+    "test": "node --test ../tests/booking-alert-delivery.test.mjs dependency-compatibility.test.mjs",
+    "test:dependencies": "node --test dependency-compatibility.test.mjs"
+  },
+  "dependencies": {
+    "firebase-admin": "14.5.0",
+    "firebase-functions": "7.4.0",
+    "web-push": "3.6.7"
+  },
+  "overrides": {
+    "gaxios@6.7.1": {
+      "uuid": "11.1.1"
+    }
+  }
+}

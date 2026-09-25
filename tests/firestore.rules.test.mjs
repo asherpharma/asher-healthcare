@@ -59,6 +59,24 @@ const staff = {
 
 let testEnv;
 
+test("notification subscriptions and delivery ledgers are server-only even for admins", async () => {
+  const paths = [
+    "adminPushDevices/device-test",
+    "appointmentAlerts/appointment-test",
+    "appointmentAlerts/appointment-test/channels/email",
+    "appointmentAlerts/appointment-test/devices/device-test",
+    "appointmentPushOutbox/appointment-test",
+    "appointmentPushOutbox/appointment-test/devices/device-test",
+  ];
+  await seedDocuments(paths.map((path) => [path, { active: true }]));
+  for (const database of [testEnv.unauthenticatedContext().firestore(), staffDb("admin"), staffDb("reception"), staffDb("pediatrics")]) {
+    for (const path of paths) {
+      await assertFails(getDoc(doc(database, path)));
+      await assertFails(setDoc(doc(database, path), { active: true }));
+    }
+  }
+});
+
 function staffDb(key) {
   const member = staff[key];
   return testEnv.authenticatedContext(member.uid).firestore();

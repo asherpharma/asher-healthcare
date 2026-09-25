@@ -2,6 +2,8 @@
 
 # dependencies
 /node_modules
+/notification-functions/node_modules/
+/notification-functions/.secret.local
 /.pnp
 .pnp.*
 .yarn/*
