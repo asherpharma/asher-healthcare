@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-html-link-for-pages -- Full-page navigation isolates optional Ads measurement. */
 "use client";
 // Firebase's deployed password policy currently permits six-character legacy passwords.
 
@@ -100,7 +101,7 @@ export default function PatientPortalLoginPage() {
   return (
     <main id="main-content" className="min-h-dvh bg-[radial-gradient(circle_at_top_right,#eaf4f6_0,transparent_38%),linear-gradient(180deg,#f8fafc,#eef3f7)] px-4 py-6 sm:px-6 sm:py-12">
       <div className="mx-auto max-w-lg">
-        <div className="flex items-center justify-between gap-2"><Link href="/" className="inline-flex min-h-11 min-w-0 items-center gap-2 rounded-xl text-sm font-bold text-[#233A59] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#233A59]"><ArrowLeft aria-hidden="true" size={17} /><span className="truncate">Clinic website</span></Link><PatientPortalPwa compact /></div>
+        <div className="flex items-center justify-between gap-2"><a href="/" className="inline-flex min-h-11 min-w-0 items-center gap-2 rounded-xl text-sm font-bold text-[#233A59] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#233A59]"><ArrowLeft aria-hidden="true" size={17} /><span className="truncate">Clinic website</span></a><PatientPortalPwa compact /></div>
         <section className="mt-5 overflow-hidden rounded-[30px] border border-white/70 bg-white shadow-2xl shadow-slate-300/50">
           <div className="bg-[#233A59] p-6 text-white sm:p-8"><div className="flex items-center gap-3"><Image src="/images/asher-logo-compact-v2.webp" alt="Asher Healthcare" width={54} height={54} className="h-14 w-14 rounded-2xl bg-white object-contain p-1" /><div><p className="text-xs font-bold uppercase tracking-[0.17em] text-[#E7C989]">Secure patient access</p><h1 className="mt-1 text-2xl font-bold">Asher Family</h1></div></div><p className="mt-5 leading-7 text-white/75">Appointments, prescriptions, reports and receipts for family members explicitly approved by the clinic.</p></div>
           <div className="p-6 sm:p-8">
