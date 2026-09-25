@@ -244,7 +244,7 @@ test("Ads tag is opt-in only, non-personalised, and insulated from care context"
   assert.match(privacy, /IP address, browser details and advertising-click information/u);
   assert.match(privacy, /link clicks, not as completed calls, appointments or clinic visits/u);
   assert.match(privacy, /advertising personalisation remains disabled/u);
-  assert.match(privacy, /From the homepage, you can reopen “Measurement preferences”/u);
+  assert.match(privacy, /From the homepage, you can reopen “Cookie settings”/u);
 });
 
 test("homepage measurement boundaries render as native document links", async () => {
