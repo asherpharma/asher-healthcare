@@ -1,7 +1,7 @@
+/* eslint-disable @next/next/no-html-link-for-pages -- Full-page navigation isolates optional Ads measurement. */
 "use client";
 
 import { Home, RefreshCw } from "lucide-react";
-import Link from "next/link";
 
 export default function ErrorPage({
   unstable_retry,
@@ -23,7 +23,7 @@ export default function ErrorPage({
           <button className="button button-primary" type="button" onClick={() => unstable_retry()}>
             <RefreshCw aria-hidden="true" /> Try again
           </button>
-          <Link className="button button-ghost" href="/"><Home aria-hidden="true" /> Return home</Link>
+          <a className="button button-ghost" href="/"><Home aria-hidden="true" /> Return home</a>
         </div>
       </section>
     </main>
