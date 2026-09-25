@@ -1,4 +1,4 @@
-import { AdsClickMeasurement } from "@/components/analytics/AdsClickMeasurement";
+import { HomepageMeasurement } from "@/components/analytics/HomepageMeasurement";
 import { PwaRegister } from "@/components/pwa/PwaRegister";
 import type { Metadata, Viewport } from "next";
 import { Suspense } from "react";
@@ -90,7 +90,7 @@ export default function RootLayout({
         <PwaRegister />
         {children}
         <Suspense fallback={null}>
-          <AdsClickMeasurement />
+          <HomepageMeasurement />
         </Suspense>
       </body>
     </html>
