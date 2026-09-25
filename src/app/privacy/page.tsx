@@ -36,12 +36,13 @@ export default function PrivacyPage() {
       </section>
       <section>
         <h2>Service providers</h2>
-        <p>We use carefully selected providers to operate the service, including Firebase for secure application infrastructure, Cloudflare for website delivery and protection, Google Ads for optional advertising measurement, and Razorpay when online payment services are enabled. These providers process information under their own security and privacy terms.</p>
+        <p>We use providers to operate the service, including Firebase for secure application infrastructure and daily website totals, Cloudflare for website delivery, protection and web-performance analytics, and Razorpay when online payment services are enabled. These providers process information under their own security and privacy terms.</p>
       </section>
       <section>
-        <h2>Optional advertising measurement</h2>
-        <p>Google Ads measurement is used only on the homepage and remains off until you choose to allow it there. After you opt in, the homepage immediately loads the Google Ads tag and begins technical requests. Google may use cookies and receives the homepage address and title, plus information such as the IP address, browser details and advertising-click information. Clicking the clinic phone or directions link sends a separate click-measurement event. We count these as link clicks, not as completed calls, appointments or clinic visits. We do not intentionally send appointment-form fields, medical details or patient identifiers, and advertising personalisation remains disabled.</p>
-        <p>You can decline without losing access to any website feature. From the homepage, you can reopen “Measurement preferences” and stop future measurement; the page reloads with the Google tag blocked.</p>
+        <h2>Cookie-free homepage statistics</h2>
+        <p>We automatically count homepage views and taps on the clinic Call and Directions links to understand how useful the homepage is. These counters store only daily totals in the clinic&apos;s India time zone, not individual event records, visitor identifiers, IP addresses, page addresses, search terms or appointment-form contents. They do not set or read advertising cookies, use browser storage, or send events to Google Ads. The website no longer loads the Google Ads measurement tag.</p>
+        <p>A view is not a unique person, and a tap is not a completed call, appointment or clinic visit. Repeated visits and automated traffic can affect totals. These statistics do not identify which Google ad led to an enquiry. They are limited to the general homepage; medical-service pages and patient or staff portals are excluded from these counters. Browsers signalling Do Not Track or Global Privacy Control are excluded.</p>
+        <p>Network information is still processed by our hosting and security providers to deliver and protect the website. Separate Cloudflare web-performance analytics and essential login or appointment functionality are not controlled by these counters. Any advertising cookies left from earlier visits can be cleared using your browser settings. Calling and booking work without a measurement-consent popup.</p>
       </section>
       <section>
         <h2>Security and retention</h2>

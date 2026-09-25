@@ -40,6 +40,7 @@ test("the registry has one unique entry for every staff workspace route", () => 
     "/admin/staff",
     "/admin/patient-access",
     "/admin/app",
+    "/admin/website-statistics",
     "/admin/settings",
   ];
 
@@ -60,6 +61,8 @@ test("role filters prevent staff from discovering restricted workspaces", () => 
   assert.equal(doctorIds.includes("billing"), false);
   assert.equal(doctorIds.includes("staff"), false);
   assert.equal(doctorIds.includes("settings"), false);
+  assert.equal(doctorIds.includes("website-statistics"), false);
+  assert.equal(receptionIds.includes("website-statistics"), false);
   assert.equal(receptionIds.includes("consultations"), false);
   assert.equal(doctorIds.includes("dashboard"), true);
   assert.equal(receptionIds.includes("dashboard"), true);
@@ -88,7 +91,7 @@ test("action and keyword searches rank the intended role-safe tool first", () =>
 test("grouping is complete and preserves registry order", () => {
   const grouped = groupedStaffToolsForRole("admin");
   assert.deepEqual(Object.keys(grouped), STAFF_TOOL_GROUPS);
-  assert.deepEqual(grouped.management.map(({ id }) => id), ["staff", "settings"]);
+  assert.deepEqual(grouped.management.map(({ id }) => id), ["staff", "website-statistics", "settings"]);
   assert.deepEqual(
     STAFF_TOOL_GROUPS.flatMap((group) => grouped[group]).map(({ id }) => id).sort(),
     staffToolsForRole("admin").map(({ id }) => id).sort(),
