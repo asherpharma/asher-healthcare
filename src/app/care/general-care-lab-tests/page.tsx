@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-html-link-for-pages -- Full-page navigation isolates optional Ads measurement. */
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowLeft, CheckCircle2, MapPin, Navigation, Phone } from "lucide-react";
@@ -28,7 +29,7 @@ export default function GeneralCarePage() {
         <section className={styles.hero} aria-labelledby="general-care-heading">
           <div className={`site-shell ${styles.heroGrid}`}>
             <div>
-              <Link className={styles.backLink} href="/#general-care"><ArrowLeft aria-hidden="true" /> Asher Healthcare</Link>
+              <a className={styles.backLink} href="/#general-care"><ArrowLeft aria-hidden="true" /> Asher Healthcare</a>
               <div><span className="section-kicker">RK Hegde Nagar · North Bengaluru</span></div>
               <h1 id="general-care-heading">General care &amp; lab tests</h1>
               <p>Medical consultations for all ages, blood and laboratory tests, X-ray and ultrasound services at Asher Women &amp; Child Healthcare. Call reception to plan the right visit for you.</p>
