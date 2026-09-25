@@ -6,7 +6,6 @@ import {
   LockKeyhole,
   Smartphone,
 } from "lucide-react";
-import Link from "next/link";
 
 const steps = [
   {
@@ -50,9 +49,9 @@ export default function PatientJourney() {
             <span><LockKeyhole aria-hidden="true" /> Secure staff access</span>
             <span><Smartphone aria-hidden="true" /> Mobile-friendly experience</span>
           </div>
-          <Link className="button public-journey-portal" href="/portal/login">
+          <a className="button public-journey-portal" href="/portal/login">
             Open family portal
-          </Link>
+          </a>
         </div>
 
         <ol className="public-journey-steps">
