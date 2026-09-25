@@ -10,7 +10,6 @@ import {
   Sparkles,
 } from "lucide-react";
 import Image from "next/image";
-import Link from "next/link";
 import { useState } from "react";
 
 import type { DoctorId } from "@/lib/appointments";
@@ -40,10 +39,6 @@ export default function CarePathways() {
 
   function chooseAndBook(doctorId: DoctorId) {
     setSelectedId(doctorId);
-    const url = new URL(window.location.href);
-    url.searchParams.set("care", doctorId);
-    url.hash = "appointment";
-    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
     window.dispatchEvent(
       new CustomEvent(CARE_SELECTION_EVENT, { detail: { doctorId } }),
     );
@@ -126,7 +121,7 @@ export default function CarePathways() {
               >
                 <CalendarDays aria-hidden="true" /> Choose this care
               </button>
-              <Link className="button button-ghost" href={selected.href}>Learn more</Link>
+              <a className="button button-ghost" href={selected.href}>Learn more</a>
             </div>
           </div>
         </article>

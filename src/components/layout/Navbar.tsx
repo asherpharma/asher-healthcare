@@ -1,7 +1,7 @@
+/* eslint-disable @next/next/no-html-link-for-pages -- Full-page navigation isolates optional Ads measurement. */
 "use client";
 
 import Image from "next/image";
-import Link from "next/link";
 import { CalendarDays, Menu, Phone, ShieldCheck, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -38,21 +38,21 @@ export default function Navbar() {
       </div>
       <header className="nav-wrap">
         <div className="site-shell nav-inner">
-          <Link href="/" className="brand" aria-label="Asher Healthcare home">
+          <a href="/" className="brand" aria-label="Asher Healthcare home">
             <span className="brand-mark"><Image src="/images/asher-logo-compact-v2.webp" alt="" width={54} height={54} priority /></span>
             <span><strong>Asher</strong><small>Women & Child Healthcare</small></span>
-          </Link>
+          </a>
 
           <nav className="desktop-nav" aria-label="Main navigation">
-            {links.map((link) => <Link key={link.href} href={link.href}>{link.label}</Link>)}
+            {links.map((link) => <a key={link.href} href={link.href}>{link.label}</a>)}
           </nav>
 
           <div className="nav-actions">
-            <Link className="staff-link" href="/portal/login">Patient portal</Link>
-            <Link className="staff-link" href="/admin/login">Staff login</Link>
-            <Link className="button button-primary button-small" href="/#appointment">
+            <a className="staff-link" href="/portal/login">Patient portal</a>
+            <a className="staff-link" href="/admin/login">Staff login</a>
+            <a className="button button-primary button-small" href="/#appointment">
               <CalendarDays size={18} /> Book appointment
-            </Link>
+            </a>
           </div>
 
           <button
@@ -69,10 +69,10 @@ export default function Navbar() {
 
         {open && (
           <nav id="mobile-navigation" className="mobile-nav" aria-label="Mobile navigation">
-            {links.map((link) => <Link key={link.href} href={link.href} onClick={() => setOpen(false)}>{link.label}</Link>)}
-            <Link href="/portal/login" onClick={() => setOpen(false)}>Patient portal</Link>
-            <Link href="/admin/login" onClick={() => setOpen(false)}>Staff login</Link>
-            <Link className="button button-primary" href="/#appointment" onClick={() => setOpen(false)}>Book appointment</Link>
+            {links.map((link) => <a key={link.href} href={link.href} onClick={() => setOpen(false)}>{link.label}</a>)}
+            <a href="/portal/login" onClick={() => setOpen(false)}>Patient portal</a>
+            <a href="/admin/login" onClick={() => setOpen(false)}>Staff login</a>
+            <a className="button button-primary" href="/#appointment" onClick={() => setOpen(false)}>Book appointment</a>
           </nav>
         )}
       </header>

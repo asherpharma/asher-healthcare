@@ -1,5 +1,7 @@
+import { AdsClickMeasurement } from "@/components/analytics/AdsClickMeasurement";
 import { PwaRegister } from "@/components/pwa/PwaRegister";
 import type { Metadata, Viewport } from "next";
+import { Suspense } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -80,11 +82,16 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" data-scroll-behavior="smooth">
+      <head>
+        <meta content="no-referrer" name="referrer" />
+      </head>
       <body id="top">
         <a className="skip-link" href="#main-content">Skip to main content</a>
         <PwaRegister />
         {children}
-
+        <Suspense fallback={null}>
+          <AdsClickMeasurement />
+        </Suspense>
       </body>
     </html>
   );

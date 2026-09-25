@@ -1,8 +1,8 @@
+/* eslint-disable @next/next/no-html-link-for-pages -- Full-page navigation isolates optional Ads measurement. */
 import Footer from "@/components/layout/Footer";
 import Navbar from "@/components/layout/Navbar";
 import { ArrowLeft, CalendarDays, Home, Phone } from "lucide-react";
 import type { Metadata } from "next";
-import Link from "next/link";
 
 export const metadata: Metadata = {
   title: "Page not found",
@@ -23,11 +23,11 @@ export default function NotFound() {
             appointment, or call the reception team.
           </p>
           <div className="recovery-actions">
-            <Link className="button button-primary" href="/"><Home aria-hidden="true" /> Home</Link>
-            <Link className="button button-ghost" href="/#appointment"><CalendarDays aria-hidden="true" /> Book appointment</Link>
+            <a className="button button-primary" href="/"><Home aria-hidden="true" /> Home</a>
+            <a className="button button-ghost" href="/#appointment"><CalendarDays aria-hidden="true" /> Book appointment</a>
           </div>
           <a className="recovery-phone" href="tel:+919019263709"><Phone aria-hidden="true" /> +91 90192 63709</a>
-          <Link className="recovery-back" href="/"><ArrowLeft aria-hidden="true" /> Back to Asher Healthcare</Link>
+          <a className="recovery-back" href="/"><ArrowLeft aria-hidden="true" /> Back to Asher Healthcare</a>
         </section>
       </main>
       <Footer />
