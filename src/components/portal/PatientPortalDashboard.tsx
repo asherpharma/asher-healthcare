@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-html-link-for-pages -- Full-page navigation isolates optional Ads measurement. */
 "use client";
 
 import PatientPortalPwa from "@/components/portal/PatientPortalPwa";
@@ -411,9 +412,9 @@ export default function PatientPortalDashboard() {
           <h1 className="mt-2 break-words text-2xl font-bold leading-tight sm:mt-3 sm:text-3xl">Welcome, {dashboard?.account.displayName || "Family"}.</h1>
           <p className="mt-3 max-w-3xl text-sm leading-6 text-white/75 sm:text-base sm:leading-7">Appointments and approved clinic documents, together in one secure place.</p>
           <div className="mt-5 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:gap-3">
-            <Link href="/#appointment" className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-[#A8864A] px-3 text-center text-sm font-bold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white sm:px-4">
+            <a href="/#appointment" className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-[#A8864A] px-3 text-center text-sm font-bold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white sm:px-4">
               <CalendarDays aria-hidden="true" size={18} />Book
-            </Link>
+            </a>
             <button type="button" onClick={() => void loadDashboard()} disabled={loading} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-white/10 px-3 text-sm font-bold text-white ring-1 ring-white/20 disabled:opacity-60 sm:px-4">
               {loading ? <LoaderCircle aria-hidden="true" className="animate-spin" size={18} /> : <RefreshCw aria-hidden="true" size={18} />}
               {loading ? "Refreshing" : "Refresh"}
