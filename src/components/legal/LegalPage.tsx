@@ -1,7 +1,7 @@
+/* eslint-disable @next/next/no-html-link-for-pages -- Full-page navigation isolates optional Ads measurement. */
 import Footer from "@/components/layout/Footer";
 import { ArrowLeft, MapPin, Phone } from "lucide-react";
 import Image from "next/image";
-import Link from "next/link";
 import type { ReactNode } from "react";
 
 export default function LegalPage({
@@ -21,11 +21,11 @@ export default function LegalPage({
     <>
       <header className="legal-header">
         <div className="site-shell legal-header-inner">
-          <Link href="/" className="brand" aria-label="Asher Healthcare home">
+          <a href="/" className="brand" aria-label="Asher Healthcare home">
             <span className="brand-mark"><Image src="/images/asher-logo-compact-v2.webp" alt="" width={54} height={54} priority /></span>
             <span><strong>Asher</strong><small>Women & Child Healthcare</small></span>
-          </Link>
-          <Link href="/" className="legal-back"><ArrowLeft size={17} /> Back to clinic website</Link>
+          </a>
+          <a href="/" className="legal-back"><ArrowLeft size={17} /> Back to clinic website</a>
         </div>
       </header>
 
