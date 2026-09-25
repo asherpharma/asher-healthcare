@@ -181,6 +181,17 @@ export const STAFF_TOOL_REGISTRY: readonly StaffTool[] = [
     icon: "mobile",
   },
   {
+    id: "website-statistics",
+    href: "/admin/website-statistics",
+    label: "Website statistics",
+    shortLabel: "Website",
+    detail: "Homepage views and call or directions taps",
+    group: "management",
+    roles: ADMIN_ONLY,
+    keywords: ["website", "homepage", "statistics", "call taps", "directions"],
+    icon: "dashboard",
+  },
+  {
     id: "settings",
     href: "/admin/settings",
     label: "Settings",
