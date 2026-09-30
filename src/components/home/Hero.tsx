@@ -1,57 +1,36 @@
 import Image from "next/image";
-import { ArrowRight, Baby, CalendarDays, CheckCircle2, HeartPulse, MapPin, Phone, ShieldCheck, Sparkles } from "lucide-react";
+import { ArrowRight, CalendarDays, Clock3, MapPin, Phone } from "lucide-react";
 
 export default function Hero() {
   return (
-    <section className="hero-section">
-      <div className="hero-orb hero-orb-one" />
-      <div className="hero-orb hero-orb-two" />
-      <div className="site-shell hero-grid">
-        <div className="hero-copy">
-          <div className="eyebrow"><Sparkles size={16} /> Two specialists. One connected care experience.</div>
-          <h1>Healthcare designed around <em>your family.</em></h1>
-          <p className="hero-lead">
-            Personal pediatric, obstetric and gynaecological care—supported by live booking,
-            digital records and a secure family portal in RK Hegde Nagar.
-          </p>
+    <section className="patient-hero" aria-labelledby="welcome-heading">
+      <div className="site-shell patient-hero-grid">
+        <div className="patient-hero-copy">
+          <div className="eyebrow">YOUR NEIGHBOURHOOD FAMILY CLINIC</div>
+          <h1 id="welcome-heading">Expert care.<br />A familiar face.<br /><em>Every step of life.</em></h1>
+          <p className="patient-hero-lead">Personal care for women, children and families. Meet your specialist at Asher Healthcare in RK Hegde Nagar, Bengaluru.</p>
           <div className="hero-actions">
-            <a className="button button-primary" href="#appointment"><CalendarDays size={20} /> Book an appointment <ArrowRight size={18} /></a>
-            <a className="button button-ghost" href="tel:+919019263709"><Phone size={19} /> Call the clinic</a>
+            <a className="button button-primary" href="#appointment"><CalendarDays aria-hidden="true" /> Book an appointment <ArrowRight aria-hidden="true" /></a>
+            <a className="button button-ghost" href="tel:+919019263709"><Phone aria-hidden="true" /> Speak to reception</a>
           </div>
-          <div className="hero-proof">
-            <span><CheckCircle2 /> Dr. Shafi 5–8 PM · Dr. Reshma 7–9 PM</span>
-            <span><CheckCircle2 /> Live 15-minute booking</span>
-            <span><CheckCircle2 /> Secure family portal</span>
-          </div>
+          <p className="patient-hero-reassurance">Choose a specialist. See live availability. No account needed.</p>
         </div>
-
-        <div
-          className="hero-visual premium-tilt"
-          aria-label="Asher Women and Child Healthcare clinic"
-          data-premium-tilt="3.5"
-        >
-          <div className="hero-depth-ring hero-depth-ring-one" aria-hidden="true"><span /></div>
-          <div className="hero-depth-ring hero-depth-ring-two" aria-hidden="true"><span /></div>
-          <div className="hero-image-wrap">
-            <Image src="/asher-hero-clinic-v2.webp" alt="Representative concept of a calm modern women and child healthcare clinic" fill priority sizes="(max-width: 900px) 92vw, 48vw" />
-            <div className="hero-glass-sheen" aria-hidden="true" />
-            <div className="image-shade" />
-            <div className="image-caption">
-              <span className="pulse-dot" />
-              <span><small>Now welcoming patients</small>RK Hegde Nagar, Bengaluru</span>
-            </div>
-          </div>
-          <div className="floating-card floating-care"><HeartPulse /><span><strong>Women&apos;s care</strong><small>From wellness to maternity</small></span></div>
-          <div className="floating-card floating-child"><Baby /><span><strong>Child health</strong><small>Newborn to adolescence</small></span></div>
-          <div className="hero-security-chip"><ShieldCheck /><span><strong>Secure by design</strong><small>Private family records</small></span></div>
+        <div className="patient-hero-portraits" aria-label="Meet the doctors at Asher Healthcare">
+          <figure className="patient-hero-portrait patient-portrait-shafi">
+            <div className="patient-portrait-image"><Image src="/images/dr-shafi-ahamad.jpg" alt="Dr. Lt Col Shafi Ahamad, Consultant Pediatrician at Asher Healthcare" fill preload sizes="(max-width: 700px) 44vw, 260px" style={{ objectPosition: "center 22%" }} /></div>
+            <figcaption><small>CHILDREN&apos;S HEALTH</small><strong>Dr. Shafi Ahamad</strong><span>MBBS, MD (Pediatrics)</span></figcaption>
+          </figure>
+          <figure className="patient-hero-portrait patient-portrait-reshma">
+            <div className="patient-portrait-image"><Image src="/images/dr-shaik-reshma.jpg" alt="Dr. Shaik Reshma, Consultant Obstetrician and Gynaecologist at Asher Healthcare" fill preload sizes="(max-width: 700px) 44vw, 260px" style={{ objectPosition: "center 18%" }} /></div>
+            <figcaption><small>WOMEN&apos;S HEALTH</small><strong>Dr. Shaik Reshma</strong><span>MBBS, MS (OBG)</span></figcaption>
+          </figure>
+          <p className="patient-portrait-note"><span aria-hidden="true">✳</span> Two specialists. Care that stays personal.</p>
         </div>
       </div>
-
-      <div className="site-shell specialty-strip">
-        <span>Choose the care that fits your visit.</span>
-        <div><HeartPulse /> Obstetrics & Gynaecology</div>
-        <div><Baby /> Pediatrics & Newborn Care</div>
-        <a href="https://maps.app.goo.gl/cvFLUCkF6nRPAHUx5" target="_blank" rel="noreferrer"><MapPin /> Get directions</a>
+      <div className="site-shell patient-arrival-strip">
+        <span><MapPin aria-hidden="true" /> RK Hegde Nagar · Thanisandra Main Road</span>
+        <span><Clock3 aria-hidden="true" /> Specialist evenings · Usually Mon–Sat</span>
+        <a href="https://maps.app.goo.gl/cvFLUCkF6nRPAHUx5" target="_blank" rel="noreferrer">Get directions <ArrowRight aria-hidden="true" /></a>
       </div>
     </section>
   );

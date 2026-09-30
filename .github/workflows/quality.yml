@@ -58,6 +58,9 @@ jobs:
       - name: Run unit tests
         run: npm run test:unit
 
+      - name: Verify the public patient journey
+        run: npm run test:patient-experience
+
       - name: Verify booking alert privacy and delivery
         run: npm run test:booking-alerts
 

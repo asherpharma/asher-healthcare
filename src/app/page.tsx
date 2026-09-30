@@ -1,18 +1,14 @@
 import Navbar from "@/components/layout/Navbar";
 import Hero from "@/components/home/Hero";
-import GeneralCare from "@/components/home/GeneralCare";
-import Services from "@/components/home/Services";
-import CarePathways from "@/components/home/CarePathways";
-import WhyChooseUs from "@/components/home/WhyChooseUs";
+import CareOptions from "@/components/home/CareOptions";
 import Doctors from "@/components/home/Doctors";
-import PatientJourney from "@/components/home/PatientJourney";
-import Gallery from "@/components/home/Gallery";
+import VisitGuide from "@/components/home/VisitGuide";
 import AppointmentCTA from "@/components/home/AppointmentCTA";
 import Contact from "@/components/home/Contact";
 import FrequentlyAskedQuestions, { clinicFaqs } from "@/components/home/FrequentlyAskedQuestions";
 import MobileCareBar from "@/components/home/MobileCareBar";
-import PremiumMotion from "@/components/home/PremiumMotion";
 import Footer from "@/components/layout/Footer";
+import "./patient-home.css";
 
 const clinicSchema = {
   "@context": "https://schema.org",
@@ -20,7 +16,7 @@ const clinicSchema = {
   name: "Asher Women and Child Healthcare",
   url: "https://asherhealthcare.in",
   telephone: "+91 90192 63709",
-  image: "https://asherhealthcare.in/asher-hero-clinic-v2.webp",
+  image: "https://asherhealthcare.in/images/asher-logo-original.png",
   logo: "https://asherhealthcare.in/images/asher-logo-original.png",
   hasMap: "https://maps.app.goo.gl/cvFLUCkF6nRPAHUx5",
   areaServed: "North Bengaluru",
@@ -70,7 +66,7 @@ const faqSchema = {
 
 export default function Home() {
   return (
-    <>
+    <div className="patient-home">
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(clinicSchema) }}
@@ -82,20 +78,15 @@ export default function Home() {
       <Navbar />
       <main id="main-content">
         <Hero />
-        <GeneralCare />
-        <Services />
-        <CarePathways />
-        <WhyChooseUs />
+        <CareOptions />
         <Doctors />
-        <PatientJourney />
-        <Gallery />
         <AppointmentCTA />
+        <VisitGuide />
         <FrequentlyAskedQuestions />
         <Contact />
       </main>
       <MobileCareBar />
-      <PremiumMotion />
       <Footer />
-    </>
+    </div>
   );
 }

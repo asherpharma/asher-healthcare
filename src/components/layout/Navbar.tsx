@@ -6,11 +6,10 @@ import { CalendarDays, Menu, Phone, ShieldCheck, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 const links = [
-  { label: "Services", href: "/#services" },
-  { label: "Care guide", href: "/#care" },
+  { label: "Our care", href: "/#services" },
   { label: "Doctors", href: "/#doctors" },
-  { label: "Patient journey", href: "/#journey" },
-  { label: "Contact", href: "/#contact" },
+  { label: "Your visit", href: "/#visit" },
+  { label: "Find us", href: "/#contact" },
 ];
 
 export default function Navbar() {
@@ -49,7 +48,6 @@ export default function Navbar() {
 
           <div className="nav-actions">
             <a className="staff-link" href="/portal/login">Patient portal</a>
-            <a className="staff-link" href="/admin/login">Staff login</a>
             <a className="button button-primary button-small" href="/#appointment">
               <CalendarDays size={18} /> Book appointment
             </a>
@@ -68,7 +66,7 @@ export default function Navbar() {
         </div>
 
         {open && (
-          <nav id="mobile-navigation" className="mobile-nav" aria-label="Mobile navigation">
+          <nav id="mobile-navigation" className="mobile-nav" aria-label="Mobile navigation" style={{ maxHeight: "calc(100svh - 170px)", overflowY: "auto" }}>
             {links.map((link) => <a key={link.href} href={link.href} onClick={() => setOpen(false)}>{link.label}</a>)}
             <a href="/portal/login" onClick={() => setOpen(false)}>Patient portal</a>
             <a href="/admin/login" onClick={() => setOpen(false)}>Staff login</a>

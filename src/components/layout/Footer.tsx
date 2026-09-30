@@ -1,6 +1,6 @@
 /* eslint-disable @next/next/no-html-link-for-pages -- Full-page navigation isolates optional Ads measurement. */
 import Image from "next/image";
-import { ArrowUp, Camera, Heart, MessageCircle, Phone } from "lucide-react";
+import { ArrowUp, MapPin, Heart, MessageCircle, Phone } from "lucide-react";
 
 export default function Footer() {
   return (
@@ -15,13 +15,11 @@ export default function Footer() {
           <div className="footer-social">
             <a href="tel:+919019263709" aria-label="Call Asher Healthcare"><Phone /></a>
             <a href="https://wa.me/919019263709" target="_blank" rel="noreferrer" aria-label="WhatsApp Asher Healthcare"><MessageCircle /></a>
-            <a href="/#clinic" aria-label="View clinic gallery"><Camera /></a>
+            <a href="https://maps.app.goo.gl/cvFLUCkF6nRPAHUx5" target="_blank" rel="noreferrer" aria-label="Directions to Asher Healthcare"><MapPin /></a>
           </div>
         </div>
         <div>
           <h3>Explore</h3>
-          <a href="/#services">Services</a>
-          <a href="/#care">Care guide</a>
           <a href="/care/pediatrics">Pediatrics</a>
           <a href="/care/womens-health">Women&apos;s health</a>
           <a href="/care/general-care-lab-tests">General care &amp; lab tests</a>
@@ -30,6 +28,8 @@ export default function Footer() {
         </div>
         <div>
           <h3>Patient information</h3>
+          <a href="/portal/login">Patient portal</a>
+          <a href="/#visit">Prepare for your visit</a>
           <a href="/patient-rights">Patient rights</a>
           <a href="/privacy">Privacy policy</a>
           <a href="/terms">Website terms</a>

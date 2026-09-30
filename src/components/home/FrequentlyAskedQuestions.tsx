@@ -1,7 +1,5 @@
 import {
   ArrowRight,
-  CalendarCheck2,
-  FileHeart,
   MessageCircle,
   Phone,
   ShieldAlert,
@@ -45,32 +43,11 @@ export default function FrequentlyAskedQuestions() {
     <section id="faq" className="section faq-section" aria-labelledby="faq-heading">
       <div className="site-shell faq-layout">
         <div className="faq-copy">
-          <span className="section-kicker">Plan your visit</span>
-          <h2 id="faq-heading">Helpful answers before you arrive.</h2>
+          <span className="section-kicker">Good to know</span>
+          <h2 id="faq-heading">Your questions,<br /><em>answered.</em></h2>
           <p className="section-intro">
-            A little preparation helps the consultation stay focused, comfortable and useful.
+            A few practical answers. For anything else, our reception team is a call away.
           </p>
-
-          <div className="visit-guide" aria-label="Before your visit">
-            <span className="visit-guide-icon"><FileHeart aria-hidden="true" /></span>
-            <div>
-              <h3>Keep important records ready</h3>
-              <p>
-                Carry previous prescriptions, reports, current medicines, and any vaccination or
-                pregnancy records relevant to the visit.
-              </p>
-            </div>
-          </div>
-
-          <div className="visit-guide visit-guide-gold" aria-label="Appointment timing">
-            <span className="visit-guide-icon"><CalendarCheck2 aria-hidden="true" /></span>
-            <div>
-              <h3>Arrive a few minutes early</h3>
-              <p>
-                Reception can complete registration and payment before the consultation begins.
-              </p>
-            </div>
-          </div>
 
           <div className="urgent-note">
             <ShieldAlert aria-hidden="true" />

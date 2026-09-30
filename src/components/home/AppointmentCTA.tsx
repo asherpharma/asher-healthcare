@@ -30,7 +30,10 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-type Result = { tone: "success" | "error"; message: string } | null;
+type Result =
+  | { tone: "success"; message: string; doctor: string; date: string; time: string }
+  | { tone: "error"; message: string }
+  | null;
 
 type Availability = {
   key: string;
@@ -76,6 +79,8 @@ export default function AppointmentCTA() {
   const [submitting, setSubmitting] = useState(false);
   const [clinicClock, setClinicClock] = useState({ date: "", time: "" });
   const formStartedAt = useRef(0);
+  const submissionPending = useRef(false);
+  const resultRef = useRef<HTMLDivElement>(null);
 
   const allSlots = useMemo(
     () => date && clinicClock.date && dateIsEnabled(schedule, date)
@@ -97,6 +102,12 @@ export default function AppointmentCTA() {
     [allSlots, availabilityError, occupiedSlots],
   );
   const selectedTime = availableSlots.includes(time) ? time : "";
+
+  useEffect(() => {
+    if (!result) return;
+    resultRef.current?.focus({ preventScroll: true });
+    resultRef.current?.scrollIntoView({ behavior: "instant", block: "start" });
+  }, [result]);
 
   useEffect(() => {
     formStartedAt.current = Date.now();
@@ -122,9 +133,10 @@ export default function AppointmentCTA() {
 
   useEffect(() => {
     function selectCare(nextDoctorId: DoctorId) {
+      if (submissionPending.current) return;
       setDoctorId(nextDoctorId);
       setTime("");
-      setResult(null);
+      setResult((current) => current?.tone === "error" ? null : current);
       const doctor = DOCTORS.find((item) => item.id === nextDoctorId);
       setCarePrefillMessage(
         doctor ? `${doctor.specialty} selected. Choose your date and time below.` : "",
@@ -132,7 +144,9 @@ export default function AppointmentCTA() {
     }
 
     const careFromUrl = new URLSearchParams(window.location.search).get("care");
-    if (careFromUrl === "pediatrics" || careFromUrl === "obg") selectCare(careFromUrl);
+    const careFromFragment = window.location.hash.match(/^#appointment-(pediatrics|obg)$/u)?.[1];
+    const initialCare = careFromFragment ?? careFromUrl;
+    if (initialCare === "pediatrics" || initialCare === "obg") selectCare(initialCare);
 
     const onCareSelection = (event: Event) => {
       const doctorIdFromEvent = (event as CustomEvent<{ doctorId?: DoctorId }>).detail?.doctorId;
@@ -170,7 +184,8 @@ export default function AppointmentCTA() {
 
   async function submitBooking(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (availabilityLoading || availabilityError) {
+    if (submissionPending.current) return;
+    if (scheduleLoading || availabilityLoading || availabilityError) {
       setResult({ tone: "error", message: "Live availability is still being checked. Please wait a moment and try again." });
       return;
     }
@@ -195,6 +210,7 @@ export default function AppointmentCTA() {
       formElapsedMs: formStartedAt.current > 0 ? Date.now() - formStartedAt.current : 0,
     };
 
+    submissionPending.current = true;
     setSubmitting(true);
     setResult(null);
     try {
@@ -208,19 +224,6 @@ export default function AppointmentCTA() {
         throw new Error(responseBody.error || "The appointment could not be reserved.");
       }
 
-      const message = [
-        "Hello Asher Healthcare, I have reserved an appointment slot.",
-        "",
-        `Patient: ${payload.patientName}`,
-        `Phone: ${payload.phone}`,
-        `Doctor: ${doctor?.label || doctorId}`,
-        `Date: ${date}`,
-        `Time: ${formatAppointmentTime(selectedTime)}`,
-        `Reason: ${payload.reason || "Not specified"}`,
-      ].join("\n");
-      const whatsappUrl = `https://wa.me/919019263709?text=${encodeURIComponent(message)}`;
-      const whatsapp = window.open(whatsappUrl, "_blank", "noopener,noreferrer");
-
       setAvailability((current) => ({
         key: availabilityKey,
         slots: new Set(current.key === availabilityKey ? current.slots : []).add(selectedTime),
@@ -228,11 +231,15 @@ export default function AppointmentCTA() {
       }));
       setResult({
         tone: "success",
-        message: `Your ${formatAppointmentTime(selectedTime)} slot is reserved. The clinic will confirm it shortly.`,
+        message: "Your slot is reserved and awaiting clinic confirmation.",
+        doctor: doctor?.label || doctorId,
+        date: payload.preferredDate,
+        time: payload.preferredTime,
       });
       formElement.reset();
+      setTime("");
+      setCarePrefillMessage("");
       formStartedAt.current = Date.now();
-      if (!whatsapp) window.location.href = whatsappUrl;
     } catch (bookingError) {
       setResult({
         tone: "error",
@@ -241,6 +248,7 @@ export default function AppointmentCTA() {
           : "The appointment could not be reserved. Please call the clinic.",
       });
     } finally {
+      submissionPending.current = false;
       setSubmitting(false);
     }
   }
@@ -249,27 +257,28 @@ export default function AppointmentCTA() {
   const scheduleText = scheduleSummary(schedule, doctorId);
 
   return (
-    <section id="appointment" className="section appointment-section">
+    <section id="appointment" className="section appointment-section" aria-labelledby="appointment-heading">
+      <span id="appointment-pediatrics" className="patient-anchor" aria-hidden="true" />
+      <span id="appointment-obg" className="patient-anchor" aria-hidden="true" />
       <div className="site-shell appointment-shell">
         <div className="appointment-copy">
-          <span className="section-kicker">Book in under a minute</span>
-          <h2>Choose a live appointment slot.</h2>
+          <span className="section-kicker">Book a specialist visit</span>
+          <h2 id="appointment-heading">A time that works for you.</h2>
           <p>
-            Appointments are available Monday to Saturday. Select a doctor, date,
-            and one of the currently available times.
+            Choose your specialist and an available time, then add the patient&apos;s
+            details. Your reservation is subject to confirmation by the clinic.
           </p>
           <div className="booking-points">
-            <span><MessageCircle /> Quick confirmation on WhatsApp</span>
-            <span><Clock3 /> Dr. Shafi 5–8 PM · Dr. Reshma 7–9 PM</span>
-            <span><ShieldCheck /> Live timings set by the clinic</span>
+            <span><Clock3 aria-hidden="true" /> Usual hours, Mon–Sat: Dr. Shafi 5–8 PM · Dr. Reshma 7–9 PM</span>
+            <span><ShieldCheck aria-hidden="true" /> The form shows the latest available timings</span>
           </div>
           <a className="phone-card" href="tel:+919019263709">
-            <span><Phone /></span>
+            <span><Phone aria-hidden="true" /></span>
             <div><small>Prefer to call?</small><strong>+91 90192 63709</strong></div>
           </a>
         </div>
 
-        <form className="booking-card" onSubmit={submitBooking}>
+        <form className="booking-card" onSubmit={submitBooking} aria-labelledby="booking-form-heading" aria-busy={submitting}>
           <div
             aria-hidden="true"
             style={{ position: "absolute", left: "-10000px", width: 1, height: 1, overflow: "hidden" }}
@@ -280,8 +289,36 @@ export default function AppointmentCTA() {
             </label>
           </div>
           <div className="booking-card-head">
-            <span><CalendarCheck /></span>
-            <div><small>Live appointment booking</small><h3>Reserve your preferred time</h3></div>
+            <span><CalendarCheck aria-hidden="true" /></span>
+            <div><small>Specialist appointments</small><h3 id="booking-form-heading">Reserve your visit</h3></div>
+          </div>
+          <div
+            ref={resultRef}
+            role={result?.tone === "error" ? "alert" : "status"}
+            aria-live={result?.tone === "error" ? "assertive" : "polite"}
+            aria-atomic="true"
+            tabIndex={result ? -1 : undefined}
+            className={result?.tone === "success" ? "booking-feedback booking-confirmation" : result ? "booking-feedback rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700" : "booking-feedback"}
+          >
+            {result?.tone === "success" ? (
+              <>
+                <h4><CheckCircle2 aria-hidden="true" /> Reservation received</h4>
+                <p>{result.message}</p>
+                <dl>
+                  <div><dt>Specialist</dt><dd>{result.doctor}</dd></div>
+                  <div>
+                    <dt>Date</dt>
+                    <dd><time dateTime={result.date}>{new Intl.DateTimeFormat("en-IN", { dateStyle: "long", timeZone: "Asia/Kolkata" }).format(new Date(`${result.date}T00:00:00+05:30`))}</time></dd>
+                  </div>
+                  <div><dt>Time</dt><dd>{formatAppointmentTime(result.time)} IST</dd></div>
+                </dl>
+                <p>You do not need to book again. To change or cancel, contact the clinic.</p>
+                <div className="booking-confirmation-actions">
+                  <a href="tel:+919019263709"><Phone aria-hidden="true" /> Call the clinic</a>
+                  <a href="https://wa.me/919019263709" target="_blank" rel="noreferrer"><MessageCircle aria-hidden="true" /> WhatsApp for help (optional)</a>
+                </div>
+              </>
+            ) : result ? <p>{result.message}</p> : null}
           </div>
           {carePrefillMessage ? (
             <p className="booking-care-selection" role="status" aria-live="polite">
@@ -289,119 +326,124 @@ export default function AppointmentCTA() {
             </p>
           ) : null}
 
-          <label>
-            Patient name
-            <input name="name" type="text" placeholder="Full name" autoComplete="name" minLength={2} maxLength={80} required />
-          </label>
-          <label>
-            Mobile number
-            <input name="phone" type="tel" placeholder="10-digit mobile number" pattern="[0-9 +()-]{10,20}" autoComplete="tel" required />
-          </label>
-          <label>
-            Specialist
-            <select
-              name="doctor"
-              value={doctorId}
+          <fieldset className="patient-booking-step" disabled={submitting}>
+            <legend><span aria-hidden="true">1</span> Choose your appointment</legend>
+            <label>
+              Specialist
+              <select
+                name="doctor"
+                value={doctorId}
                 onChange={(event) => {
                   setDoctorId(event.target.value as DoctorId);
                   setTime("");
                   setCarePrefillMessage("");
-                  setResult(null);
+                  setResult((current) => current?.tone === "error" ? null : current);
                 }}
-              required
-            >
-              {DOCTORS.map((doctor) => (
-                <option key={doctor.id} value={doctor.id}>{doctor.label}</option>
-              ))}
-            </select>
-            <small className="mt-2 block text-slate-500">{scheduleText}</small>
-          </label>
-
-          <div className="form-row">
-            <label>
-              Appointment date
-              <input
-                name="date"
-                type="date"
-                min={clinicClock.date || undefined}
-                value={date}
-                onChange={(event) => {
-                  setDate(event.target.value);
-                  setTime("");
-                  setResult(null);
-                }}
-                required
-              />
-            </label>
-            <label>
-              Available time
-              <select
-                name="time"
-                value={selectedTime}
-                onChange={(event) => setTime(event.target.value)}
-                disabled={!selectedDayEnabled || availabilityLoading || availableSlots.length === 0}
+                aria-describedby="booking-schedule"
                 required
               >
-                <option value="">
-                  {availabilityLoading
-                    ? "Checking availability…"
-                    : availabilityError
-                      ? "Availability temporarily unavailable"
-                    : !selectedDayEnabled
-                      ? "Clinic closed this day"
-                      : availableSlots.length === 0
-                        ? "No slots available"
-                        : "Select a time"}
-                </option>
-                {allSlots.map((slot) => (
-                  <option key={appointmentSlotId(doctorId, date, slot)} value={slot} disabled={occupiedSlots.has(slot)}>
-                    {formatAppointmentTime(slot)}{occupiedSlots.has(slot) ? " — Booked" : ""}
-                  </option>
+                {DOCTORS.map((doctor) => (
+                  <option key={doctor.id} value={doctor.id}>{doctor.label}</option>
                 ))}
               </select>
+              <small id="booking-schedule" className="mt-2 block text-slate-500">{scheduleText}</small>
             </label>
-          </div>
 
-          {date && !selectedDayEnabled && (
-            <p className="rounded-xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
-              Appointments are closed on this day. Please choose Monday to Saturday.
-            </p>
-          )}
-          {scheduleError && (
-            <p className="rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              {scheduleError} Default clinic timings are shown.
-            </p>
-          )}
-          {availabilityError && (
-            <p className="rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700" role="alert">
-              Live appointment availability could not be checked. Please retry in a moment or call the clinic on 90192 63709.
-            </p>
-          )}
+            <div className="form-row">
+              <label>
+                Appointment date
+                <input
+                  name="date"
+                  type="date"
+                  min={clinicClock.date || undefined}
+                  value={date}
+                  onChange={(event) => {
+                    setDate(event.target.value);
+                    setTime("");
+                    setResult((current) => current?.tone === "error" ? null : current);
+                  }}
+                  required
+                />
+              </label>
+              <label>
+                Available time
+                <select
+                  name="time"
+                  value={selectedTime}
+                  onChange={(event) => setTime(event.target.value)}
+                  disabled={!selectedDayEnabled || availabilityLoading || availableSlots.length === 0}
+                  required
+                >
+                  <option value="">
+                    {availabilityLoading
+                      ? "Checking availability…"
+                      : availabilityError
+                        ? "Availability temporarily unavailable"
+                        : !selectedDayEnabled
+                          ? "Clinic closed this day"
+                          : availableSlots.length === 0
+                            ? "No slots available"
+                            : "Select a time"}
+                  </option>
+                  {allSlots.map((slot) => (
+                    <option key={appointmentSlotId(doctorId, date, slot)} value={slot} disabled={occupiedSlots.has(slot)}>
+                      {formatAppointmentTime(slot)}{occupiedSlots.has(slot) ? " — Booked" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
 
-          <label>
-            Reason for visit <span className="optional">Optional</span>
-            <textarea name="reason" rows={3} maxLength={500} placeholder="Briefly tell us how we can help" />
-          </label>
-          <label className="flex-row">
-            <input name="consent" type="checkbox" required style={{ width: 18, height: 18 }} />
-            <span>I agree that the clinic may use these details to arrange my appointment.</span>
-          </label>
+            {date && !selectedDayEnabled && (
+              <p className="rounded-xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+                Appointments are closed on this day. Please choose another date or call the clinic.
+              </p>
+            )}
+            {scheduleError && (
+              <p className="rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                {scheduleError} Default clinic timings are shown.
+              </p>
+            )}
+            {availabilityError && (
+              <p className="rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700" role="alert">
+                Live appointment availability could not be checked. Please retry in a moment or call the clinic on 90192 63709.
+              </p>
+            )}
+          </fieldset>
+
+          <fieldset className="patient-booking-step" disabled={submitting}>
+            <legend><span aria-hidden="true">2</span> Patient details</legend>
+            <label>
+              Patient name
+              <input name="name" type="text" placeholder="Full name" autoComplete="name" minLength={2} maxLength={80} required />
+            </label>
+            <label>
+              Mobile number
+              <input name="phone" type="tel" inputMode="tel" placeholder="10-digit mobile number" pattern="[0-9 +()-]{10,20}" autoComplete="tel" required />
+            </label>
+            <label>
+              Reason for visit <span className="optional">Optional</span>
+              <textarea name="reason" rows={2} maxLength={500} placeholder="Briefly tell us how we can help" />
+            </label>
+            <label className="flex-row">
+              <input name="consent" type="checkbox" required style={{ width: 18, height: 18 }} />
+              <span>I agree that the clinic may use these details to arrange my appointment.</span>
+            </label>
+          </fieldset>
+          <p className="form-note">
+            We use these details to arrange your visit. <a href="/privacy">Read our privacy notice.</a>
+          </p>
           <button
             className="button button-primary booking-submit"
             type="submit"
             disabled={submitting || scheduleLoading || availabilityLoading || availabilityError || !selectedTime}
           >
-            {submitting ? <LoaderCircle className="animate-spin" /> : <CalendarCheck />}
+            {submitting ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <CalendarCheck aria-hidden="true" />}
             {submitting ? "Reserving slot…" : "Reserve appointment"}
           </button>
-          {result && (
-            <p className={result.tone === "success" ? "form-success" : "rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700"}>
-              {result.tone === "success" && <CheckCircle2 />} {result.message}
-            </p>
-          )}
           <p className="form-note">
-            The selected time is held for you after submission and confirmed by the clinic.
-            For emergencies, contact local emergency services.
+            A reservation is not a confirmed appointment. Please wait for clinic confirmation.
+            For emergencies, contact local emergency services or the nearest emergency department.
           </p>
         </form>
       </div>
