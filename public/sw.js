@@ -1,4 +1,4 @@
-const APP_RELEASE = "2026.08.25.1-care-experience";
+const APP_RELEASE = "2026.09.30.1-patient-makeover";
 const CACHE_NAME = `asher-public-${APP_RELEASE}`;
 const PUBLIC_ASSETS = [
   "/",
@@ -6,8 +6,8 @@ const PUBLIC_ASSETS = [
   "/public-offline.html",
   "/manifest.webmanifest",
   "/images/asher-logo-compact-v2.webp",
-  "/asher-hero-clinic-v2.webp",
-  "/asher-abstract-care-v2.webp",
+  "/images/dr-shafi-ahamad.jpg",
+  "/images/dr-shaik-reshma.jpg",
   "/images/pediatric-care-consultation-v2.webp",
   "/images/womens-care-consultation-v2.webp",
   "/icons/icon-192.png",
