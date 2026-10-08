@@ -12,7 +12,7 @@ async function source(relativePath) {
 test("patient homepage is readable without decorative motion or client-only reveals", async () => {
   const page = await source("src/app/page.tsx");
   const homeFiles = await Promise.all([
-    "Hero", "CareOptions", "Doctors", "AppointmentCTA", "VisitGuide", "FrequentlyAskedQuestions", "Contact",
+    "Hero", "CareOptions", "Doctors", "Gallery", "AppointmentCTA", "VisitGuide", "FrequentlyAskedQuestions", "Contact",
   ].map((file) => source(`src/components/home/${file}.tsx`)));
 
   assert.doesNotMatch(page, /PremiumMotion|^"use client"/u);
@@ -43,6 +43,16 @@ test("hero uses identifiable real doctors and direct patient actions", async () 
   assert.match(hero, /href="tel:\+919019263709"/u);
   assert.match(hero, /href="https:\/\/maps\.app\.goo\.gl\/cvFLUCkF6nRPAHUx5"/u);
   assert.doesNotMatch(hero, /asher-hero-clinic|Representative|floating-card|hero-security-chip|onClick|preventDefault/u);
+});
+
+test("care gallery uses native horizontal snap scrolling and no decorative animation", async () => {
+  const gallery = await source("src/components/home/Gallery.tsx");
+  const css = await source("src/app/patient-home.css");
+  assert.match(gallery, /^"use client";/u);
+  assert.match(css, /overflow-x:\s*auto/u);
+  assert.match(css, /scroll-snap-type:\s*x\s+mandatory/u);
+  assert.match(css, /scroll-snap-align:\s*start/u);
+  assert.doesNotMatch(gallery, /asher-hero-clinic|asher-abstract-care|data-premium-tilt|onPointerMove|onMouseMove/u);
 });
 
 test("makeover CSS cannot leak into staff pages and supports keyboard and reduced-motion users", async () => {
