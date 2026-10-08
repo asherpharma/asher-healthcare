@@ -328,6 +328,49 @@
   .patient-home .footer-grid > div:not(:first-child) a { min-height: 44px; }
   .patient-home .footer-grid h3 { font-size: .72rem; }
 }
+.patient-home .patient-gallery-section { background: #f8f6ef; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.patient-home .patient-gallery-layout { display: grid; grid-template-columns: minmax(0,.8fr) minmax(0,1fr); align-items: center; gap: 70px; }
+.patient-home .patient-gallery-copy .section-kicker { display: inline-flex; align-items: center; gap: 9px; }
+.patient-home .patient-gallery-copy h2 { margin: 18px 0; max-width: 450px; font-family: var(--font-display), Georgia, serif; font-size: clamp(2.1rem,3.4vw,3.15rem); font-weight: 500; line-height: 1.12; letter-spacing: -.025em; color: var(--navy); }
+.patient-home .patient-gallery-copy > p { max-width: 360px; line-height: 1.75; color: var(--muted); }
+.patient-home .patient-gallery-copy .patient-gallery-context { margin-top: 26px; font-size: .77rem; line-height: 1.65; }
+.patient-home .patient-gallery-carousel { min-width: 0; }
+.patient-home .patient-gallery-controls { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.patient-home .patient-gallery-count { flex: 1; font-size: .75rem; font-weight: 700; letter-spacing: .12em; color: var(--teal); }
+.patient-home .patient-gallery-controls button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 44px; min-width: 44px; border: 1px solid #cdd7cc; border-radius: 50%; background: var(--paper); color: var(--navy); cursor: pointer; }
+.patient-home .patient-gallery-controls .patient-gallery-play { border-radius: 24px; padding: 0 15px; font-size: .76rem; font-weight: 600; }
+.patient-home .patient-gallery-controls button:hover { background: var(--teal-soft); }
+.patient-home .patient-gallery-controls button:disabled { color: var(--muted); cursor: default; }
+.patient-home .patient-gallery-track { display: flex; overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x mandatory; scrollbar-width: thin; scrollbar-color: #a3b7a6 #eeeee5; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); }
+.patient-home .patient-gallery-slide { flex: 0 0 100%; min-width: 0; margin: 0; scroll-snap-align: start; scroll-snap-stop: always; }
+.patient-home .patient-gallery-image { position: relative; height: 410px; background: #edece3; }
+.patient-home .patient-gallery-image img { object-fit: contain; }
+.patient-home .patient-gallery-slide figcaption { min-height: 126px; padding: 22px 26px; border-top: 1px solid var(--line); }
+.patient-home .patient-gallery-slide h3 { margin: 0 0 8px; font-family: var(--font-display), Georgia, serif; font-size: 1.6rem; font-weight: 500; line-height: 1.2; color: var(--navy); }
+.patient-home .patient-gallery-slide p { margin: 0; max-width: 460px; font-size: .79rem; color: var(--muted); line-height: 1.6; }
+.patient-home .patient-gallery-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 5px; }
+.patient-home .patient-gallery-dots { display: flex; }
+.patient-home .patient-gallery-dots button { display: grid; place-items: center; min-width: 44px; min-height: 44px; border: 0; padding: 0; background: transparent; cursor: pointer; border-radius: 50%; }
+.patient-home .patient-gallery-dots span { display: block; width: 7px; height: 7px; background: #a9b5a7; border-radius: 50%; }
+.patient-home .patient-gallery-dots button[aria-current="true"] span { width: 22px; height: 7px; border-radius: 4px; background: var(--teal); }
+.patient-home .patient-gallery-hint { color: var(--muted); font-size: .7rem; }
+.patient-home .patient-gallery-announcement { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media (max-width: 1100px) {
+  .patient-home .patient-gallery-layout { gap: 35px; }
+}
+@media (max-width: 800px) {
+  .patient-home .patient-gallery-layout { grid-template-columns: 1fr; gap: 22px; }
+  .patient-home .patient-gallery-copy > p { max-width: 580px; }
+  .patient-home .patient-gallery-copy .patient-gallery-context { margin-top: 12px; }
+  .patient-home .patient-gallery-carousel { width: 100%; max-width: 580px; margin-inline: auto; }
+}
+@media (max-width: 600px) {
+  .patient-home .patient-gallery-copy h2 { font-size: 2.15rem; }
+  .patient-home .patient-gallery-image { height: min(410px, 106vw); }
+  .patient-home .patient-gallery-slide figcaption { padding: 19px 20px; min-height: 135px; }
+  .patient-home .patient-gallery-slide h3 { font-size: 1.4rem; }
+  .patient-home .patient-gallery-hint { max-width: 95px; text-align: right; }
+}
 @media (prefers-reduced-motion: reduce) {
   .patient-home *, .patient-home *::before, .patient-home *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
