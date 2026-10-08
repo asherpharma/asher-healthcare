@@ -2,6 +2,7 @@ import Navbar from "@/components/layout/Navbar";
 import Hero from "@/components/home/Hero";
 import CareOptions from "@/components/home/CareOptions";
 import Doctors from "@/components/home/Doctors";
+import Gallery from "@/components/home/Gallery";
 import VisitGuide from "@/components/home/VisitGuide";
 import AppointmentCTA from "@/components/home/AppointmentCTA";
 import Contact from "@/components/home/Contact";
@@ -80,6 +81,7 @@ export default function Home() {
         <Hero />
         <CareOptions />
         <Doctors />
+        <Gallery />
         <AppointmentCTA />
         <VisitGuide />
         <FrequentlyAskedQuestions />

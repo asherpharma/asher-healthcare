@@ -16,6 +16,8 @@ const publicImages = [
   "public/images/womens-care-consultation-v2.webp",
   "public/images/dr-shafi-ahamad.jpg",
   "public/images/dr-shaik-reshma.jpg",
+  "public/images/gallery-newborn-care-v1.webp",
+  "public/images/gallery-family-care-private-v1.webp",
 ];
 
 async function loadPublicComponent(relativePath, browser = {}, modules = {}) {
@@ -58,6 +60,14 @@ test("public care imagery exists and stays lightweight", async () => {
     assert.ok(details.size > 10_000, `${relativePath} should not be empty`);
     assert.ok(details.size < 250_000, `${relativePath} should stay below 250 KB`);
   }
+  const galleryAssets = await Promise.all([
+    "public/images/gallery-newborn-care-v1.webp",
+    "public/images/gallery-family-care-private-v1.webp",
+    "public/images/dr-shafi-ahamad.jpg",
+    "public/images/dr-shaik-reshma.jpg",
+  ].map((relativePath) => stat(path.join(root, relativePath))));
+  assert.ok(galleryAssets.reduce((total, asset) => total + asset.size, 0) < 600_000,
+    "the four gallery images together should stay below 600 KB");
 });
 
 test("homepage keeps a short patient-first sequence without duplicate sections", async () => {
@@ -70,18 +80,20 @@ test("homepage keeps a short patient-first sequence without duplicate sections",
   const main = page.match(/<main\b[^>]*>([\s\S]*?)<\/main>/u)?.[1];
   assert.ok(main, "the homepage must retain its main landmark");
   assert.deepEqual([...main.matchAll(/<([A-Z]\w*)\s*\/>/gu)].map((match) => match[1]), [
-    "Hero", "CareOptions", "Doctors", "AppointmentCTA", "VisitGuide", "FrequentlyAskedQuestions", "Contact",
+    "Hero", "CareOptions", "Doctors", "Gallery", "AppointmentCTA", "VisitGuide", "FrequentlyAskedQuestions", "Contact",
   ]);
-  assert.doesNotMatch(page, /<(?:Services|GeneralCare|CarePathways|WhyChooseUs|PatientJourney|Gallery|PremiumMotion)\b/u);
+  assert.doesNotMatch(page, /<(?:Services|GeneralCare|CarePathways|WhyChooseUs|PatientJourney|PremiumMotion)\b/u);
   assert.match(page, /className="patient-home"/u);
   assert.match(page, /import "\.\/patient-home\.css"/u);
 
-  const sources = await Promise.all(["CareOptions", "Doctors", "AppointmentCTA", "VisitGuide", "FrequentlyAskedQuestions", "Contact"].map(
+  const sources = await Promise.all(["CareOptions", "Doctors", "Gallery", "AppointmentCTA", "VisitGuide", "FrequentlyAskedQuestions", "Contact"].map(
     (name) => readFile(path.join(root, `src/components/home/${name}.tsx`), "utf8"),
   ));
-  for (const anchor of ["services", "care", "general-care", "doctors", "appointment", "appointment-pediatrics", "appointment-obg", "journey", "clinic", "contact"]) {
+  for (const anchor of ["services", "care", "general-care", "doctors", "moments-of-care", "appointment", "appointment-pediatrics", "appointment-obg", "journey", "clinic", "contact"]) {
     assert.ok(sources.some((source) => source.includes(`id="${anchor}"`)), `legacy #${anchor} links must resolve`);
   }
+  const sectionIds = [...sources.join("\n").matchAll(/<section\b[^>]*\bid="([^"]+)"/gu)].map((match) => match[1]);
+  assert.equal(new Set(sectionIds).size, sectionIds.length, "homepage section IDs must be unique");
   assert.match(sources.join("\n"), /For emergencies|For urgent or emergency|emergency services/u);
   assert.match(appointment, /CARE_SELECTION_EVENT/u);
 });
@@ -149,6 +161,8 @@ test("the public service worker precaches available real-doctor assets without o
   assert.match(cacheNames[0], /patient-makeover/u);
   assert.ok(precached.includes("/images/dr-shafi-ahamad.jpg"));
   assert.ok(precached.includes("/images/dr-shaik-reshma.jpg"));
+  assert.ok(!precached.includes("/images/gallery-newborn-care-v1.webp"), "below-fold gallery images must not be precached");
+  assert.ok(!precached.includes("/images/gallery-family-care-private-v1.webp"), "privacy-edited gallery imagery must not be precached");
   assert.equal(new Set(precached).size, precached.length);
   for (const asset of precached) {
     assert.match(asset, /^\//u);
