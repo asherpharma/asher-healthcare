@@ -27,7 +27,7 @@ const photos = [
     src: "/images/dr-shaik-reshma.jpg",
     alt: "Dr. Shaik Reshma wearing a white coat",
     title: "Dr. Shaik Reshma",
-    caption: "Consultant Obstetrician & Gynaecologist · Laparoscopic Surgeon & Infertility Specialist",
+    caption: "Consultant Obstetrician & Gynaecologist · Laparoscopic Surgeon",
   },
 ];
 
