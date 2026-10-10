@@ -20,7 +20,7 @@ const doctors = [
     name: "Dr. Shaik Reshma",
     qualifications: "MBBS, MS (OBG)",
     role: "Consultant Obstetrician & Gynaecologist",
-    focus: "Laparoscopic Surgeon & Infertility Specialist",
+    focus: "Laparoscopic Surgeon",
     hours: "Mon–Sat · 7:00 PM–9:00 PM",
     image: "/images/dr-shaik-reshma.jpg",
     imagePosition: "center 20%",
