@@ -63,7 +63,6 @@ export const careJourneys: readonly CareJourney[] = [
     reasons: [
       "Pregnancy, antenatal and postnatal care",
       "Periods, PCOS and hormonal concerns",
-      "Menopause and hormonal changes",
       "Preventive gynaecology and wellness",
       "Laparoscopic assessment and planning",
     ],
