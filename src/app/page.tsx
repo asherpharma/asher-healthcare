@@ -47,7 +47,7 @@ const clinicSchema = {
       name: "Dr. Shaik Reshma",
       image: "https://asherhealthcare.in/images/dr-shaik-reshma.jpg",
       jobTitle: "Consultant Obstetrician and Gynaecologist",
-      knowsAbout: ["Obstetrics", "Gynaecology", "Fertility care", "Laparoscopic surgery"],
+      knowsAbout: ["Obstetrics", "Gynaecology", "Laparoscopic surgery"],
     },
   ],
 };
