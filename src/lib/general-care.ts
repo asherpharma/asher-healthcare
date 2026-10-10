@@ -36,9 +36,4 @@ export const generalCareServices = [
     description:
       "Vaccination services with clinical guidance. Contact the clinic to confirm the vaccine you need, availability and appointment arrangements.",
   },
-  {
-    title: "Fertility consultations & semen analysis",
-    description:
-      "Fertility consultations, semen analysis and male-fertility consultations. Call for preparation and booking details. On-site IVF treatment is not offered.",
-  },
 ] as const;
