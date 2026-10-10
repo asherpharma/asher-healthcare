@@ -335,15 +335,15 @@ test("appointment booking keeps its initial server and client markup time-neutra
 });
 
 test("general care lists only confirmed services with clinical boundaries", () => {
-  assert.equal(generalCareServices.length, 6);
+  assert.equal(generalCareServices.length, 5);
   const copy = generalCareServices.map(({ title, description }) => `${title} ${description}`).join("\n");
   assert.match(copy, /General consultations for all ages/u);
   assert.match(copy, /Blood and laboratory tests/u);
   assert.match(copy, /X-ray and ultrasound services/u);
   assert.match(copy, /IV treatment when prescribed by a doctor and clinically appropriate/u);
   assert.match(copy, /Vaccinations/u);
-  assert.match(copy, /semen analysis and male-fertility consultations/u);
-  assert.match(copy, /On-site IVF treatment is not offered\./u);
+  assert.doesNotMatch(copy, /fertility|semen|sperm|IVF/iu);
+  
   assert.doesNotMatch(copy, /\bCT\b|\bMRI\b|24\/7|instant reports|every possible test|detox|immune.boost|accredited/iu);
   assert.doesNotMatch(copy, /₹|\b\d{1,2}:\d{2}\b|\bAM\b|\bPM\b/u);
 });
@@ -518,4 +518,25 @@ test("homepage measurement boundaries render as native document links", async ()
   assert.match(portalLogin, /<a href="\/"/u);
   assert.match(portalDashboard, /<a href="\/#appointment"/u);
   assert.match(generalCarePage, /<a className=\{styles\.backLink\} href="\/#general-care"/u);
+});
+
+
+test("public marketing does not promote fertility or semen-analysis services", async () => {
+  const publicMarketingFiles = [
+    "src/app/page.tsx",
+    "src/app/care/womens-health/page.tsx",
+    "src/components/home/CareOptions.tsx",
+    "src/components/home/Doctors.tsx",
+    "src/components/home/FrequentlyAskedQuestions.tsx",
+    "src/components/home/Services.tsx",
+    "src/lib/general-care.ts",
+    "src/lib/public-clinic-content.ts",
+  ];
+  const sources = await Promise.all(
+    publicMarketingFiles.map((file) => readFile(path.join(root, file), "utf8")),
+  );
+  assert.doesNotMatch(
+    sources.join("\n"),
+    /\b(?:fertility|infertility|semen\s+analysis|male[- ]fertility)\b/iu,
+  );
 });

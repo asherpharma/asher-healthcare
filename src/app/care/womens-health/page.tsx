@@ -6,7 +6,7 @@ import { careJourneyById } from "@/lib/public-clinic-content";
 export const metadata: Metadata = {
   title: "Gynaecologist & Pregnancy Care in RK Hegde Nagar",
   description:
-    "Pregnancy, gynaecology, fertility and laparoscopic care with Dr. Shaik Reshma at Asher Healthcare, Bengaluru.",
+    "Pregnancy, gynaecology and laparoscopic care with Dr. Shaik Reshma at Asher Healthcare, Bengaluru.",
   alternates: { canonical: "/care/womens-health" },
   openGraph: {
     title: "Women’s Health & Pregnancy Care | Asher Healthcare",

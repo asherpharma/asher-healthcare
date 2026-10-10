@@ -14,7 +14,7 @@ export const clinicFaqs = [
   {
     question: "Which specialist should I choose?",
     answer:
-      "Choose Dr. Lt Col Shafi Ahamad for newborn, child, vaccination, allergy or asthma care. Choose Dr. Shaik Reshma for pregnancy, gynaecology, fertility or laparoscopic care.",
+      "Choose Dr. Lt Col Shafi Ahamad for newborn, child, vaccination, allergy or asthma care. Choose Dr. Shaik Reshma for pregnancy, gynaecology or laparoscopic care.",
   },
   {
     question: "What should I bring to the consultation?",

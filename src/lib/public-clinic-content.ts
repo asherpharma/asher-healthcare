@@ -52,7 +52,7 @@ export const careJourneys: readonly CareJourney[] = [
     title: "Women’s health & pregnancy care",
     eyebrow: "Support through every life stage",
     description:
-      "Private, respectful specialist care for pregnancy, periods, PCOS, fertility, preventive health and laparoscopic evaluation.",
+      "Private, respectful specialist care for pregnancy, periods, PCOS, preventive health and laparoscopic evaluation.",
     image: "/images/womens-care-consultation-v2.webp",
     imageAlt:
       "Representative image of a South Asian woman in a private gynaecology consultation",
@@ -63,7 +63,6 @@ export const careJourneys: readonly CareJourney[] = [
     reasons: [
       "Pregnancy, antenatal and postnatal care",
       "Periods, PCOS and hormonal concerns",
-      "Fertility evaluation and counselling",
       "Preventive gynaecology and wellness",
       "Laparoscopic assessment and planning",
     ],

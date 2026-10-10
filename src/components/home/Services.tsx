@@ -1,4 +1,4 @@
-import { Activity, Baby, Heart, HeartHandshake, Microscope, ShieldPlus, Sparkles, Stethoscope } from "lucide-react";
+import { Activity, Baby, Heart, HeartHandshake, Microscope, ShieldPlus, Stethoscope } from "lucide-react";
 
 const services = [
   { icon: Baby, title: "Pediatric Care", text: "Thoughtful consultations for newborns, infants, children and adolescents." },
@@ -6,7 +6,6 @@ const services = [
   { icon: Activity, title: "Allergy & Asthma", text: "Specialist assessment and long-term care plans for respiratory and allergic conditions." },
   { icon: Heart, title: "Pregnancy Care", text: "Personal antenatal and postnatal support throughout your pregnancy journey." },
   { icon: Stethoscope, title: "Women's Health", text: "Routine gynaecology, menstrual health, PCOS and preventive wellness care." },
-  { icon: Sparkles, title: "Fertility Support", text: "Sensitive infertility evaluation, counselling and coordinated treatment planning." },
   { icon: Microscope, title: "Laparoscopic Care", text: "Evaluation and surgical guidance with a minimally invasive approach where suitable." },
   { icon: HeartHandshake, title: "Growth & Nutrition", text: "Growth monitoring, developmental review and practical nutrition guidance for children." },
 ];
