@@ -25,7 +25,7 @@ export default function CareOptions() {
             <small>AT EVERY LIFE STAGE</small>
             <h3>Women&apos;s health</h3>
             <p>Personal support for your health, your pregnancy and the next steps you are considering.</p>
-            <ul><li>Pregnancy &amp; postnatal care</li><li>Periods, PCOS &amp; gynaecology</li><li>Fertility &amp; laparoscopic consultation</li></ul>
+            <ul><li>Pregnancy &amp; postnatal care</li><li>Periods, PCOS &amp; gynaecology</li><li>Laparoscopic consultation</li></ul>
             <div className="patient-care-actions"><CareBookingLink doctorId="obg" className="patient-text-link">Book women&apos;s care <ArrowRight aria-hidden="true" /></CareBookingLink><a href="/care/womens-health">Explore women&apos;s health</a></div>
           </article>
           <article id="general-care" className="patient-care-card patient-care-general">
