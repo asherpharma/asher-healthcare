@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Clock3,
   FileHeart,
+  MapPin,
   MessageCircle,
   Phone,
   ShieldAlert,
@@ -12,15 +13,19 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 
+import styles from "./CareDetailPage.module.css";
 import Footer from "@/components/layout/Footer";
 import Navbar from "@/components/layout/Navbar";
+import { clinicVisit } from "@/lib/general-care";
 import type { CareJourney } from "@/lib/public-clinic-content";
 
 export default function CareDetailPage({ journey }: { journey: CareJourney }) {
+  const bookingHref = "/?care=" + journey.id + "#appointment";
+
   return (
     <>
-      <Navbar />
-      <main id="main-content" className={`care-detail care-detail-${journey.id}`}>
+      <Navbar bookingHref={bookingHref} />
+      <main id="main-content" className={"care-detail care-detail-" + journey.id}>
         <section className="care-detail-hero">
           <div className="site-shell care-detail-hero-grid">
             <div className="care-detail-hero-copy">
@@ -28,26 +33,65 @@ export default function CareDetailPage({ journey }: { journey: CareJourney }) {
               <span className="section-kicker">{journey.eyebrow}</span>
               <h1>{journey.title}</h1>
               <p>{journey.description}</p>
+
+              <section className={styles.specialistCard} aria-label="Your Asher specialist">
+                <small>Your Asher specialist</small>
+                <strong>{journey.doctor}</strong>
+                <p>{journey.doctorRole}</p>
+                <div className={styles.credentials}>
+                  <span>{journey.doctorQualifications}</span>
+                  <span>{journey.doctorFocus}</span>
+                </div>
+              </section>
+
               <div className="care-detail-actions">
-                <a className="button button-primary" href={`/?care=${journey.id}#appointment`}>
+                <a className="button button-primary" href={bookingHref}>
                   <CalendarDays /> Book this specialist
                 </a>
-                <a className="button button-ghost" href="tel:+919019263709"><Phone /> Call clinic</a>
+                <a className="button button-ghost" href={clinicVisit.phoneHref}>
+                  <Phone /> Call clinic
+                </a>
               </div>
               <div className="care-detail-facts">
                 <span><Clock3 /> {journey.appointmentHours}</span>
                 <span><Stethoscope /> {journey.doctorRole}</span>
               </div>
             </div>
-            <div className="care-detail-image">
-              <Image
-                src={journey.image}
-                alt={journey.imageAlt}
-                fill
-                priority
-                sizes="(max-width: 800px) calc(100vw - 28px), 48vw"
-              />
-              <span>Representative care experience</span>
+
+            <div>
+              <div className={"care-detail-image " + styles.doctorPortrait}>
+                <Image
+                  src={journey.doctorImage}
+                  alt={journey.doctorImageAlt}
+                  fill
+                  priority
+                  className={styles.doctorPhoto}
+                  sizes="(max-width: 800px) calc(100vw - 28px), 48vw"
+                />
+                <div aria-hidden="true" className={styles.portraitShade} />
+                <div className={styles.portraitCaption}>
+                  <strong>{journey.doctor}</strong>
+                  <span>{journey.doctorRole}</span>
+                </div>
+              </div>
+              <div className={styles.clinicCard}>
+                <div className={styles.clinicPlace}>
+                  <MapPin aria-hidden="true" />
+                  <div>
+                    <strong>Visit Asher Healthcare</strong>
+                    <address>{clinicVisit.address}</address>
+                  </div>
+                </div>
+                <a
+                  className={styles.directionsLink}
+                  href={clinicVisit.directionsHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label="Get directions to Asher Healthcare"
+                >
+                  <MapPin aria-hidden="true" /> Directions
+                </a>
+              </div>
             </div>
           </div>
         </section>
@@ -94,7 +138,7 @@ export default function CareDetailPage({ journey }: { journey: CareJourney }) {
               <p>The live booking desk reflects the latest schedule set by the clinic.</p>
             </div>
             <div className="care-detail-cta-actions">
-              <a className="button" href={`/?care=${journey.id}#appointment`}><CalendarDays /> View live slots</a>
+              <a className="button" href={bookingHref}><CalendarDays /> View live slots</a>
               <a href="https://wa.me/919019263709" target="_blank" rel="noreferrer"><MessageCircle /> Ask on WhatsApp</a>
             </div>
           </div>
@@ -104,7 +148,7 @@ export default function CareDetailPage({ journey }: { journey: CareJourney }) {
           </div>
         </section>
       </main>
-      <Footer />
+      <Footer bookingHref={bookingHref} />
     </>
   );
 }
