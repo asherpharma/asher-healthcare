@@ -57,3 +57,14 @@ test("specialist hero compaction stays scoped and mobile actions remain touch-si
   assert.ok(css.includes("font-size: clamp(2.2rem, 10.5vw, 2.75rem);"));
   assert.ok(css.includes("min-height: 48px;"));
 });
+
+
+test("credential compaction targets stable specialist-card markup", async () => {
+  const css = await read("src/app/globals.css");
+  for (const page of ["obg", "pediatrics"]) {
+    assert.ok(
+      css.includes(`.care-detail-${page} .care-detail-hero-copy [aria-label=\"Your Asher specialist\"] > div > span`),
+      `${page} credential badge selector`,
+    );
+  }
+});
