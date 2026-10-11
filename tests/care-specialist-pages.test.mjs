@@ -44,3 +44,27 @@ test("shared navigation keeps its home default and specialist portrait styling a
   assert.ok(styles.includes("@media (max-width: 540px)"));
   assert.ok(styles.includes(".doctorPortrait"));
 });
+
+
+test("specialist hero compaction stays scoped and mobile actions remain touch-sized", async () => {
+  const css = await read("src/app/globals.css");
+  for (const page of ["obg", "pediatrics"]) {
+    assert.ok(css.includes(`.care-detail-${page} .care-detail-hero`), `${page} hero selector`);
+    assert.ok(css.includes(`.care-detail-${page} .care-detail-hero-copy h1`), `${page} heading selector`);
+    assert.ok(css.includes(`.care-detail-${page} .care-detail-actions .button`), `${page} action selector`);
+    assert.ok(css.includes(`.care-detail-${page} .care-detail-facts`), `${page} facts selector`);
+  }
+  assert.ok(css.includes("font-size: clamp(2.2rem, 10.5vw, 2.75rem);"));
+  assert.ok(css.includes("min-height: 48px;"));
+});
+
+
+test("credential compaction targets stable specialist-card markup", async () => {
+  const css = await read("src/app/globals.css");
+  for (const page of ["obg", "pediatrics"]) {
+    assert.ok(
+      css.includes(`.care-detail-${page} .care-detail-hero-copy [aria-label=\"Your Asher specialist\"] > div > span`),
+      `${page} credential badge selector`,
+    );
+  }
+});
