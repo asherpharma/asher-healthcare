@@ -13,6 +13,10 @@ export type CareJourney = {
   href: string;
   doctor: string;
   doctorRole: string;
+  doctorQualifications: string;
+  doctorFocus: string;
+  doctorImage: string;
+  doctorImageAlt: string;
   appointmentHours: string;
   reasons: readonly string[];
   preparation: readonly string[];
@@ -32,6 +36,11 @@ export const careJourneys: readonly CareJourney[] = [
     href: "/care/pediatrics",
     doctor: "Dr. Lt Col Shafi Ahamad",
     doctorRole: "Consultant Pediatrician",
+    doctorQualifications: "MBBS, MD (Pediatrics)",
+    doctorFocus: "Pediatric Allergy & Asthma Specialist",
+    doctorImage: "/images/dr-shafi-ahamad.jpg",
+    doctorImageAlt:
+      "Dr. Lt Col Shafi Ahamad, Consultant Pediatrician at Asher Healthcare",
     appointmentHours: "Mon–Sat · 5:00 PM–8:00 PM",
     reasons: [
       "Newborn and routine child check-ups",
@@ -59,6 +68,11 @@ export const careJourneys: readonly CareJourney[] = [
     href: "/care/womens-health",
     doctor: "Dr. Shaik Reshma",
     doctorRole: "Consultant Obstetrician & Gynaecologist",
+    doctorQualifications: "MBBS, MS (OBG)",
+    doctorFocus: "Laparoscopic Surgeon",
+    doctorImage: "/images/dr-shaik-reshma.jpg",
+    doctorImageAlt:
+      "Dr. Shaik Reshma, Consultant Obstetrician & Gynaecologist at Asher Healthcare",
     appointmentHours: "Mon–Sat · 7:00 PM–9:00 PM",
     reasons: [
       "Pregnancy, antenatal and postnatal care",
