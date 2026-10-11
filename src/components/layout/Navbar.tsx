@@ -12,7 +12,7 @@ const links = [
   { label: "Find us", href: "/#contact" },
 ];
 
-export default function Navbar() {
+export default function Navbar({ bookingHref = "/#appointment" }: { bookingHref?: string }) {
   const [open, setOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -48,7 +48,7 @@ export default function Navbar() {
 
           <div className="nav-actions">
             <a className="staff-link" href="/portal/login">Patient portal</a>
-            <a className="button button-primary button-small" href="/#appointment">
+            <a className="button button-primary button-small" href={bookingHref}>
               <CalendarDays size={18} /> Book appointment
             </a>
           </div>
@@ -70,7 +70,7 @@ export default function Navbar() {
             {links.map((link) => <a key={link.href} href={link.href} onClick={() => setOpen(false)}>{link.label}</a>)}
             <a href="/portal/login" onClick={() => setOpen(false)}>Patient portal</a>
             <a href="/admin/login" onClick={() => setOpen(false)}>Staff login</a>
-            <a className="button button-primary" href="/#appointment" onClick={() => setOpen(false)}>Book appointment</a>
+            <a className="button button-primary" href={bookingHref} onClick={() => setOpen(false)}>Book appointment</a>
           </nav>
         )}
       </header>
