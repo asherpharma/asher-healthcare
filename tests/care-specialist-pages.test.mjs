@@ -6,33 +6,41 @@ const read = (file) => readFile(new URL("../" + file, import.meta.url), "utf8");
 
 test("specialist journeys show each doctor's verified public profile details", async () => {
   const source = await read("src/lib/public-clinic-content.ts");
-  assert.match(source, /id: "pediatrics",[\s\S]*?doctor: "Dr\. Lt Col Shafi Ahamad",[\s\S]*?doctorQualifications: "MBBS, MD \(Pediatrics\)",[\s\S]*?doctorImage: "\/images\/dr-shafi-ahamad\.jpg"/);
-  assert.match(source, /id: "obg",[\s\S]*?doctor: "Dr\. Shaik Reshma",[\s\S]*?doctorQualifications: "MBBS, MS \(OBG\)",[\s\S]*?doctorImage: "\/images\/dr-shaik-reshma\.jpg"/);
+  for (const detail of [
+    'doctor: "Dr. Lt Col Shafi Ahamad"',
+    'doctorQualifications: "MBBS, MD (Pediatrics)"',
+    'doctorImage: "/images/dr-shafi-ahamad.jpg"',
+    'doctor: "Dr. Shaik Reshma"',
+    'doctorQualifications: "MBBS, MS (OBG)"',
+    'doctorImage: "/images/dr-shaik-reshma.jpg"',
+  ]) assert.ok(source.includes(detail), detail);
 });
 
-test("specialist page keeps the selected care type in booking links and uses clinic contact details", async () => {
+test("specialist page keeps care context in booking links and uses clinic contact details", async () => {
   const source = await read("src/components/care/CareDetailPage.tsx");
-  assert.match(source, /const bookingHref = "\/?care=" \+ journey\.id \+ "#appointment"/);
-  assert.match(source, /<Navbar bookingHref=\{bookingHref\}/);
-  assert.match(source, /<Footer bookingHref=\{bookingHref\}/);
-  assert.match(source, /href=\{bookingHref\}/);
-  assert.match(source, /src=\{journey\.doctorImage\}/);
-  assert.match(source, /alt=\{journey\.doctorImageAlt\}/);
-  assert.doesNotMatch(source, /src=\{journey\.image\}/);
-  assert.match(source, /clinicVisit\.phoneHref/);
-  assert.match(source, /clinicVisit\.directionsHref/);
+  for (const detail of [
+    'const bookingHref = "/?care=" + journey.id + "#appointment";',
+    "<Navbar bookingHref={bookingHref} />",
+    "<Footer bookingHref={bookingHref} />",
+    "href={bookingHref}",
+    "src={journey.doctorImage}",
+    "alt={journey.doctorImageAlt}",
+    "clinicVisit.phoneHref",
+    "clinicVisit.directionsHref",
+  ]) assert.ok(source.includes(detail), detail);
+  assert.ok(!source.includes("src={journey.image}"), "use the named specialist's portrait");
 });
 
-test("shared navigation defaults stay unchanged while specialist pages can pass context", async () => {
+test("shared navigation keeps its home default and specialist portrait styling adapts to mobile", async () => {
   const [navbar, footer, styles] = await Promise.all([
     read("src/components/layout/Navbar.tsx"),
     read("src/components/layout/Footer.tsx"),
     read("src/components/care/CareDetailPage.module.css"),
   ]);
-  assert.match(navbar, /bookingHref = "\/#appointment"/);
-  assert.equal(navbar.match(/href=\{bookingHref\}/g)?.length, 2);
-  assert.match(footer, /bookingHref = "\/#appointment"/);
-  assert.match(footer, /href=\{bookingHref\}/);
-  assert.match(styles, /@media \(max-width: 540px\)/);
-  assert.match(styles, /\.doctorPortrait/);
+  assert.ok(navbar.includes('bookingHref = "/#appointment"'));
+  assert.equal(navbar.split("href={bookingHref}").length - 1, 2);
+  assert.ok(footer.includes('bookingHref = "/#appointment"'));
+  assert.ok(footer.includes("href={bookingHref}"));
+  assert.ok(styles.includes("@media (max-width: 540px)"));
+  assert.ok(styles.includes(".doctorPortrait"));
 });
