@@ -1066,3 +1066,169 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .gallery-item figcaption { transform: none !important; }
   .hero-depth-ring { animation: none !important; }
 }
+
+
+/* Specialist hero: fit doctor identity, credentials, schedule, and primary actions in the first view. */
+.care-detail-obg .care-detail-hero,
+.care-detail-pediatrics .care-detail-hero {
+  padding: 28px 0 46px;
+}
+
+.care-detail-obg .care-detail-hero-grid,
+.care-detail-pediatrics .care-detail-hero-grid {
+  align-items: start;
+  gap: clamp(24px, 3.5vw, 46px);
+}
+
+.care-detail-obg .care-detail-back,
+.care-detail-pediatrics .care-detail-back {
+  margin-bottom: 8px;
+}
+
+.care-detail-obg .care-detail-hero-copy > .section-kicker,
+.care-detail-pediatrics .care-detail-hero-copy > .section-kicker {
+  display: block;
+  margin: 0;
+  font-size: .68rem;
+  line-height: 1.35;
+  letter-spacing: .1em;
+}
+
+.care-detail-obg .care-detail-hero-copy h1,
+.care-detail-pediatrics .care-detail-hero-copy h1 {
+  max-width: 17ch;
+  margin: 10px 0 0;
+  font-size: clamp(2.55rem, 4.3vw, 3.5rem);
+  line-height: 1.02;
+  letter-spacing: -.045em;
+}
+
+.care-detail-obg .care-detail-hero-copy > p,
+.care-detail-pediatrics .care-detail-hero-copy > p {
+  max-width: 36rem;
+  margin: 14px 0 0;
+  font-size: .97rem;
+  line-height: 1.55;
+}
+
+.care-detail-obg .care-detail-hero-copy [aria-label="Your Asher specialist"],
+.care-detail-pediatrics .care-detail-hero-copy [aria-label="Your Asher specialist"] {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 18px;
+}
+
+.care-detail-obg .care-detail-hero-copy [aria-label="Your Asher specialist"] > strong,
+.care-detail-pediatrics .care-detail-hero-copy [aria-label="Your Asher specialist"] > strong {
+  margin-top: 4px;
+  font-size: 1.1rem;
+  line-height: 1.18;
+}
+
+.care-detail-obg .care-detail-hero-copy [aria-label="Your Asher specialist"] > p,
+.care-detail-pediatrics .care-detail-hero-copy [aria-label="Your Asher specialist"] > p {
+  margin-top: 4px;
+  font-size: .78rem;
+  line-height: 1.45;
+}
+
+.care-detail-obg .care-detail-hero-copy [aria-label="Your Asher specialist"] .credentials,
+.care-detail-pediatrics .care-detail-hero-copy [aria-label="Your Asher specialist"] .credentials {
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.care-detail-obg .care-detail-hero-copy [aria-label="Your Asher specialist"] .credentials span,
+.care-detail-pediatrics .care-detail-hero-copy [aria-label="Your Asher specialist"] .credentials span {
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: .68rem;
+}
+
+.care-detail-obg .care-detail-actions,
+.care-detail-pediatrics .care-detail-actions {
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.care-detail-obg .care-detail-actions .button,
+.care-detail-pediatrics .care-detail-actions .button {
+  min-height: 48px;
+  padding: 0 16px;
+  font-size: .8rem;
+}
+
+.care-detail-obg .care-detail-facts,
+.care-detail-pediatrics .care-detail-facts {
+  gap: 8px 16px;
+  margin-top: 12px;
+  font-size: .72rem;
+  line-height: 1.4;
+}
+
+@media (max-width: 800px) {
+  .care-detail-obg .care-detail-hero,
+  .care-detail-pediatrics .care-detail-hero {
+    padding: 18px 0 34px;
+  }
+
+  .care-detail-obg .care-detail-hero-grid,
+  .care-detail-pediatrics .care-detail-hero-grid {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 20px;
+  }
+
+  .care-detail-obg .care-detail-hero-copy h1,
+  .care-detail-pediatrics .care-detail-hero-copy h1 {
+    max-width: 18ch;
+    margin-top: 8px;
+    font-size: clamp(2.2rem, 10.5vw, 2.75rem);
+    line-height: 1.02;
+  }
+
+  .care-detail-obg .care-detail-hero-copy > p,
+  .care-detail-pediatrics .care-detail-hero-copy > p {
+    margin-top: 10px;
+    font-size: .9rem;
+    line-height: 1.5;
+  }
+
+  .care-detail-obg .care-detail-hero-copy [aria-label="Your Asher specialist"],
+  .care-detail-pediatrics .care-detail-hero-copy [aria-label="Your Asher specialist"] {
+    margin-top: 10px;
+    padding: 12px 14px;
+  }
+
+  .care-detail-obg .care-detail-actions,
+  .care-detail-pediatrics .care-detail-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, .9fr);
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .care-detail-obg .care-detail-actions .button,
+  .care-detail-pediatrics .care-detail-actions .button {
+    width: 100%;
+    min-width: 0;
+    min-height: 48px;
+    padding: 6px 8px;
+    gap: 6px;
+    font-size: .72rem;
+    line-height: 1.2;
+  }
+
+  .care-detail-obg .care-detail-actions .button svg,
+  .care-detail-pediatrics .care-detail-actions .button svg {
+    flex: 0 0 17px;
+    width: 17px;
+  }
+
+  .care-detail-obg .care-detail-facts,
+  .care-detail-pediatrics .care-detail-facts {
+    gap: 6px 12px;
+    margin-top: 10px;
+    font-size: .68rem;
+  }
+}
