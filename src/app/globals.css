@@ -1232,3 +1232,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
     font-size: .68rem;
   }
 }
+
+
+/* The credential row is a CSS-module class, so target its stable markup instead. */
+.care-detail-obg .care-detail-hero-copy [aria-label="Your Asher specialist"] > div,
+.care-detail-pediatrics .care-detail-hero-copy [aria-label="Your Asher specialist"] > div {
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.care-detail-obg .care-detail-hero-copy [aria-label="Your Asher specialist"] > div > span,
+.care-detail-pediatrics .care-detail-hero-copy [aria-label="Your Asher specialist"] > div > span {
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: .68rem;
+}
