@@ -1,4 +1,4 @@
-const APP_RELEASE = "2026.09.30.1-patient-makeover";
+const APP_RELEASE = "2026.10.14.1-booking-separation";
 const CACHE_NAME = `asher-public-${APP_RELEASE}`;
 const PUBLIC_ASSETS = [
   "/",

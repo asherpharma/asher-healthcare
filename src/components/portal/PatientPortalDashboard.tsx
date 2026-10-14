@@ -1,4 +1,4 @@
-/* eslint-disable @next/next/no-html-link-for-pages -- Full-page navigation isolates optional Ads measurement. */
+// Native booking links open the separate appointment document.
 "use client";
 
 import PatientPortalPwa from "@/components/portal/PatientPortalPwa";
@@ -412,7 +412,7 @@ export default function PatientPortalDashboard() {
           <h1 className="mt-2 break-words text-2xl font-bold leading-tight sm:mt-3 sm:text-3xl">Welcome, {dashboard?.account.displayName || "Family"}.</h1>
           <p className="mt-3 max-w-3xl text-sm leading-6 text-white/75 sm:text-base sm:leading-7">Appointments and approved clinic documents, together in one secure place.</p>
           <div className="mt-5 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:gap-3">
-            <a href="/#appointment" className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-[#A8864A] px-3 text-center text-sm font-bold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white sm:px-4">
+            <a href="/book" className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-[#A8864A] px-3 text-center text-sm font-bold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white sm:px-4">
               <CalendarDays aria-hidden="true" size={18} />Book
             </a>
             <button type="button" onClick={() => void loadDashboard()} disabled={loading} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-white/10 px-3 text-sm font-bold text-white ring-1 ring-white/20 disabled:opacity-60 sm:px-4">
@@ -511,7 +511,7 @@ export default function PatientPortalDashboard() {
                           </div>
                           {item.queueToken ? <span className="shrink-0 rounded-2xl bg-[#233A59] px-3 py-2 text-center text-white"><small className="block text-[10px] uppercase">Token</small><strong>{item.queueToken}</strong></span> : null}
                         </article>
-                      )) : <Empty text="No linked appointments yet" actionHref="/#appointment" actionLabel="Book an appointment" />}
+                      )) : <Empty text="No linked appointments yet" actionHref="/book" actionLabel="Book an appointment" />}
                     </PortalSection>
 
                     <div id="records" className="scroll-mt-24 space-y-5">

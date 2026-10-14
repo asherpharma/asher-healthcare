@@ -2,7 +2,7 @@
 import Image from "next/image";
 import { ArrowUp, MapPin, Heart, MessageCircle, Phone } from "lucide-react";
 
-export default function Footer({ bookingHref = "/#appointment" }: { bookingHref?: string }) {
+export default function Footer({ bookingHref = "/book" }: { bookingHref?: string }) {
   return (
     <footer className="site-footer">
       <div className="site-shell footer-grid">
@@ -29,7 +29,7 @@ export default function Footer({ bookingHref = "/#appointment" }: { bookingHref?
         <div>
           <h3>Patient information</h3>
           <a href="/portal/login">Patient portal</a>
-          <a href="/#visit">Prepare for your visit</a>
+          <a href="/book#visit">Prepare for your visit</a>
           <a href="/patient-rights">Patient rights</a>
           <a href="/privacy">Privacy policy</a>
           <a href="/terms">Website terms</a>

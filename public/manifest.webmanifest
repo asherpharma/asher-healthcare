@@ -36,7 +36,7 @@
     {
       "name": "Book an appointment",
       "short_name": "Book",
-      "url": "/#appointment"
+      "url": "/book"
     },
     {
       "name": "Meet our doctors",

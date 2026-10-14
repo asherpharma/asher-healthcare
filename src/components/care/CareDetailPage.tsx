@@ -20,7 +20,7 @@ import { clinicVisit } from "@/lib/general-care";
 import type { CareJourney } from "@/lib/public-clinic-content";
 
 export default function CareDetailPage({ journey }: { journey: CareJourney }) {
-  const bookingHref = "/?care=" + journey.id + "#appointment";
+  const bookingHref = "/book#appointment-" + journey.id;
 
   return (
     <>

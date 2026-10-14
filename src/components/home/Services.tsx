@@ -31,7 +31,7 @@ export default function Services() {
                 <div className="service-icon"><Icon /></div>
                 <h3>{service.title}</h3>
                 <p>{service.text}</p>
-                <a href="#appointment">Book this service <span>→</span></a>
+                <a href="/book">Book this service <span>→</span></a>
               </article>
             );
           })}

@@ -76,26 +76,32 @@ test("homepage keeps a short patient-first sequence without duplicate sections",
     path.join(root, "src/components/home/AppointmentCTA.tsx"),
     "utf8",
   );
+  const bookingPage = await readFile(path.join(root, "src/app/book/page.tsx"), "utf8");
 
   const main = page.match(/<main\b[^>]*>([\s\S]*?)<\/main>/u)?.[1];
   assert.ok(main, "the homepage must retain its main landmark");
   assert.deepEqual([...main.matchAll(/<([A-Z]\w*)\s*\/>/gu)].map((match) => match[1]), [
-    "Hero", "CareOptions", "Doctors", "Gallery", "AppointmentCTA", "VisitGuide", "FrequentlyAskedQuestions", "Contact",
+    "Hero", "CareOptions", "Doctors", "Gallery", "BookingPrompt", "VisitGuide", "FrequentlyAskedQuestions", "Contact",
   ]);
+  assert.doesNotMatch(page, /AppointmentCTA|<form\b/u, "the general homepage cannot mount the booking form");
+  assert.match(bookingPage, /<AppointmentCTA\s*\/>/u, "the separate booking page retains the live appointment form");
   assert.doesNotMatch(page, /<(?:Services|GeneralCare|CarePathways|WhyChooseUs|PatientJourney|PremiumMotion)\b/u);
   assert.match(page, /className="patient-home"/u);
   assert.match(page, /import "\.\/patient-home\.css"/u);
 
-  const sources = await Promise.all(["CareOptions", "Doctors", "Gallery", "AppointmentCTA", "VisitGuide", "FrequentlyAskedQuestions", "Contact"].map(
+  const sources = await Promise.all(["CareOptions", "Doctors", "Gallery", "BookingPrompt", "VisitGuide", "FrequentlyAskedQuestions", "Contact"].map(
     (name) => readFile(path.join(root, `src/components/home/${name}.tsx`), "utf8"),
   ));
-  for (const anchor of ["services", "care", "general-care", "doctors", "moments-of-care", "appointment", "appointment-pediatrics", "appointment-obg", "journey", "clinic", "contact"]) {
+  for (const anchor of ["services", "care", "general-care", "doctors", "moments-of-care", "book-visit", "journey", "clinic", "contact"]) {
     assert.ok(sources.some((source) => source.includes(`id="${anchor}"`)), `legacy #${anchor} links must resolve`);
   }
   const sectionIds = [...sources.join("\n").matchAll(/<section\b[^>]*\bid="([^"]+)"/gu)].map((match) => match[1]);
   assert.equal(new Set(sectionIds).size, sectionIds.length, "homepage section IDs must be unique");
   assert.match(sources.join("\n"), /For emergencies|For urgent or emergency|emergency services/u);
   assert.match(appointment, /CARE_SELECTION_EVENT/u);
+  for (const anchor of ["appointment", "appointment-pediatrics", "appointment-obg"]) {
+    assert.ok(appointment.includes(`id="${anchor}"`), `legacy #${anchor} targets must resolve on the booking page`);
+  }
 });
 
 test("three visible care choices preserve specialist booking and general-care phone routing", async () => {
@@ -158,7 +164,6 @@ test("the public service worker precaches available real-doctor assets without o
   await installation;
   assert.equal(cacheNames.length, 1);
   assert.match(cacheNames[0], /^asher-public-/u);
-  assert.match(cacheNames[0], /patient-makeover/u);
   assert.ok(precached.includes("/images/dr-shafi-ahamad.jpg"));
   assert.ok(precached.includes("/images/dr-shaik-reshma.jpg"));
   assert.ok(!precached.includes("/images/gallery-newborn-care-v1.webp"), "below-fold gallery images must not be precached");
@@ -172,54 +177,21 @@ test("the public service worker precaches available real-doctor assets without o
   }
 });
 
-test("specialist booking links preselect in place and preserve doctor-specific native fragment fallbacks", async () => {
+test("specialist booking links open an untracked document with a private doctor fragment", async () => {
+  const CareBookingLink = await loadPublicComponent("src/components/home/CareBookingLink.tsx");
   for (const doctorId of ["pediatrics", "obg"]) {
-    for (const reduceMotion of [false, true]) {
-      const events = [];
-      const scrolls = [];
-      const focus = [];
-      let prevented = false;
-      let targetPresent = true;
-      const appointment = {
-        scrollIntoView: (options) => scrolls.push(options),
-        querySelector: (selector) => {
-          assert.equal(selector, 'select[name="doctor"]');
-          return { focus: (options) => focus.push(options) };
-        },
-      };
-      const CareBookingLink = await loadPublicComponent("src/components/home/CareBookingLink.tsx", {
-        document: { getElementById: (id) => { assert.equal(id, "appointment"); return targetPresent ? appointment : null; } },
-        window: { dispatchEvent: (event) => events.push(event), matchMedia: () => ({ matches: reduceMotion }) },
-        CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
-      });
-      const link = CareBookingLink({ doctorId, children: "Book consultation" });
-      assert.equal(link.type, "a");
-      assert.equal(link.props.href, `#appointment-${doctorId}`);
-      const click = (overrides = {}) => link.props.onClick({
-        button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
-        preventDefault() { prevented = true; }, ...overrides,
-      });
-      for (const modified of [{ button: 1 }, { metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { altKey: true }]) click(modified);
-      assert.equal(events.length, 0);
-      assert.equal(prevented, false, "modified clicks retain ordinary browser navigation");
-      assert.equal(link.props.href, `#appointment-${doctorId}`, "new tabs retain the selected doctor without a query string");
-      targetPresent = false;
-      click();
-      assert.equal(events.length, 0);
-      assert.equal(prevented, false, "missing booking target must retain the native link");
-      targetPresent = true;
-      click();
-      assert.equal(events.length, 1);
-      assert.equal(events[0].type, "asher:select-care");
-      assert.deepEqual(Object.keys(events[0].detail), ["doctorId"]);
-      assert.equal(events[0].detail.doctorId, doctorId);
-      assert.equal(link.props.href, `#appointment-${doctorId}`, "in-place enhancement must not remove the native fallback");
-      assert.equal(scrolls[0].behavior, reduceMotion ? "auto" : "smooth");
-      assert.equal(focus[0].preventScroll, true);
-    }
+    const link = CareBookingLink({ doctorId, children: "Book consultation", className: "booking-link" });
+    assert.equal(link.type, "a");
+    const destination = new URL(link.props.href, "https://asherhealthcare.in/");
+    assert.equal(destination.pathname, "/book", "booking must leave the tagged homepage document");
+    assert.equal(destination.search, "", "specialist selection must not enter a request URL");
+    assert.equal(destination.hash, `#appointment-${doctorId}`);
+    assert.equal(link.props.onClick, undefined, "keyboard and modified clicks retain native navigation");
+    assert.equal(link.props.className, "booking-link");
+    assert.equal(link.props.children, "Book consultation");
   }
   const source = await readFile(path.join(root, "src/components/home/CareBookingLink.tsx"), "utf8");
-  assert.doesNotMatch(source, /searchParams|pushState|replaceState|localStorage|sessionStorage|fetch\(|sendBeacon|gtag|dataLayer/u);
+  assert.doesNotMatch(source, /^"use client"|onClick|CustomEvent|searchParams|pushState|replaceState|localStorage|sessionStorage|fetch\(|sendBeacon|gtag|dataLayer/u);
 });
 
 test("visit preparation stays three steps and returning patients keep a native portal link", async () => {
@@ -343,7 +315,7 @@ test("general care lists only confirmed services with clinical boundaries", () =
   assert.match(copy, /IV treatment when prescribed by a doctor and clinically appropriate/u);
   assert.match(copy, /Vaccinations/u);
   assert.doesNotMatch(copy, /fertility|semen|sperm|IVF/iu);
-  
+
   assert.doesNotMatch(copy, /\bCT\b|\bMRI\b|24\/7|instant reports|every possible test|detox|immune.boost|accredited/iu);
   assert.doesNotMatch(copy, /₹|\b\d{1,2}:\d{2}\b|\bAM\b|\bPM\b/u);
 });
@@ -466,9 +438,9 @@ test("Ads tag is opt-in only, non-personalised, and insulated from care context"
     assert.ok(measurement.includes(`"${hash}"`), `${hash} should remain a safe homepage anchor`);
   }
   assert.doesNotMatch(carePathways, /history\.replaceState|searchParams\.set\("care"/u);
-  assert.match(carePathways, /new CustomEvent\(CARE_SELECTION_EVENT/u);
+  assert.match(carePathways, /<CareBookingLink doctorId=\{selected\.id\}/u);
   assert.doesNotMatch(careBookingLink, /history\.replaceState|searchParams\.set\("care"/u);
-  assert.match(careBookingLink, /new CustomEvent\(CARE_SELECTION_EVENT/u);
+  assert.match(careBookingLink, /href=\{`\/book#appointment-\$\{doctorId\}`\}/u);
   assert.doesNotMatch(
     measurement,
     /window\.location\.href|document\.(?:title|referrer)|patientName|doctorId|appointmentReason/u,
@@ -478,7 +450,9 @@ test("Ads tag is opt-in only, non-personalised, and insulated from care context"
   assert.match(privacy, /Cookie-free homepage statistics/u);
   assert.match(privacy, /store only daily totals/u);
   assert.match(privacy, /not a completed call, appointment or clinic visit/u);
-  assert.match(privacy, /no longer loads the Google Ads measurement tag/u);
+  assert.match(privacy, /Google Ads homepage and Call-button measurement/u);
+  assert.match(privacy, /denied advertising-storage, advertising-user-data and advertising-personalisation defaults/u);
+  assert.match(privacy, /container is excluded from appointment forms, medical-service pages, patient and staff portals/u);
 });
 
 test("homepage measurement boundaries render as native document links", async () => {
@@ -516,7 +490,7 @@ test("homepage measurement boundaries render as native document links", async ()
     "utf8",
   );
   assert.match(portalLogin, /<a href="\/"/u);
-  assert.match(portalDashboard, /<a href="\/#appointment"/u);
+  assert.match(portalDashboard, /<a href="\/book"/u);
   assert.match(generalCarePage, /<a className=\{styles\.backLink\} href="\/#general-care"/u);
 });
 

@@ -12,7 +12,7 @@ async function source(relativePath) {
 test("patient homepage is readable without decorative motion or client-only reveals", async () => {
   const page = await source("src/app/page.tsx");
   const homeFiles = await Promise.all([
-    "Hero", "CareOptions", "Doctors", "Gallery", "AppointmentCTA", "VisitGuide", "FrequentlyAskedQuestions", "Contact",
+    "Hero", "CareOptions", "Doctors", "Gallery", "BookingPrompt", "VisitGuide", "FrequentlyAskedQuestions", "Contact",
   ].map((file) => source(`src/components/home/${file}.tsx`)));
 
   assert.doesNotMatch(page, /PremiumMotion|^"use client"/u);
@@ -39,7 +39,7 @@ test("hero uses identifiable real doctors and direct patient actions", async () 
     assert.match(image, /\bsizes=/u);
     assert.doesNotMatch(image, /\bpriority\b/u);
   }
-  assert.match(hero, /href="#appointment"/u);
+  assert.match(hero, /href="\/book"/u);
   assert.match(hero, /href="tel:\+919019263709"/u);
   assert.match(hero, /href="https:\/\/maps\.app\.goo\.gl\/cvFLUCkF6nRPAHUx5"/u);
   assert.doesNotMatch(hero, /asher-hero-clinic|Representative|floating-card|hero-security-chip|onClick|preventDefault/u);

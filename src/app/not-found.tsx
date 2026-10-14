@@ -24,7 +24,7 @@ export default function NotFound() {
           </p>
           <div className="recovery-actions">
             <a className="button button-primary" href="/"><Home aria-hidden="true" /> Home</a>
-            <a className="button button-ghost" href="/#appointment"><CalendarDays aria-hidden="true" /> Book appointment</a>
+            <a className="button button-ghost" href="/book"><CalendarDays aria-hidden="true" /> Book appointment</a>
           </div>
           <a className="recovery-phone" href="tel:+919019263709"><Phone aria-hidden="true" /> +91 90192 63709</a>
           <a className="recovery-back" href="/"><ArrowLeft aria-hidden="true" /> Back to Asher Healthcare</a>
