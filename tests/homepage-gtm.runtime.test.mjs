@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { crossesHomepageBoundary, homepageGtmAllowed, installHomepageGtm, legacyBookingDestination, leaveTaggedErrorPage } from "../src/lib/homepage-gtm.mjs";
+import { runInNewContext } from "node:vm";
+import { crossesHomepageBoundary, homepageGtmAllowed, installHomepageGtm, legacyBookingDestination, leaveTaggedErrorPage, createHomepageGtmBootstrap } from "../src/lib/homepage-gtm.mjs";
 
 function harness(url = "https://asherhealthcare.in/", privacy = {}) {
   let current = new URL(url);
@@ -30,7 +31,7 @@ function harness(url = "https://asherhealthcare.in/", privacy = {}) {
       constructor(callback) { this.callback = callback; }
       observe(target, options) {
         assert.equal(target, document.head);
-        assert.deepEqual(options, { childList: true, subtree: true, characterData: true });
+        assert.deepEqual({ ...options }, { childList: true, subtree: true, characterData: true });
         handlers.set("head:mutation", this.callback);
       }
     },
@@ -139,6 +140,46 @@ test("installation is once per document with denied privacy defaults before the 
   assert.equal(app.window.dataLayer.length, 4);
 });
 
+test("parser bootstrap and hydrated fallback share one exact document installation", () => {
+  const app = harness();
+  runInNewContext(createHomepageGtmBootstrap(), {
+    window: app.window, document: app.document, navigator: app.navigator, URL, URLSearchParams,
+  });
+  const listener = app.handlers.get("doc:click");
+  app.install();
+  assert.equal(app.scripts.length, 1);
+  assert.equal(app.window.dataLayer.length, 4);
+  assert.equal(app.handlers.get("doc:click"), listener);
+  assert.equal(app.window.__asherHomepageGtmDocument, app.document);
+});
+
+test("parser bootstrap applies redirects, parameter exclusions and privacy guards before loading", () => {
+  for (const [url, privacy] of [
+    ["https://asherhealthcare.in/#appointment", {}],
+    ["https://asherhealthcare.in/?care=pediatrics#appointment-obg", {}],
+    ["https://asherhealthcare.in/book", {}], ["https://asherhealthcare.in/admin/login", {}],
+    ["https://asherhealthcare.in/?patient=private", {}],
+    ["https://preview.asher-healthcare.pages.dev/", {}],
+    ["https://asherhealthcare.in/", { doNotTrack: "1" }],
+    ["https://asherhealthcare.in/", { globalPrivacyControl: true }],
+  ]) {
+    const app = harness(url, privacy);
+    runInNewContext(createHomepageGtmBootstrap(), {
+      window: app.window, document: app.document, navigator: app.navigator, URL, URLSearchParams,
+    });
+    app.install(); assert.equal(app.scripts.length, 0, url);
+  }
+});
+
+test("parser bootstrap does not create a duplicate title before the server title is parsed", () => {
+  const app = harness(); app.document.title = "";
+  app.document.querySelector = () => null;
+  app.install(); assert.equal(app.document.title, "");
+  app.document.querySelector = () => ({}); app.document.title = "Medical context";
+  app.handlers.get("head:mutation")();
+  assert.equal(app.document.title, "Asher Healthcare");
+});
+
 test("tagged document metadata remains neutral while navigation and BFCache callbacks settle", () => {
   const app = harness(); app.install();
   app.document.title = "Excluded medical page";
@@ -194,7 +235,7 @@ test("back/forward, direct hash changes, and BFCache checks force the boundary",
   }
 });
 
-test("homepage and booking are separated in the route tree without an unconditional Google fallback", () => {
+test("homepage and booking are separated in the route tree without a global Google fallback", () => {
   const read = path => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
   assert.doesNotMatch(read("src/app/page.tsx"), /AppointmentCTA|<form/u);
   assert.match(read("src/app/page.tsx"), /<HomepageGtm \/>/u);

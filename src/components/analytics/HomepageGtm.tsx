@@ -5,9 +5,11 @@ import { installHomepageGtm } from "@/lib/homepage-gtm.mjs";
 
 export default function HomepageGtm() {
   useEffect(() => {
+    // The initial homepage HTML bootstraps before hydration. This adopts its
+    // document marker; it is also a safe fallback for local development.
     installHomepageGtm(window, document, navigator);
   }, []);
-  // No unconditional noscript iframe: it cannot apply URL, host or DNT/GPC
-  // checks. Booking and calling remain available without this container.
+  // The export adapter emits the explicitly approved homepage-only noscript
+  // fallback. This component never adds it to other routes or SPA documents.
   return null;
 }

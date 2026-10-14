@@ -52,12 +52,18 @@ export function installHomepageGtm(win, doc, nav) {
       win.history.replaceState(null, "", "/" + win.location.hash);
     }
   }
-  if (!homepageGtmAllowed(win.location, nav) || installedDocuments.has(doc)) return;
+  if (!homepageGtmAllowed(win.location, nav) || installedDocuments.has(doc) || win.__asherHomepageGtmDocument === doc) return;
   installedDocuments.add(doc);
+  // The parser bootstrap and hydrated bundle are separate module instances.
+  // Share the exact document identity so they cannot install two containers.
+  win.__asherHomepageGtmDocument = doc;
   win.__asherHomepageGtmLoaded = true;
   // The existing native conversion template reads document.title directly,
   // independently of gtag page_title. Use the same neutral brand here too.
   function keepNeutralTitle() {
+    // At parser time the server-rendered title may not have been parsed yet.
+    // Do not create a second title node ahead of it.
+    if (doc.querySelector?.("title") === null) return;
     if (doc.title !== "Asher Healthcare") doc.title = "Asher Healthcare";
   }
   keepNeutralTitle();
@@ -145,4 +151,25 @@ export function installHomepageGtm(win, doc, nav) {
   doc.head.appendChild(script);
   // Listeners deliberately live for this document's lifetime, including React
   // remounts and BFCache restores; the WeakSet prevents duplicate installation.
+}
+
+// Build-time only: emit the same reviewed runtime, not a second hand-maintained
+// snippet. The export adapter places this source only in the homepage HTML.
+export function createHomepageGtmBootstrap() {
+  const declarations = [
+    `const PRODUCTION_HOSTS = new Set(${JSON.stringify([...PRODUCTION_HOSTS])});`,
+    `const GENERAL_HASHES = new Set(${JSON.stringify([...GENERAL_HASHES])});`,
+    `const AD_ANNOTATION_KEYS = new Set(${JSON.stringify([...AD_ANNOTATION_KEYS])});`,
+    `const SCRIPT_ID = ${JSON.stringify(SCRIPT_ID)};`,
+    "const installedDocuments = new WeakSet();",
+  ];
+  return [
+    "(function(){\"use strict\";",
+    ...declarations,
+    legacyBookingDestination.toString(),
+    homepageGtmAllowed.toString(),
+    installHomepageGtm.toString(),
+    "installHomepageGtm(window, document, navigator);",
+    "})();",
+  ].join("\n");
 }

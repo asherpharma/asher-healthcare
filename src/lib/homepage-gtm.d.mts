@@ -3,3 +3,4 @@ export function homepageGtmAllowed(location: Pick<Location, "protocol" | "hostna
 export function crossesHomepageBoundary(documentPath: string, nextPath: string): boolean;
 export function leaveTaggedErrorPage(window: Window): void;
 export function installHomepageGtm(window: Window, document: Document, navigator: Navigator): void;
+export function createHomepageGtmBootstrap(): string;
