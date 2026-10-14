@@ -6,12 +6,16 @@ import { createWebPushTransport } from "../server/notifications/push-transport.j
 import { createPushStore } from "../server/notifications/push-store.js";
 
 const instant = Date.parse("2026-09-25T10:00:00Z");
-function keyPair() {
-  const key = createECDH("prime256v1"); key.generateKeys();
-  return { publicKey: key.getPublicKey().toString("base64url"), privateKey: key.getPrivateKey().toString("base64url") };
+function keyPair(scalar) {
+  // Fixed synthetic scalars are test fixtures, not credentials. Encode all 32
+  // bytes explicitly: getPrivateKey() can omit leading zeros from a scalar.
+  const privateKey = Buffer.alloc(32);
+  privateKey.writeUInt32BE(scalar, 28);
+  const key = createECDH("prime256v1"); key.setPrivateKey(privateKey);
+  return { publicKey: key.getPublicKey().toString("base64url"), privateKey: privateKey.toString("base64url") };
 }
-const vapid = keyPair();
-const receiver = keyPair();
+const vapid = keyPair(1);
+const receiver = keyPair(2);
 const env = {
   FIREBASE_PROJECT_ID: "asher-healthcare-clinic", BOOKING_ALERTS_ENABLED: "true",
   BOOKING_ALERT_PUSH_CONFIGURED: "true", BOOKING_ALERTS_ACTIVATED_AT: "2026-09-25T09:00:00Z",
@@ -194,7 +198,7 @@ test("transport rejects SSRF endpoints, expired subscriptions and mismatched VAP
   for (const candidate of [ { ...subscription, endpoint: "https://127.0.0.1/private" }, { ...subscription, expirationTime: instant - 1 } ]) {
     await assert.rejects(send(candidate, { type: "appointment-request", appointmentId }, settings));
   }
-  await assert.rejects(send(subscription, { type: "appointment-request", appointmentId }, { ...settings, privateKey: keyPair().privateKey }));
+  await assert.rejects(send(subscription, { type: "appointment-request", appointmentId }, { ...settings, privateKey: keyPair(3).privateKey }));
   assert.equal(calls, 0);
 });
 

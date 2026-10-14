@@ -14,36 +14,20 @@ import { useState } from "react";
 
 import type { DoctorId } from "@/lib/appointments";
 import {
-  CARE_SELECTION_EVENT,
   careJourneyById,
   careJourneys,
 } from "@/lib/public-clinic-content";
+import CareBookingLink from "./CareBookingLink";
 
 const careIcons = {
   pediatrics: Baby,
   obg: HeartPulse,
 } satisfies Record<DoctorId, typeof Baby>;
 
-function scrollToBooking() {
-  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  document.getElementById("appointment")?.scrollIntoView({
-    behavior: reduceMotion ? "auto" : "smooth",
-    block: "start",
-  });
-}
-
 export default function CarePathways() {
   const [selectedId, setSelectedId] = useState<DoctorId>("pediatrics");
   const selected = careJourneyById(selectedId);
   const SelectedIcon = careIcons[selected.id];
-
-  function chooseAndBook(doctorId: DoctorId) {
-    setSelectedId(doctorId);
-    window.dispatchEvent(
-      new CustomEvent(CARE_SELECTION_EVENT, { detail: { doctorId } }),
-    );
-    scrollToBooking();
-  }
 
   return (
     <section id="care" className="section public-care-section" aria-labelledby="care-heading">
@@ -114,13 +98,9 @@ export default function CarePathways() {
             </ul>
 
             <div className="public-care-actions">
-              <button
-                type="button"
-                className="button button-primary"
-                onClick={() => chooseAndBook(selected.id)}
-              >
+              <CareBookingLink doctorId={selected.id} className="button button-primary">
                 <CalendarDays aria-hidden="true" /> Choose this care
-              </button>
+              </CareBookingLink>
               <a className="button button-ghost" href={selected.href}>Learn more</a>
             </div>
           </div>

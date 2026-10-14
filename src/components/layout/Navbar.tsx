@@ -8,11 +8,11 @@ import { useEffect, useRef, useState } from "react";
 const links = [
   { label: "Our care", href: "/#services" },
   { label: "Doctors", href: "/#doctors" },
-  { label: "Your visit", href: "/#visit" },
+  { label: "Your visit", href: "/book#visit" },
   { label: "Find us", href: "/#contact" },
 ];
 
-export default function Navbar({ bookingHref = "/#appointment" }: { bookingHref?: string }) {
+export default function Navbar({ bookingHref = "/book" }: { bookingHref?: string }) {
   const [open, setOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
 

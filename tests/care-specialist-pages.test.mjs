@@ -19,7 +19,7 @@ test("specialist journeys show each doctor's verified public profile details", a
 test("specialist page keeps care context in booking links and uses clinic contact details", async () => {
   const source = await read("src/components/care/CareDetailPage.tsx");
   for (const detail of [
-    'const bookingHref = "/?care=" + journey.id + "#appointment";',
+    'const bookingHref = "/book#appointment-" + journey.id;',
     "<Navbar bookingHref={bookingHref} />",
     "<Footer bookingHref={bookingHref} />",
     "href={bookingHref}",
@@ -37,9 +37,11 @@ test("shared navigation keeps its home default and specialist portrait styling a
     read("src/components/layout/Footer.tsx"),
     read("src/components/care/CareDetailPage.module.css"),
   ]);
-  assert.ok(navbar.includes('bookingHref = "/#appointment"'));
+  assert.ok(navbar.includes('bookingHref = "/book"'));
+  assert.ok(navbar.includes('href: "/book#visit"'));
   assert.equal(navbar.split("href={bookingHref}").length - 1, 2);
-  assert.ok(footer.includes('bookingHref = "/#appointment"'));
+  assert.ok(footer.includes('bookingHref = "/book"'));
+  assert.ok(footer.includes('href="/book#visit"'));
   assert.ok(footer.includes("href={bookingHref}"));
   assert.ok(styles.includes("@media (max-width: 540px)"));
   assert.ok(styles.includes(".doctorPortrait"));

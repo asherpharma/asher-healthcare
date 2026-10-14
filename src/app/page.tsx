@@ -1,15 +1,20 @@
+import type { Metadata } from "next";
 import Navbar from "@/components/layout/Navbar";
 import Hero from "@/components/home/Hero";
 import CareOptions from "@/components/home/CareOptions";
 import Doctors from "@/components/home/Doctors";
 import Gallery from "@/components/home/Gallery";
 import VisitGuide from "@/components/home/VisitGuide";
-import AppointmentCTA from "@/components/home/AppointmentCTA";
+import BookingPrompt from "@/components/home/BookingPrompt";
+import HomepageGtm from "@/components/analytics/HomepageGtm";
 import Contact from "@/components/home/Contact";
 import FrequentlyAskedQuestions, { clinicFaqs } from "@/components/home/FrequentlyAskedQuestions";
 import MobileCareBar from "@/components/home/MobileCareBar";
 import Footer from "@/components/layout/Footer";
 import "./patient-home.css";
+
+// Google's existing native call template reads the actual document title.
+export const metadata: Metadata = { title: { absolute: "Asher Healthcare" } };
 
 const clinicSchema = {
   "@context": "https://schema.org",
@@ -68,6 +73,7 @@ const faqSchema = {
 export default function Home() {
   return (
     <div className="patient-home">
+      <HomepageGtm />
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(clinicSchema) }}
@@ -82,7 +88,7 @@ export default function Home() {
         <CareOptions />
         <Doctors />
         <Gallery />
-        <AppointmentCTA />
+        <BookingPrompt />
         <VisitGuide />
         <FrequentlyAskedQuestions />
         <Contact />

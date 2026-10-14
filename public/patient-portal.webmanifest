@@ -19,7 +19,7 @@
   ],
   "shortcuts": [
     { "name": "Family portal", "short_name": "Portal", "url": "/portal" },
-    { "name": "Book appointment", "short_name": "Book", "url": "/#appointment" }
+    { "name": "Book appointment", "short_name": "Book", "url": "/book" }
   ]
 }
 

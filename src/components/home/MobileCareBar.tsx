@@ -7,7 +7,7 @@ export default function MobileCareBar() {
       <a href="https://maps.app.goo.gl/cvFLUCkF6nRPAHUx5" target="_blank" rel="noreferrer">
         <MapPin aria-hidden="true" /><span>Directions</span>
       </a>
-      <a className="public-mobile-book" href="#appointment">
+      <a className="public-mobile-book" href="/book">
         <CalendarDays aria-hidden="true" /><span>Book a slot</span>
       </a>
     </nav>

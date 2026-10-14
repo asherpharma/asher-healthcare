@@ -1,14 +1,19 @@
 "use client";
 
+import { useEffect } from "react";
+import { leaveTaggedErrorPage } from "@/lib/homepage-gtm.mjs";
+
 export default function GlobalError({
   unstable_retry,
 }: {
   error: Error & { digest?: string };
   unstable_retry: () => void;
 }) {
+  useEffect(() => { leaveTaggedErrorPage(window); }, []);
   return (
     <html lang="en">
       <head>
+        <meta name="referrer" content="no-referrer" />
         <title>Asher Healthcare | Please try again</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </head>

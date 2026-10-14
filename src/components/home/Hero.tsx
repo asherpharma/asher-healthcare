@@ -10,7 +10,7 @@ export default function Hero() {
           <h1 id="welcome-heading">Expert care.<br />A familiar face.<br /><em>Every step of life.</em></h1>
           <p className="patient-hero-lead">Personal care for women, children and families. Meet your specialist at Asher Healthcare in RK Hegde Nagar, Bengaluru.</p>
           <div className="hero-actions">
-            <a className="button button-primary" href="#appointment"><CalendarDays aria-hidden="true" /> Book an appointment <ArrowRight aria-hidden="true" /></a>
+            <a className="button button-primary" href="/book"><CalendarDays aria-hidden="true" /> Book an appointment <ArrowRight aria-hidden="true" /></a>
             <a className="button button-ghost" href="tel:+919019263709"><Phone aria-hidden="true" /> Speak to reception</a>
           </div>
           <p className="patient-hero-reassurance">Choose a specialist. See live availability. No account needed.</p>

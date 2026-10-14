@@ -2,6 +2,8 @@
 "use client";
 
 import { Home, RefreshCw } from "lucide-react";
+import { useEffect } from "react";
+import { leaveTaggedErrorPage } from "@/lib/homepage-gtm.mjs";
 
 export default function ErrorPage({
   unstable_retry,
@@ -9,6 +11,7 @@ export default function ErrorPage({
   error: Error & { digest?: string };
   unstable_retry: () => void;
 }) {
+  useEffect(() => { leaveTaggedErrorPage(window); }, []);
   return (
     <main id="main-content" className="recovery-page">
       <section className="recovery-card" role="alert">

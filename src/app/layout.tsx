@@ -1,4 +1,5 @@
 import { HomepageMeasurement } from "@/components/analytics/HomepageMeasurement";
+import HomepageDocumentBoundary from "@/components/analytics/HomepageDocumentBoundary";
 import { PwaRegister } from "@/components/pwa/PwaRegister";
 import type { Metadata, Viewport } from "next";
 import { Suspense } from "react";
@@ -88,7 +89,7 @@ export default function RootLayout({
       <body id="top">
         <a className="skip-link" href="#main-content">Skip to main content</a>
         <PwaRegister />
-        {children}
+        <HomepageDocumentBoundary>{children}</HomepageDocumentBoundary>
         <Suspense fallback={null}>
           <HomepageMeasurement />
         </Suspense>
