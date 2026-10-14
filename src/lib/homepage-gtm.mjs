@@ -57,7 +57,16 @@ export function installHomepageGtm(win, doc, nav) {
   win.__asherHomepageGtmLoaded = true;
   // The existing native conversion template reads document.title directly,
   // independently of gtag page_title. Use the same neutral brand here too.
-  doc.title = "Asher Healthcare";
+  function keepNeutralTitle() {
+    if (doc.title !== "Asher Healthcare") doc.title = "Asher Healthcare";
+  }
+  keepNeutralTitle();
+  // Next's metadata sits outside the route-content boundary. Keep it neutral
+  // while this tagged document is leaving, including delayed conversion work.
+  if (typeof win.MutationObserver === "function") {
+    const titleGuard = new win.MutationObserver(keepNeutralTitle);
+    titleGuard.observe(doc.head, { childList: true, subtree: true, characterData: true });
+  }
 
   function destination(raw) {
     const url = new URL(raw, win.location.href);
@@ -98,6 +107,7 @@ export function installHomepageGtm(win, doc, nav) {
   }
 
   function enforce() {
+    keepNeutralTitle();
     const booking = legacyBookingDestination(win.location);
     if (booking) win.location.replace(booking);
     else if (!homepageGtmAllowed(win.location, nav)) win.location.reload();

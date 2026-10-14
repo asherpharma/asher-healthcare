@@ -24,7 +24,17 @@ function harness(url = "https://asherhealthcare.in/", privacy = {}) {
     if (href != null) current = new URL(href, current);
     actions.push([method, href]);
   }]));
-  const window = { location, history, addEventListener: (name, fn) => handlers.set(name, fn) };
+  const window = {
+    location, history, addEventListener: (name, fn) => handlers.set(name, fn),
+    MutationObserver: class {
+      constructor(callback) { this.callback = callback; }
+      observe(target, options) {
+        assert.equal(target, document.head);
+        assert.deepEqual(options, { childList: true, subtree: true, characterData: true });
+        handlers.set("head:mutation", this.callback);
+      }
+    },
+  };
   const navigator = { doNotTrack: "0", globalPrivacyControl: false, ...privacy };
   return {
     window, document, navigator, scripts, actions, handlers,
@@ -127,6 +137,19 @@ test("installation is once per document with denied privacy defaults before the 
   assert.deepEqual(Object.keys(app.window.dataLayer[3]), ["gtm.start", "event"]);
   assert.equal(app.window.dataLayer[3].event, "gtm.js");
   assert.equal(app.window.dataLayer.length, 4);
+});
+
+test("tagged document metadata remains neutral while navigation and BFCache callbacks settle", () => {
+  const app = harness(); app.install();
+  app.document.title = "Excluded medical page";
+  app.handlers.get("head:mutation")();
+  assert.equal(app.document.title, "Asher Healthcare");
+  app.document.title = "Restored sensitive title";
+  app.handlers.get("pageshow")();
+  assert.equal(app.document.title, "Asher Healthcare");
+  assert.equal(app.scripts.length, 1);
+  const excluded = harness("https://asherhealthcare.in/book"); excluded.install();
+  assert.equal(excluded.handlers.has("head:mutation"), false);
 });
 
 test("native and keyboard-generated booking clicks load a new document without changing the home URL", () => {
