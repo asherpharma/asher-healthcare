@@ -36,14 +36,14 @@ export const DEFAULT_APPOINTMENT_SCHEDULE: AppointmentSchedule = {
   doctors: {
     pediatrics: {
       enabled: true,
-      startTime: "17:00",
+      startTime: "17:30",
       endTime: "20:00",
       slotMinutes: 15,
     },
     obg: {
       enabled: true,
-      startTime: "19:00",
-      endTime: "21:00",
+      startTime: "20:00",
+      endTime: "21:30",
       slotMinutes: 15,
     },
   },

@@ -269,7 +269,7 @@ export default function AppointmentCTA() {
             details. Your reservation is subject to confirmation by the clinic.
           </p>
           <div className="booking-points">
-            <span><Clock3 aria-hidden="true" /> Usual hours, Mon–Sat: Dr. Shafi 5–8 PM · Dr. Reshma 7–9 PM</span>
+            <span><Clock3 aria-hidden="true" /> Usual hours, Mon–Sat: Dr. Shafi 5:30–8 PM · Dr. Reshma 8–9:30 PM</span>
             <span><ShieldCheck aria-hidden="true" /> The form shows the latest available timings</span>
           </div>
           <a className="phone-card" href="tel:+919019263709">

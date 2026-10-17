@@ -2,8 +2,8 @@ export const DEFAULT_SCHEDULE = {
   timezone: "Asia/Kolkata",
   enabledDays: [1, 2, 3, 4, 5, 6],
   doctors: {
-    pediatrics: { enabled: true, startTime: "17:00", endTime: "20:00", slotMinutes: 15 },
-    obg: { enabled: true, startTime: "19:00", endTime: "21:00", slotMinutes: 15 },
+    pediatrics: { enabled: true, startTime: "17:30", endTime: "20:00", slotMinutes: 15 },
+    obg: { enabled: true, startTime: "20:00", endTime: "21:30", slotMinutes: 15 },
   },
 };
 
