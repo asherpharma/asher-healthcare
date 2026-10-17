@@ -125,8 +125,8 @@ test("doctor cards pair the correct clinician, hours and booking selection", asy
   const cards = descendants(Doctors(), "article");
   assert.equal(cards.length, 2);
   for (const [index, id, name, hours] of [
-    [0, "pediatrics", "Dr. Lt Col Shafi Ahamad", "5:00 PM–8:00 PM"],
-    [1, "obg", "Dr. Shaik Reshma", "7:00 PM–9:00 PM"],
+    [0, "pediatrics", "Dr. Lt Col Shafi Ahamad", "5:30 PM–8:00 PM"],
+    [1, "obg", "Dr. Shaik Reshma", "8:00 PM–9:30 PM"],
   ]) {
     const card = cards[index];
     assert.deepEqual(descendants(card, "CareBookingLink").map((link) => link.props.doctorId), [id]);
@@ -271,15 +271,43 @@ test("public specialist hours are consistent with the default booking schedule",
   const booking = await readFile(path.join(root, "src/components/home/AppointmentCTA.tsx"), "utf8");
   const doctors = await readFile(path.join(root, "src/components/home/Doctors.tsx"), "utf8");
   const care = await readFile(path.join(root, "src/lib/public-clinic-content.ts"), "utf8");
+  const adminSettings = await readFile(path.join(root, "src/app/admin/settings/page.tsx"), "utf8");
   const publicCopy = `${hero}\n${contact}\n${faq}\n${booking}\n${doctors}\n${care}`;
 
   assert.match(hero, /Specialist evenings · Usually Mon–Sat/u);
   assert.match(contact, /Monday–Saturday/u);
-  assert.match(publicCopy, /Dr\. Shafi(?: from|:) 5:00 PM(?:–| to )8:00 PM/u);
-  assert.match(publicCopy, /Dr\. Reshma(?: from|:) 7:00 PM(?:–| to )9:00 PM/u);
+  for (const [name, source] of Object.entries({ contact, faq, doctors, care, adminSettings })) {
+    assert.match(source, /5:30 PM(?:–| to )8:00 PM/u, `${name} must show Dr. Shafi's new hours`);
+    assert.match(source, /8:00 PM(?:–| to )9:30 PM/u, `${name} must show Dr. Reshma's new hours`);
+    assert.doesNotMatch(source, /5:00 PM(?:–| to )8:00 PM|7:00 PM(?:–| to )9:00 PM|5–8 PM|7–9 PM/u,
+      `${name} must not retain either former specialist window`);
+  }
+  assert.match(contact, /Dr\. Shafi: 5:30 PM–8:00 PM/u);
+  assert.match(contact, /Dr\. Reshma: 8:00 PM–9:30 PM/u);
+  assert.match(faq, /Monday to Saturday in 15-minute slots: Dr\. Shafi from 5:30 PM to 8:00 PM and Dr\. Reshma from 8:00 PM to 9:30 PM/u);
+  assert.match(booking, /Usual hours, Mon–Sat: Dr\. Shafi 5:30–8 PM · Dr\. Reshma 8–9:30 PM/u);
+  assert.doesNotMatch(booking, /Dr\. Shafi 5–8 PM|Dr\. Reshma 7–9 PM/u);
+  assert.match(care, /appointmentHours: "Mon–Sat · 5:30 PM–8:00 PM"/u);
+  assert.match(care, /appointmentHours: "Mon–Sat · 8:00 PM–9:30 PM"/u);
+  assert.match(adminSettings, /starting schedule is Monday–Saturday/u);
+  assert.match(adminSettings, /15-minute slots: Dr\. Shafi from 5:30 PM–8:00 PM and Dr\. Reshma from 8:00 PM–9:30 PM/u);
   assert.doesNotMatch(publicCopy, /Specialist slots Mon–Sat, 5–8 PM/u);
   assert.doesNotMatch(publicCopy, /specialist appointments are normally available[^.]*5:00 PM to 8:00 PM/u);
   assert.doesNotMatch(publicCopy, /Open every day|Open daily/u);
+});
+
+test("visible FAQ hours and homepage structured answers share the same updated source", async () => {
+  const Faq = await loadPublicComponent("src/components/home/FrequentlyAskedQuestions.tsx");
+  const answers = descendants(Faq(), "details").flatMap((item) => descendants(item, "p"));
+  const bookingAnswer = answers.find((answer) => String(answer.props.children).startsWith("Online appointments"));
+  assert.ok(bookingAnswer, "the visible booking-hours answer must exist");
+  assert.match(bookingAnswer.props.children, /Dr\. Shafi from 5:30 PM to 8:00 PM and Dr\. Reshma from 8:00 PM to 9:30 PM/u);
+
+  const page = await readFile(path.join(root, "src/app/page.tsx"), "utf8");
+  assert.match(page, /FrequentlyAskedQuestions, \{ clinicFaqs \} from "@\/components\/home\/FrequentlyAskedQuestions"/u);
+  assert.match(page, /mainEntity: clinicFaqs\.map\(\(item\) => \(\{/u);
+  assert.match(page, /acceptedAnswer: \{\s*"@type": "Answer",\s*text: item\.answer,/u);
+  assert.match(page, /JSON\.stringify\(faqSchema\)/u, "the updated FAQ schema must remain rendered");
 });
 
 test("appointment booking keeps its initial server and client markup time-neutral", async () => {

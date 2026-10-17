@@ -125,7 +125,7 @@ function ScheduleEditorForm({
           <h2 className="mt-3 text-2xl font-bold text-[#233A59]">Control patient booking times</h2>
           <p className="mt-2 max-w-3xl leading-7 text-slate-600">
             Changes saved here appear on the website immediately. The starting schedule is Monday–Saturday,
-            with 15-minute slots: Dr. Shafi from 5:00 PM–8:00 PM and Dr. Reshma from 7:00 PM–9:00 PM.
+            with 15-minute slots: Dr. Shafi from 5:30 PM–8:00 PM and Dr. Reshma from 8:00 PM–9:30 PM.
           </p>
         </div>
       </div>

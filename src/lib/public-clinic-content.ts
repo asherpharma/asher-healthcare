@@ -41,7 +41,7 @@ export const careJourneys: readonly CareJourney[] = [
     doctorImage: "/images/dr-shafi-ahamad.jpg",
     doctorImageAlt:
       "Dr. Lt Col Shafi Ahamad, Consultant Pediatrician at Asher Healthcare",
-    appointmentHours: "Mon–Sat · 5:00 PM–8:00 PM",
+    appointmentHours: "Mon–Sat · 5:30 PM–8:00 PM",
     reasons: [
       "Newborn and routine child check-ups",
       "Fever and common childhood illnesses",
@@ -73,7 +73,7 @@ export const careJourneys: readonly CareJourney[] = [
     doctorImage: "/images/dr-shaik-reshma.jpg",
     doctorImageAlt:
       "Dr. Shaik Reshma, Consultant Obstetrician & Gynaecologist at Asher Healthcare",
-    appointmentHours: "Mon–Sat · 7:00 PM–9:00 PM",
+    appointmentHours: "Mon–Sat · 8:00 PM–9:30 PM",
     reasons: [
       "Pregnancy, antenatal and postnatal care",
       "Periods, PCOS and hormonal concerns",

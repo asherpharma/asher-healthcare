@@ -9,7 +9,7 @@ export const clinicFaqs = [
   {
     question: "When can I book an appointment?",
     answer:
-      "Online appointments are normally available Monday to Saturday in 15-minute slots: Dr. Shafi from 5:00 PM to 8:00 PM and Dr. Reshma from 7:00 PM to 9:00 PM. The booking form always shows the latest timings set by the clinic.",
+      "Online appointments are normally available Monday to Saturday in 15-minute slots: Dr. Shafi from 5:30 PM to 8:00 PM and Dr. Reshma from 8:00 PM to 9:30 PM. The booking form always shows the latest timings set by the clinic.",
   },
   {
     question: "Which specialist should I choose?",

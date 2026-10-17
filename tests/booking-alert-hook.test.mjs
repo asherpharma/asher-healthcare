@@ -19,7 +19,7 @@ const BODY = {
   phone: "0000000000",
   doctorId: "pediatrics",
   preferredDate: "2026-09-26",
-  preferredTime: "17:00",
+  preferredTime: "17:30",
   reason: "Private test reason",
   source: "website",
   privacyAccepted: true,
