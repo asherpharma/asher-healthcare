@@ -4,8 +4,11 @@ import { Script } from "node:vm";
 import * as homepageGtm from "../src/lib/homepage-gtm.mjs";
 
 const BOOTSTRAP_ID = "asher-homepage-gtm-bootstrap";
-const NOSCRIPT_ID = "asher-homepage-gtm-noscript";
-const NOSCRIPT = `<noscript id="${NOSCRIPT_ID}"><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-TQC7XR38" height="0" width="0" style="display:none;visibility:hidden" referrerpolicy="no-referrer" title="Google Tag Manager"></iframe></noscript>`;
+// Google's original noscript/iframe element, with only exterior comment spacing
+// compacted: extra BODY text nodes would conflict with React hydration. The
+// page-level no-referrer metadata protects the untouched fallback element.
+export const GOOGLE_GTM_NOSCRIPT = `<!-- Google Tag Manager (noscript) --><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-TQC7XR38"
+height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript><!-- End Google Tag Manager (noscript) -->`;
 const NEXT_VERSION = "16.3.7";
 
 function exactlyOne(source, pattern, description) {
@@ -62,7 +65,7 @@ export function injectHomepageGtmBootstrap(html, bootstrap) {
   const existing = scriptTags.filter((match) => attributes(match[0].slice(0, match[0].indexOf(">") + 1)).id === BOOTSTRAP_ID);
   if (existing.length > 1) throw new Error("Duplicate homepage GTM bootstrap.");
   const noscriptTags = [...html.matchAll(/<noscript\b[^>]*>([\s\S]*?)<\/noscript\s*>/giu)];
-  const existingNoscript = noscriptTags.filter((match) => attributes(match[0].slice(0, match[0].indexOf(">") + 1)).id === NOSCRIPT_ID);
+  const existingNoscript = noscriptTags.filter((match) => /googletagmanager\.com\/ns\.html|asher-homepage-gtm-noscript/iu.test(match[0]));
   if (existingNoscript.length > 1) throw new Error("Duplicate homepage GTM fallback.");
   if (existing.length !== existingNoscript.length) throw new Error("Incomplete existing homepage GTM placement.");
   let stripped = existing.length ? html.replace(existing[0][0], "") : html;
@@ -75,7 +78,7 @@ export function injectHomepageGtmBootstrap(html, bootstrap) {
   if (existing.length) {
     if (!head.startsWith(prefix + script)) throw new Error("Existing homepage bootstrap differs or is misplaced.");
     const bodyStart = bodyOpen.index + bodyOpen[0].length;
-    if (existingNoscript[0][0] !== NOSCRIPT || !html.slice(bodyStart).startsWith(NOSCRIPT)) {
+    if (!html.slice(bodyStart).startsWith(GOOGLE_GTM_NOSCRIPT)) {
       throw new Error("Existing homepage fallback differs or is misplaced.");
     }
     return html;
@@ -83,7 +86,7 @@ export function injectHomepageGtmBootstrap(html, bootstrap) {
   const remainingHead = head.replace(charsetTags[0][0], "").replace(referrerTags[0][0], "");
   const updated = html.slice(0, start) + prefix + script + remainingHead + html.slice(headClose.index);
   const bodyStart = bodyOpen.index + bodyOpen[0].length + updated.length - html.length;
-  return updated.slice(0, bodyStart) + NOSCRIPT + updated.slice(bodyStart);
+  return updated.slice(0, bodyStart) + GOOGLE_GTM_NOSCRIPT + updated.slice(bodyStart);
 }
 
 const adapter = {

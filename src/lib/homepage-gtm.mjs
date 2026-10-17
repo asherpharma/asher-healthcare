@@ -1,6 +1,14 @@
 const PRODUCTION_HOSTS = new Set(["asherhealthcare.in", "www.asherhealthcare.in"]);
 const GENERAL_HASHES = new Set(["", "#top", "#main-content", "#services", "#care", "#doctors", "#moments-of-care", "#contact", "#faq", "#book-visit"]);
-const SCRIPT_ID = "asher-homepage-gtm";
+// Google's original installation source, unchanged except for our container ID.
+// https://support.google.com/tagmanager/answer/14847097
+// Keep privacy decisions outside this source; do not wrap or edit the IIFE.
+export const GOOGLE_GTM_SOURCE = `(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-TQC7XR38');`;
+const ORIGINAL_SCRIPT_ID = "asher-homepage-gtm-original";
 const installedDocuments = new WeakSet();
 const AD_ANNOTATION_KEYS = new Set(["gclid", "gbraid", "wbraid", "gad_source", "gad_campaignid"]);
 
@@ -142,12 +150,13 @@ export function installHomepageGtm(win, doc, nav) {
     restricted_data_processing: true,
     page_location: "https://asherhealthcare.in/", page_referrer: "", page_title: "Asher Healthcare",
   });
-  win.dataLayer.push({ "gtm.start": Date.now(), event: "gtm.js" });
+  // Run the exact provider code only AFTER our separate privacy preflight.
+  // It synchronously creates its own async external loader via insertBefore.
+  // This is deliberately not an unconditional Google block in the HTML: DNT,
+  // GPC, excluded addresses and legacy booking redirects must still skip it.
   const script = doc.createElement("script");
-  script.id = SCRIPT_ID;
-  script.async = true;
-  script.referrerPolicy = "no-referrer";
-  script.src = "https://www.googletagmanager.com/gtm.js?id=GTM-TQC7XR38";
+  script.id = ORIGINAL_SCRIPT_ID;
+  script.textContent = GOOGLE_GTM_SOURCE;
   doc.head.appendChild(script);
   // Listeners deliberately live for this document's lifetime, including React
   // remounts and BFCache restores; the WeakSet prevents duplicate installation.
@@ -160,7 +169,8 @@ export function createHomepageGtmBootstrap() {
     `const PRODUCTION_HOSTS = new Set(${JSON.stringify([...PRODUCTION_HOSTS])});`,
     `const GENERAL_HASHES = new Set(${JSON.stringify([...GENERAL_HASHES])});`,
     `const AD_ANNOTATION_KEYS = new Set(${JSON.stringify([...AD_ANNOTATION_KEYS])});`,
-    `const SCRIPT_ID = ${JSON.stringify(SCRIPT_ID)};`,
+    `const GOOGLE_GTM_SOURCE = ${JSON.stringify(GOOGLE_GTM_SOURCE)};`,
+    `const ORIGINAL_SCRIPT_ID = ${JSON.stringify(ORIGINAL_SCRIPT_ID)};`,
     "const installedDocuments = new WeakSet();",
   ];
   return [

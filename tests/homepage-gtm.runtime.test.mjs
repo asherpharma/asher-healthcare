@@ -2,16 +2,57 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
-import { crossesHomepageBoundary, homepageGtmAllowed, installHomepageGtm, legacyBookingDestination, leaveTaggedErrorPage, createHomepageGtmBootstrap } from "../src/lib/homepage-gtm.mjs";
+import { crossesHomepageBoundary, homepageGtmAllowed, installHomepageGtm, legacyBookingDestination, leaveTaggedErrorPage, createHomepageGtmBootstrap, GOOGLE_GTM_SOURCE } from "../src/lib/homepage-gtm.mjs";
+
+// Keep an independent, literal copy of Google's published standard source.
+// Comparing two generated exports alone would miss a shared modification.
+const originalGoogleSource = `(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-TQC7XR38');`;
 
 function harness(url = "https://asherhealthcare.in/", privacy = {}) {
   let current = new URL(url);
   const actions = [];
   const scripts = [];
+  const inlineScripts = [];
+  const providerRuns = [];
+  const operations = [];
+  const nodes = [];
   const handlers = new Map();
+  let window;
+  let navigator;
+  const head = {
+    appendChild(script) {
+      script.parentNode = head;
+      nodes.push(script);
+      assert.equal(script.src, undefined, "Only the untouched provider source may create the external loader.");
+      inlineScripts.push(script);
+      operations.push(["appendInline", script.id]);
+      providerRuns.push({ source: script.textContent, dataLayerBefore: [...(window.dataLayer ?? [])] });
+      // In a browser an appended classic inline script executes synchronously.
+      // Run the provider source, including its real insertBefore path, rather
+      // than pretending the script element itself is an external loader.
+      runInNewContext(script.textContent, { window, document, navigator, URL, URLSearchParams });
+      return script;
+    },
+    insertBefore(script, reference) {
+      const index = nodes.indexOf(reference);
+      assert.ok(index >= 0, "Google must insert before an existing script node.");
+      assert.equal(reference.parentNode, head);
+      script.parentNode = head;
+      nodes.splice(index, 0, script);
+      scripts.push(script);
+      operations.push(["insertExternal", script.src]);
+      return script;
+    },
+  };
+  nodes.push({ name: "script", id: "parser-bootstrap-fixture", parentNode: head });
   const document = {
-    head: { appendChild: script => scripts.push(script) },
+    head,
     createElement: name => ({ name }),
+    getElementsByTagName: name => nodes.filter(node => node.name === name),
     addEventListener: (name, fn) => handlers.set(`doc:${name}`, fn),
   };
   const location = {
@@ -25,7 +66,7 @@ function harness(url = "https://asherhealthcare.in/", privacy = {}) {
     if (href != null) current = new URL(href, current);
     actions.push([method, href]);
   }]));
-  const window = {
+  window = {
     location, history, addEventListener: (name, fn) => handlers.set(name, fn),
     MutationObserver: class {
       constructor(callback) { this.callback = callback; }
@@ -36,9 +77,9 @@ function harness(url = "https://asherhealthcare.in/", privacy = {}) {
       }
     },
   };
-  const navigator = { doNotTrack: "0", globalPrivacyControl: false, ...privacy };
+  navigator = { doNotTrack: "0", globalPrivacyControl: false, ...privacy };
   return {
-    window, document, navigator, scripts, actions, handlers,
+    window, document, navigator, scripts, inlineScripts, providerRuns, operations, actions, handlers,
     install: () => installHomepageGtm(window, document, navigator),
     move: href => { current = new URL(href, current); },
     click: (href, extras = {}) => {
@@ -49,6 +90,19 @@ function harness(url = "https://asherhealthcare.in/", privacy = {}) {
     },
   };
 }
+
+test("the conditionally executed provider source is Google's exact original, independently of our privacy preflight", () => {
+  assert.equal(GOOGLE_GTM_SOURCE, originalGoogleSource);
+  const app = harness(); app.install();
+  assert.equal(app.inlineScripts.length, 1);
+  assert.equal(app.inlineScripts[0].id, "asher-homepage-gtm-original");
+  assert.equal(app.inlineScripts[0].textContent, originalGoogleSource);
+  assert.deepEqual(app.operations.map(operation => operation[0]), ["appendInline", "insertExternal"]);
+  assert.equal(app.scripts.length, 1);
+  assert.equal(app.scripts[0].src, "https://www.googletagmanager.com/gtm.js?id=GTM-TQC7XR38");
+  assert.equal(app.scripts[0].id, undefined, "Do not alter the provider-created script node.");
+  assert.equal(app.scripts[0].referrerPolicy, undefined, "Referrer protection is a separate page-level policy.");
+});
 
 test("the loader is limited to the HTTPS production homepage without parameters", () => {
   for (const url of [
@@ -62,6 +116,7 @@ test("the loader is limited to the HTTPS production homepage without parameters"
   ]) {
     const app = harness(url); app.install();
     assert.equal(app.scripts.length, 0, url);
+    assert.equal(app.inlineScripts.length, 0, url);
     assert.equal(app.window.dataLayer, undefined, url);
   }
   for (const url of ["https://asherhealthcare.in/", "https://www.asherhealthcare.in/", "https://asherhealthcare.in/#top", "https://asherhealthcare.in/#contact"]) {
@@ -82,6 +137,7 @@ test("legacy booking destinations preserve fragment priority and strip all other
     app.install();
     assert.deepEqual(app.actions, [["replace", expected]]);
     assert.equal(app.scripts.length, 0);
+    assert.equal(app.inlineScripts.length, 0);
     assert.equal(app.window.dataLayer, undefined);
   }
   assert.equal(legacyBookingDestination(new URL("https://asherhealthcare.in/book?care=obg")), null);
@@ -97,6 +153,7 @@ test("opaque ad arrivals are cleaned before Google initialization without retain
   for (const suffix of ["?gclid=Opaque&patient=private", "?gclid=one&gclid=two", "?gclid=contains%20words", "?utm_campaign=medical", "?gtm_preview=env-1", "?gad_source="]) {
     const app = harness(`https://asherhealthcare.in/${suffix}`); app.install();
     assert.equal(app.scripts.length, 0); assert.equal(app.actions.length, 0);
+    assert.equal(app.inlineScripts.length, 0);
   }
   const booking = harness("https://asherhealthcare.in/?gclid=Opaque&care=obg#appointment"); booking.install();
   assert.deepEqual(booking.actions, [["replace", "/book#appointment-obg"]]);
@@ -107,6 +164,7 @@ test("DNT and GPC skip Google entirely; restoring a page after opting out reload
   for (const privacy of [{ doNotTrack: "1" }, { globalPrivacyControl: true }]) {
     const app = harness(undefined, privacy); app.install();
     assert.equal(app.scripts.length, 0); assert.equal(app.window.dataLayer, undefined);
+    assert.equal(app.inlineScripts.length, 0);
   }
   const app = harness(); app.install(); app.navigator.globalPrivacyControl = true;
   app.handlers.get("pageshow")();
@@ -117,9 +175,13 @@ test("DNT and GPC skip Google entirely; restoring a page after opting out reload
 test("installation is once per document with denied privacy defaults before the approved native tags", () => {
   const app = harness(); app.install(); app.install();
   assert.equal(app.scripts.length, 1);
+  assert.equal(app.inlineScripts.length, 1);
+  assert.equal(app.providerRuns.length, 1);
+  assert.equal(app.providerRuns[0].source, originalGoogleSource);
+  assert.equal(app.providerRuns[0].dataLayerBefore.length, 3, "All privacy commands must precede the original provider source.");
+  assert.ok(app.providerRuns[0].dataLayerBefore.every(entry => !("gtm.start" in entry)));
   const script = app.scripts[0];
   assert.equal(script.name, "script"); assert.equal(script.async, true);
-  assert.equal(script.referrerPolicy, "no-referrer");
   assert.equal(app.document.title, "Asher Healthcare");
   assert.equal(script.src, "https://www.googletagmanager.com/gtm.js?id=GTM-TQC7XR38");
   assert.deepEqual(app.window.dataLayer[0], { "gtm.allowlist": ["googtag", "gclidw", "awct", "lcl", "e", "v", "u", "f", "aev"] });
@@ -137,6 +199,7 @@ test("installation is once per document with denied privacy defaults before the 
   assert.equal(settings.page_title, "Asher Healthcare");
   assert.deepEqual(Object.keys(app.window.dataLayer[3]), ["gtm.start", "event"]);
   assert.equal(app.window.dataLayer[3].event, "gtm.js");
+  assert.equal(app.window.dataLayer.filter(entry => entry.event === "gtm.js").length, 1);
   assert.equal(app.window.dataLayer.length, 4);
 });
 
@@ -148,6 +211,9 @@ test("parser bootstrap and hydrated fallback share one exact document installati
   const listener = app.handlers.get("doc:click");
   app.install();
   assert.equal(app.scripts.length, 1);
+  assert.equal(app.inlineScripts.length, 1);
+  assert.equal(app.providerRuns[0].source, originalGoogleSource);
+  assert.equal(app.providerRuns[0].dataLayerBefore.length, 3);
   assert.equal(app.window.dataLayer.length, 4);
   assert.equal(app.handlers.get("doc:click"), listener);
   assert.equal(app.window.__asherHomepageGtmDocument, app.document);
@@ -168,6 +234,8 @@ test("parser bootstrap applies redirects, parameter exclusions and privacy guard
       window: app.window, document: app.document, navigator: app.navigator, URL, URLSearchParams,
     });
     app.install(); assert.equal(app.scripts.length, 0, url);
+    assert.equal(app.inlineScripts.length, 0, url);
+    assert.equal(app.window.dataLayer, undefined, url);
   }
 });
 

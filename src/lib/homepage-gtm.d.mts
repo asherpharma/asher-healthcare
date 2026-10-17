@@ -1,3 +1,4 @@
+export const GOOGLE_GTM_SOURCE: string;
 export function legacyBookingDestination(location: Pick<Location, "pathname" | "search" | "hash">): string | null;
 export function homepageGtmAllowed(location: Pick<Location, "protocol" | "hostname" | "pathname" | "search" | "hash">, navigator: Navigator & { globalPrivacyControl?: boolean }): boolean;
 export function crossesHomepageBoundary(documentPath: string, nextPath: string): boolean;
