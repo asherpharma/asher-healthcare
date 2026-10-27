@@ -478,9 +478,16 @@ test("Ads tag is opt-in only, non-personalised, and insulated from care context"
   assert.match(privacy, /Cookie-free homepage statistics/u);
   assert.match(privacy, /store only daily totals/u);
   assert.match(privacy, /not a completed call, appointment or clinic visit/u);
-  assert.match(privacy, /Google Ads homepage and Call-button measurement/u);
-  assert.match(privacy, /denied advertising-storage, advertising-user-data and advertising-personalisation defaults/u);
-  assert.match(privacy, /container is excluded from appointment forms, medical-service pages, patient and staff portals/u);
+  assert.match(privacy, /Optional homepage Google Ads measurement/u);
+  assert.match(privacy, /blocked until you affirmatively accept/u);
+  assert.match(privacy, /Doing nothing does not count as acceptance/u);
+  assert.match(privacy, /Analytics storage and advertising personalisation remain denied/u);
+  assert.match(privacy, /No Google no-JavaScript fallback is loaded/u);
+  assert.match(privacy, /up to 180 days/u);
+  assert.match(privacy, /Withdraw measurement/u);
+  assert.match(privacy, /does not clear clinic login cookies/u);
+  assert.match(privacy, /A saved acceptance does not override these exclusions/u);
+  assert.match(privacy, /booking forms, medical-service pages, patient and staff portals/u);
 });
 
 test("homepage measurement boundaries render as native document links", async () => {

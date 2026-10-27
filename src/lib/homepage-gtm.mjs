@@ -11,6 +11,119 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
 const ORIGINAL_SCRIPT_ID = "asher-homepage-gtm-original";
 const installedDocuments = new WeakSet();
 const AD_ANNOTATION_KEYS = new Set(["gclid", "gbraid", "wbraid", "gad_source", "gad_campaignid"]);
+export const HOMEPAGE_CONSENT_KEY = "asher.homepage.measurement.v1";
+const CONSENT_MAX_AGE = 180 * 24 * 60 * 60 * 1000;
+
+// No unknown fields, identities, click IDs or visit history are persisted.
+function readPreference(win) {
+  try {
+    const value = JSON.parse(win.localStorage.getItem(HOMEPAGE_CONSENT_KEY));
+    const now = Date.now();
+    if (!value || Object.keys(value).sort().join(",") !== "choice,expiresAt,v" || value.v !== 1 ||
+        !["accepted", "declined"].includes(value.choice) || !Number.isSafeInteger(value.expiresAt) ||
+        value.expiresAt <= now || value.expiresAt > now + CONSENT_MAX_AGE) {
+      win.localStorage.removeItem(HOMEPAGE_CONSENT_KEY);
+      return null;
+    }
+    return value;
+  } catch { return null; }
+}
+
+function advertisingAnnotations(location) {
+  if (!location.search) return "";
+  const entries = [...new URLSearchParams(location.search)];
+  if (!entries.length || new Set(entries.map(([key]) => key)).size !== entries.length ||
+      !entries.every(([key, value]) => AD_ANNOTATION_KEYS.has(key) &&
+        (/^gad_/u.test(key) ? /^[0-9]{1,20}$/u.test(value) : /^[A-Za-z0-9_-]{1,256}$/u.test(value)))) return null;
+  // These are opaque Google ad-click annotations, never free-text campaigns.
+  return new URLSearchParams(entries.filter(([key]) => ["gclid", "gbraid", "wbraid"].includes(key))).toString();
+}
+
+function clearMeasurementStorage(win, doc) {
+  try { win.localStorage.removeItem("_gcl_ls"); } catch {}
+  try { win.sessionStorage?.removeItem("_gcl_ls"); } catch {}
+  // Conversion Linker uses the root path; no cookie overrides are enabled.
+  // Only cookies accessible on this homepage can be removed by JavaScript.
+  const domains = new Set(["", win.location.hostname, "." + win.location.hostname, "asherhealthcare.in", ".asherhealthcare.in"]);
+  try {
+    const names = doc.cookie.split(";").map(part => part.trim().split("=")[0])
+      .filter(name => /^_(?:gcl|gac)_[A-Za-z0-9_-]+$/u.test(name));
+    for (const name of names) for (const domain of domains) {
+      const removal = `${name}=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; Secure; SameSite=Lax${domain ? "; Domain=" + domain : ""}`;
+      doc.cookie = removal;
+      doc.cookie = removal + "; Partitioned";
+    }
+  } catch {}
+}
+
+export function getHomepageConsent(win, nav) {
+  if (!homepageGtmAllowed(win.location, nav)) return { eligible: false, choice: null };
+  const controller = win.__asherHomepageConsentController;
+  return { eligible: true, choice: controller ? controller.getChoice() : readPreference(win)?.choice ?? null };
+}
+
+export function setHomepageConsent(win, doc, nav, choice) {
+  if (!["accepted", "declined"].includes(choice)) return;
+  installHomepageGtm(win, doc, nav);
+  win.__asherHomepageConsentController?.choose(choice);
+}
+
+// Loaded Google code cannot be removed safely. This document-scoped guard stops
+// new transports immediately on withdrawal, before a clean-document reload.
+// It also blocks unneeded Analytics/audience endpoints from implicit tag deps.
+function guardGoogleTransports(win, allowed) {
+  function blocked(raw) {
+    let url;
+    try { url = new URL(String(raw), win.location.href); } catch { return false; }
+    const google = /(^|\.)(googletagmanager\.com|googleadservices\.com|doubleclick\.net|googlesyndication\.com|google-analytics\.com)$/iu.test(url.hostname) ||
+      /(^|\.)google\.[a-z.]+$/iu.test(url.hostname);
+    if (!google) return false;
+    // Clinic directions embeds are not Ads measurement transports.
+    if (/^\/(?:maps)(?:\/|$)/u.test(url.pathname) && /(^|\.)google\.[a-z.]+$/iu.test(url.hostname)) return false;
+    if (!allowed()) return true;
+    if (url.protocol !== "https:") return true;
+    if (url.hostname === "www.googletagmanager.com") {
+      return !((url.pathname === "/gtm.js" && url.searchParams.get("id") === "GTM-TQC7XR38") ||
+        (["/gtag/js", "/gtag/destination"].includes(url.pathname) && url.searchParams.get("id") === "AW-18404988056"));
+    }
+    // Fail closed for implicit page-view, audience and Analytics pings. Only
+    // the reviewed, labeled Call-link intent may use the conversion transport.
+    const phoneEndpoint = (url.hostname === "www.googleadservices.com" && /^\/pagead\/conversion\/18404988056\/?$/u.test(url.pathname)) ||
+      (url.hostname === "www.google.com" && /^\/pagead\/1p-conversion\/18404988056\/?$/u.test(url.pathname));
+    return !(phoneEndpoint && url.searchParams.get("en") === "conversion" &&
+      url.searchParams.get("label") === "WvCgCOHZrpwdEJipl8hE" &&
+      url.searchParams.get("npa") === "1" && url.searchParams.get("rdp") === "1");
+  }
+  if (typeof win.fetch === "function") {
+    const fetch = win.fetch.bind(win);
+    win.fetch = (input, init) => blocked(input?.url ?? input) ? Promise.reject(new Error("Optional measurement is disabled.")) : fetch(input, init);
+  }
+  if (typeof win.navigator?.sendBeacon === "function") {
+    const beacon = win.navigator.sendBeacon.bind(win.navigator);
+    try { win.navigator.sendBeacon = (url, data) => blocked(url) ? false : beacon(url, data); } catch {}
+  }
+  const xhr = win.XMLHttpRequest?.prototype;
+  if (xhr) {
+    const targets = new WeakMap(); const open = xhr.open; const send = xhr.send;
+    xhr.open = function(method, url, ...args) { targets.set(this, url); return open.call(this, method, url, ...args); };
+    xhr.send = function(...args) { if (blocked(targets.get(this))) return this.abort(); return send.apply(this, args); };
+  }
+  for (const type of [win.HTMLImageElement, win.HTMLScriptElement, win.HTMLIFrameElement]) {
+    const prototype = type?.prototype;
+    const descriptor = prototype && Object.getOwnPropertyDescriptor(prototype, "src");
+    if (descriptor?.configurable && descriptor.set) Object.defineProperty(prototype, "src", {
+      ...descriptor, set(value) { if (!blocked(value)) descriptor.set.call(this, value); },
+    });
+  }
+  const element = win.Element?.prototype;
+  if (element?.setAttribute) {
+    const setAttribute = element.setAttribute;
+    element.setAttribute = function(name, value) {
+      if (String(name).toLowerCase() === "src" && /^(IMG|SCRIPT|IFRAME)$/u.test(this.tagName) && blocked(value)) return;
+      return setAttribute.call(this, name, value);
+    };
+  }
+}
 
 // Fragments keep the doctor choice out of server URLs and referrers. Drop all
 // other legacy query parameters when forwarding to the untracked booking page.
@@ -28,7 +141,7 @@ export function legacyBookingDestination(location) {
 
 export function homepageGtmAllowed(location, navigator) {
   return location.protocol === "https:" && PRODUCTION_HOSTS.has(location.hostname) &&
-    location.pathname === "/" && location.search === "" && GENERAL_HASHES.has(location.hash) &&
+    location.pathname === "/" && advertisingAnnotations(location) !== null && GENERAL_HASHES.has(location.hash) &&
     navigator.doNotTrack !== "1" && navigator.globalPrivacyControl !== true;
 }
 
@@ -48,24 +161,23 @@ export function installHomepageGtm(win, doc, nav) {
     win.location.replace(legacy);
     return;
   }
-  // Ads arrivals can carry opaque click annotations. Discard a strictly known
-  // annotation-only query BEFORE loading Google; never retain or forward IDs.
-  // Unknown, medical, booking, UTM and debug/auth parameters remain excluded.
-  if (win.location.protocol === "https:" && PRODUCTION_HOSTS.has(win.location.hostname) &&
-      win.location.pathname === "/" && GENERAL_HASHES.has(win.location.hash) && win.location.search) {
-    const entries = [...new URLSearchParams(win.location.search)];
-    const keys = new Set(entries.map(([key]) => key));
-    if (entries.length > 0 && keys.size === entries.length && entries.every(([key, value]) =>
-      AD_ANNOTATION_KEYS.has(key) && /^[A-Za-z0-9_-]{1,256}$/u.test(value))) {
-      win.history.replaceState(null, "", "/" + win.location.hash);
-    }
-  }
   if (!homepageGtmAllowed(win.location, nav) || installedDocuments.has(doc) || win.__asherHomepageGtmDocument === doc) return;
   installedDocuments.add(doc);
   // The parser bootstrap and hydrated bundle are separate module instances.
   // Share the exact document identity so they cannot install two containers.
   win.__asherHomepageGtmDocument = doc;
-  win.__asherHomepageGtmLoaded = true;
+  // Keep recognized click IDs only in this closure while a choice is pending.
+  // Removing them now prevents accidental pre-consent propagation by links.
+  let annotations = advertisingAnnotations(win.location);
+  const replaceState = win.history.replaceState.bind(win.history);
+  if (win.location.search) replaceState(null, "", "/" + win.location.hash);
+  let preference = readPreference(win);
+  let choice = preference?.choice ?? null;
+  let expiresAt = preference?.expiresAt ?? 0;
+  let persisted = Boolean(preference);
+  let leaving = false;
+  let unsafeSavedAcceptance = false;
+  let expiryTimer;
   // The existing native conversion template reads document.title directly,
   // independently of gtag page_title. Use the same neutral brand here too.
   function keepNeutralTitle() {
@@ -102,6 +214,8 @@ export function installHomepageGtm(win, doc, nav) {
     if (!next) return;
     event.preventDefault();
     event.stopImmediatePropagation();
+    stopMeasurement();
+    leaving = true;
     win.location.assign(next.href);
   }
   doc.addEventListener("click", onClick, true);
@@ -112,6 +226,8 @@ export function installHomepageGtm(win, doc, nav) {
       if (url != null) {
         const next = destination(String(url));
         if (next) {
+          stopMeasurement();
+          leaving = true;
           win.location[method === "replaceState" ? "replace" : "assign"](next.href);
           return;
         }
@@ -123,12 +239,23 @@ export function installHomepageGtm(win, doc, nav) {
   function enforce() {
     keepNeutralTitle();
     const booking = legacyBookingDestination(win.location);
-    if (booking) win.location.replace(booking);
-    else if (!homepageGtmAllowed(win.location, nav)) win.location.reload();
+    if (booking) { stopMeasurement(); leaving = true; win.location.replace(booking); }
+    else if (!homepageGtmAllowed(win.location, nav)) {
+      stopMeasurement();
+      leaving = true;
+      notify();
+      win.location.reload();
+    } else if (choice === "accepted" && (Date.now() >= expiresAt ||
+        (persisted && readPreference(win)?.choice !== "accepted"))) revoke(false);
   }
   win.addEventListener("hashchange", enforce, true);
   win.addEventListener("popstate", enforce, true);
-  win.addEventListener("pageshow", enforce, true);
+  win.addEventListener("pageshow", (event = {}) => {
+    // Back/forward may restore an old Google-loaded document from BFCache.
+    // Never reactivate its detached/leaving controller or stale listeners.
+    if (event.persisted && leaving) win.location.reload();
+    else enforce();
+  }, true);
   doc.addEventListener("visibilitychange", enforce);
 
   // Permit only the existing Google tag, conversion linker, call-click tag and
@@ -138,8 +265,8 @@ export function installHomepageGtm(win, doc, nav) {
   win.dataLayer = win.dataLayer || [];
   win.dataLayer.push({ "gtm.allowlist": ["googtag", "gclidw", "awct", "lcl", "e", "v", "u", "f", "aev"] });
   function command() { win.dataLayer.push(arguments); }
-  // Never infer or grant visitor advertising consent. These defaults precede
-  // container initialization, and remain denied (there is no consent popup).
+  // Google's Basic Consent Mode: queue defaults but load no Google code until
+  // an affirmative, unexpired preference exists. Personalization stays denied.
   command("consent", "default", {
     ad_storage: "denied", analytics_storage: "denied", ad_user_data: "denied",
     ad_personalization: "denied", personalization_storage: "denied",
@@ -148,18 +275,104 @@ export function installHomepageGtm(win, doc, nav) {
     allow_ad_personalization_signals: false, allow_google_signals: false,
     allow_enhanced_conversions: false, ads_data_redaction: true, url_passthrough: false,
     restricted_data_processing: true,
+    send_page_view: false,
+    linker: { domains: [], decorate_forms: false, accept_incoming: false },
     page_location: "https://asherhealthcare.in/", page_referrer: "", page_title: "Asher Healthcare",
   });
-  // Run the exact provider code only AFTER our separate privacy preflight.
-  // It synchronously creates its own async external loader via insertBefore.
-  // This is deliberately not an unconditional Google block in the HTML: DNT,
-  // GPC, excluded addresses and legacy booking redirects must still skip it.
-  const script = doc.createElement("script");
-  script.id = ORIGINAL_SCRIPT_ID;
-  script.textContent = GOOGLE_GTM_SOURCE;
-  doc.head.appendChild(script);
-  // Listeners deliberately live for this document's lifetime, including React
-  // remounts and BFCache restores; the WeakSet prevents duplicate installation.
+  win.gtag = command;
+
+  function allowed() {
+    return !leaving && choice === "accepted" && Date.now() < expiresAt &&
+      homepageGtmAllowed(win.location, nav) && (!persisted || readPreference(win)?.choice === "accepted");
+  }
+  guardGoogleTransports(win, allowed);
+  function notify() {
+    if (typeof win.Event === "function") win.dispatchEvent(new win.Event("asher:measurement-consent"));
+  }
+  function stopMeasurement() {
+    choice = "declined";
+    command("consent", "update", {
+      ad_storage: "denied", ad_user_data: "denied", ad_personalization: "denied",
+      analytics_storage: "denied", personalization_storage: "denied",
+    });
+    clearMeasurementStorage(win, doc);
+    annotations = "";
+    if (win.location.pathname === "/" && GENERAL_HASHES.has(win.location.hash) && advertisingAnnotations(win.location) !== null) {
+      replaceState(null, "", "/" + win.location.hash);
+    }
+  }
+  function revoke(saveChoice) {
+    if (leaving) return;
+    if (saveChoice) save("declined");
+    stopMeasurement();
+    if (!saveChoice) choice = readPreference(win)?.choice === "declined" ? "declined" : null;
+    notify();
+    if (win.__asherHomepageGtmLoaded) {
+      leaving = true;
+      // Moving to a fresh document evicts timers/listeners installed by Google.
+      win.location.replace("/" + (unsafeSavedAcceptance ? "?untracked=1" : "") + (GENERAL_HASHES.has(win.location.hash) ? win.location.hash : ""));
+    }
+  }
+  function scheduleExpiry() {
+    if (expiryTimer != null) win.clearTimeout?.(expiryTimer);
+    if (typeof win.setTimeout === "function" && choice === "accepted") {
+      // Browser timers cap around 24.8 days. Recheck instead of expiring early.
+      expiryTimer = win.setTimeout(() => {
+        enforce();
+        if (allowed()) scheduleExpiry();
+      }, Math.min(2147483647, Math.max(1, expiresAt - Date.now())));
+    }
+  }
+  function save(next) {
+    choice = next;
+    expiresAt = Date.now() + CONSENT_MAX_AGE;
+    preference = { v: 1, choice, expiresAt };
+    try {
+      win.localStorage.setItem(HOMEPAGE_CONSENT_KEY, JSON.stringify(preference));
+      persisted = readPreference(win)?.choice === next;
+    } catch { persisted = false; }
+    if (next === "declined" && !persisted) {
+      try { win.localStorage.removeItem(HOMEPAGE_CONSENT_KEY); } catch {}
+      // Never let an unreadable/unremovable old acceptance restart Google on
+      // the withdrawal reload. The untracked marker is deliberately excluded.
+      try { unsafeSavedAcceptance = win.localStorage.getItem(HOMEPAGE_CONSENT_KEY) !== null; }
+      catch { unsafeSavedAcceptance = true; }
+    }
+  }
+  function startMeasurement() {
+    if (!allowed() || win.__asherHomepageGtmLoaded) return;
+    // Restore only validated click IDs after acceptance. Native Conversion
+    // Linker can then read them. Unknown keys/free text never enter this path.
+    if (annotations) replaceState(null, "", "/?" + annotations + win.location.hash);
+    command("set", { page_location: "https://asherhealthcare.in/" + (annotations ? "?" + annotations : "") });
+    command("consent", "update", {
+      ad_storage: "granted", ad_user_data: "granted", ad_personalization: "denied",
+      analytics_storage: "denied", personalization_storage: "denied",
+    });
+    win.__asherHomepageGtmLoaded = true;
+    const script = doc.createElement("script");
+    script.id = ORIGINAL_SCRIPT_ID;
+    script.textContent = GOOGLE_GTM_SOURCE;
+    doc.head.appendChild(script);
+    scheduleExpiry();
+  }
+  win.__asherHomepageConsentController = {
+    document: doc,
+    getChoice: () => choice,
+    choose(next) {
+      if (leaving || !homepageGtmAllowed(win.location, nav)) return;
+      if (next === "declined") revoke(true);
+      else if (next === "accepted") { save(next); startMeasurement(); notify(); }
+    },
+  };
+  win.addEventListener("storage", event => {
+    if (event.key === HOMEPAGE_CONSENT_KEY || event.key === null) {
+      if (choice === "accepted" && readPreference(win)?.choice !== "accepted") revoke(false);
+      else enforce();
+    }
+  });
+  if (choice === "accepted") startMeasurement();
+  else clearMeasurementStorage(win, doc);
 }
 
 // Build-time only: emit the same reviewed runtime, not a second hand-maintained
@@ -171,11 +384,17 @@ export function createHomepageGtmBootstrap() {
     `const AD_ANNOTATION_KEYS = new Set(${JSON.stringify([...AD_ANNOTATION_KEYS])});`,
     `const GOOGLE_GTM_SOURCE = ${JSON.stringify(GOOGLE_GTM_SOURCE)};`,
     `const ORIGINAL_SCRIPT_ID = ${JSON.stringify(ORIGINAL_SCRIPT_ID)};`,
+    `const HOMEPAGE_CONSENT_KEY = ${JSON.stringify(HOMEPAGE_CONSENT_KEY)};`,
+    `const CONSENT_MAX_AGE = ${CONSENT_MAX_AGE};`,
     "const installedDocuments = new WeakSet();",
   ];
   return [
     "(function(){\"use strict\";",
     ...declarations,
+    readPreference.toString(),
+    advertisingAnnotations.toString(),
+    clearMeasurementStorage.toString(),
+    guardGoogleTransports.toString(),
     legacyBookingDestination.toString(),
     homepageGtmAllowed.toString(),
     installHomepageGtm.toString(),

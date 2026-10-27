@@ -73,7 +73,6 @@ const faqSchema = {
 export default function Home() {
   return (
     <div className="patient-home">
-      <HomepageGtm />
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(clinicSchema) }}
@@ -95,6 +94,7 @@ export default function Home() {
       </main>
       <MobileCareBar />
       <Footer />
+      <HomepageGtm />
     </div>
   );
 }
