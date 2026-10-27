@@ -3,38 +3,19 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import test from "node:test";
-import adapter, { injectHomepageGtmBootstrap, GOOGLE_GTM_NOSCRIPT } from "../scripts/gtm-head-adapter.mjs";
+import adapter, { injectHomepageGtmBootstrap } from "../scripts/gtm-head-adapter.mjs";
 
 const bootstrap = "window.__asherPlacementFixture = true;";
 const html = '<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/><link rel="stylesheet" href="/_next/style.css"/><meta content="no-referrer" name="referrer"/><title>Asher Healthcare</title></head><body id="top"><main id="main-content">Homepage</main><script>self.__next_f.push([1,"payload"])</script></body></html>';
-const originalGoogleNoscript = `<!-- Google Tag Manager (noscript) -->
-<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-TQC7XR38"
-height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
-<!-- End Google Tag Manager (noscript) -->`;
-const renderedGoogleNoscript = originalGoogleNoscript.replace("-->\n<noscript>", "--><noscript>").replace("</noscript>\n<!--", "</noscript><!--");
-
-test("the original Google fallback element is unchanged; only exterior comment spacing is compacted for React", () => {
-  assert.equal(GOOGLE_GTM_NOSCRIPT, renderedGoogleNoscript);
-  assert.equal(GOOGLE_GTM_NOSCRIPT.match(/<noscript>[\s\S]*?<\/noscript>/u)[0], originalGoogleNoscript.match(/<noscript>[\s\S]*?<\/noscript>/u)[0]);
-  assert.doesNotMatch(GOOGLE_GTM_NOSCRIPT, /\s(?:id|title|referrerpolicy)=/iu);
-});
-
-test("the separate privacy bootstrap and original body fallback are parser-visible in their exact positions", () => {
+test("only the privacy bootstrap is parser-visible, after referrer policy and before other homepage scripts", () => {
   const updated = injectHomepageGtmBootstrap(html, bootstrap);
   assert.ok(updated.includes(`<head><meta charSet="utf-8"/><meta content="no-referrer" name="referrer"/><script id="asher-homepage-gtm-bootstrap">${bootstrap}</script><link`));
   assert.equal(updated.match(/name="referrer"/gu).length, 1);
   assert.equal(updated.match(/charSet="utf-8"/gu).length, 1);
   assert.equal(updated.match(/<script id="asher-homepage-gtm-bootstrap">/gu).length, 1);
-  const fallback = renderedGoogleNoscript;
-  assert.ok(updated.includes(fallback));
-  assert.ok(updated.includes(`<body id="top">${fallback}<main`));
-  assert.equal(updated.slice(updated.indexOf("<body")).replace(fallback, ""), html.slice(html.indexOf("<body")));
+  assert.equal(updated.slice(updated.indexOf("<body")), html.slice(html.indexOf("<body")), "The adapter must not add an unconditional no-JavaScript request.");
   assert.ok(updated.includes("<title>Asher Healthcare</title>"));
-  assert.equal(updated.match(/<noscript>/gu).length, 1);
-  assert.equal(updated.match(/<iframe\b/gu).length, 1);
-  assert.ok(fallback.includes('src="https://www.googletagmanager.com/ns.html?id=GTM-TQC7XR38"'));
-  assert.ok(fallback.includes('height="0" width="0" style="display:none;visibility:hidden"'));
-  assert.ok(updated.indexOf('content="no-referrer"') < updated.indexOf(fallback), "The page policy must precede the untouched iframe.");
+  assert.doesNotMatch(updated, /<noscript|<iframe|ns\.html|googletagmanager\.com/u);
   assert.doesNotMatch(updated, /rel="preload"/u);
 });
 
@@ -47,14 +28,11 @@ test("reapplying the exact bootstrap is idempotent; stale or duplicate markup fa
   const misplaced = updated.replace(`<script id="asher-homepage-gtm-bootstrap">${bootstrap}</script>`, "")
     .replace("</head>", `<script id="asher-homepage-gtm-bootstrap">${bootstrap}</script></head>`);
   assert.throws(() => injectHomepageGtmBootstrap(misplaced, bootstrap), /misplaced/u);
-  const fallback = renderedGoogleNoscript;
-  assert.throws(() => injectHomepageGtmBootstrap(updated.replace("</body>", `${fallback}</body>`), bootstrap), /Duplicate/u);
-  assert.throws(() => injectHomepageGtmBootstrap(updated.replace(fallback, fallback.replace('width="0"', 'width="1"')), bootstrap), /fallback differs/u);
-  assert.throws(() => injectHomepageGtmBootstrap(updated.replace(fallback, fallback.replace("<iframe ", '<iframe referrerpolicy="no-referrer" ')), bootstrap), /fallback differs/u);
-  assert.throws(() => injectHomepageGtmBootstrap(updated.replace(fallback, fallback.replace("<noscript>", '<noscript id="asher-homepage-gtm-noscript">')), bootstrap), /fallback differs/u);
-  assert.throws(() => injectHomepageGtmBootstrap(updated.replace(fallback, "").replace("</body>", `${fallback}</body>`), bootstrap), /fallback differs or is misplaced/u);
-  assert.throws(() => injectHomepageGtmBootstrap(updated.replace(fallback, ""), bootstrap), /Incomplete/u);
-  assert.throws(() => injectHomepageGtmBootstrap(updated.replace(`<script id="asher-homepage-gtm-bootstrap">${bootstrap}</script>`, ""), bootstrap), /Incomplete/u);
+  for (const fallback of [
+    '<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-TQC7XR38"></iframe></noscript>',
+    '<iframe src="https://www.googletagmanager.com/ns.html?id=GTM-TQC7XR38"></iframe>',
+    '<noscript id="asher-homepage-gtm-noscript">Old fallback</noscript>',
+  ]) assert.throws(() => injectHomepageGtmBootstrap(updated.replace("</body>", `${fallback}</body>`), bootstrap));
 });
 
 test("invalid script and document input cannot produce an apparently valid export", () => {
@@ -110,7 +88,7 @@ test("the completed static export hook modifies only out/index.html", async (t) 
   await adapter.onBuildComplete(context);
   const updated = await readFile(homepage, "utf8");
   assert.ok(updated.includes('id="asher-homepage-gtm-bootstrap"'));
-  assert.ok(updated.includes(renderedGoogleNoscript));
+  assert.doesNotMatch(updated, /<noscript|<iframe|ns\.html/u);
   assert.ok(updated.includes("GTM-TQC7XR38"));
   for (const name of excluded) assert.equal(await readFile(join(output, name), "utf8"), `excluded:${name}`);
   for (const id of ["\\index.html", "index.html", "/index.html"]) {

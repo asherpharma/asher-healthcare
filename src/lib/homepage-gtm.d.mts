@@ -1,4 +1,8 @@
 export const GOOGLE_GTM_SOURCE: string;
+export const HOMEPAGE_CONSENT_KEY: string;
+export type HomepageConsentState = { eligible: boolean; choice: "accepted" | "declined" | null };
+export function getHomepageConsent(window: Window, navigator: Navigator): HomepageConsentState;
+export function setHomepageConsent(window: Window, document: Document, navigator: Navigator, choice: "accepted" | "declined"): void;
 export function legacyBookingDestination(location: Pick<Location, "pathname" | "search" | "hash">): string | null;
 export function homepageGtmAllowed(location: Pick<Location, "protocol" | "hostname" | "pathname" | "search" | "hash">, navigator: Navigator & { globalPrivacyControl?: boolean }): boolean;
 export function crossesHomepageBoundary(documentPath: string, nextPath: string): boolean;

@@ -380,3 +380,25 @@
 .patient-home .booking-page-heading + .appointment-section { padding-top: 36px; }
 .patient-home .booking-prompt-actions { display: grid; gap: 14px; margin: 20px 0; }
 .patient-home .booking-prompt-actions .button { white-space: normal; text-align: center; }
+
+/* Optional measurement controls exist only on the eligible general homepage. */
+.patient-home .homepage-cookie-choices { background: #173b34; color: #cfdbce; }
+.patient-home .homepage-cookie-choices-inner { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 20px; padding-block: 0 20px; font-size: .76rem; }
+.patient-home .homepage-cookie-choices button { display: inline-flex; align-items: center; min-height: 44px; padding: 7px 0; border: 0; color: #fffef6; background: transparent; font: inherit; text-decoration: underline; text-underline-offset: 4px; cursor: pointer; }
+.patient-home .homepage-cookie-choices button:hover { color: #e6e5bd; }
+.patient-home .homepage-consent-bar { position: fixed; z-index: 80; left: 20px; right: 20px; bottom: 18px; display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 14px 24px; width: min(1040px,calc(100% - 40px)); max-height: calc(100svh - 36px); overflow-y: auto; margin-inline: auto; padding: 18px 20px; border: 1px solid #b4c3b9; border-radius: 12px; color: #223933; background: #fffefb; box-shadow: 0 5px 25px rgba(23,61,59,.16); }
+.patient-home .homepage-consent-copy { min-width: 0; }
+.patient-home .homepage-consent-copy h2 { margin: 0 0 6px; color: #173d3b; font-family: var(--font-body), Arial, sans-serif; font-size: .9rem; font-weight: 750; line-height: 1.35; letter-spacing: normal; }
+.patient-home .homepage-consent-copy p { margin: 0; color: #465a50; font-size: .78rem; line-height: 1.6; }
+.patient-home .homepage-consent-copy a { color: #173d3b; text-decoration: underline; text-underline-offset: 3px; }
+.patient-home .homepage-consent-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.patient-home .homepage-consent-actions button { min-height: 46px; min-width: 130px; padding: 10px 13px; border: 1px solid #35665a; border-radius: 8px; color: #173d3b; background: #edf2eb; font: inherit; font-size: .77rem; font-weight: 700; line-height: 1.35; cursor: pointer; }
+.patient-home .homepage-consent-actions button:hover { background: #dfe9dc; }
+.patient-home .homepage-consent-close { justify-self: end; grid-column: 1 / -1; min-height: 44px; margin-top: -8px; padding: 8px 0; border: 0; color: #35665a; background: transparent; font: inherit; font-size: .76rem; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+@media (max-width: 800px) {
+  .patient-home .site-footer:has(+ .homepage-cookie-choices) { padding-bottom: 16px; }
+  .patient-home .homepage-cookie-choices-inner { padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px)); }
+  .patient-home .homepage-consent-bar { left: 12px; right: 12px; bottom: calc(80px + env(safe-area-inset-bottom, 0px)); grid-template-columns: 1fr; gap: 12px; width: calc(100% - 24px); max-height: calc(100svh - 104px - env(safe-area-inset-bottom, 0px)); padding: 15px 16px; }
+  .patient-home .homepage-consent-actions button { min-width: 0; }
+  .patient-home .homepage-consent-close { margin-top: -6px; }
+}
