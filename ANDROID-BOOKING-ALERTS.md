@@ -1,7 +1,7 @@
-# Android appointment alerts — email paused
+# Android appointment alerts
 
-Status: local implementation; preview runtime prepared. Not published or activated. Do not describe
-notifications as working until a controlled server-to-phone test succeeds.
+This document records the Android implementation and its original rollout
+checks. It is not an activation record for the separate email feature.
 
 ## Scope
 
@@ -73,10 +73,8 @@ the appointment desk as the authoritative source.
    | `BOOKING_ALERT_VAPID_PUBLIC_KEY` | Matching public Web Push key |
    | `BOOKING_ALERT_VAPID_PRIVATE_KEY` | Matching private key stored as Secret |
 
-   Never use `NEXT_PUBLIC_` for a signing secret. Email status is paused even if
-   an old email configuration variable exists. No extra sending service or new
-   paid plan is required by this architecture; existing hosting/database usage
-   charges can still apply.
+   Never use `NEXT_PUBLIC_` for a signing secret. The Android setup is independent
+   of email. Existing hosting/database usage charges can still apply.
 5. After approved production activation, the administrator opens
    `https://asherhealthcare.in/admin/settings#booking-alerts` in Android Chrome
    or the installed staff app, taps **Enable booking notifications**, then
@@ -88,14 +86,10 @@ the appointment desk as the authoritative source.
    login/appointment opening and inspect delivery status. Verify the exact test
    record and slot before any authorized cleanup.
 
-## Email retained for later
+## Separate email backup
 
-Resend domain `notify.asherhealthcare.in` and its three DNS records were visually
-verified on 2026-09-25. Existing website/mail records were preserved. The agent
-did not submit the prepared sending-key form; storage of an email API key is
-not confirmed. No email has been sent. Do not resume billing, identity
-verification or email activation during this Android-only task.
-`BOOKING-ALERTS-SETUP.md` describes the earlier, paused combined design.
+See `BOOKING-EMAIL-BACKUP.md` for the separately gated email route. Do not
+enable the earlier Firebase email/push prototype.
 
 ## Validation and release record
 

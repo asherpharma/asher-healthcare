@@ -14,6 +14,13 @@ const ENV = {
   BOOKING_ALERT_VAPID_PUBLIC_KEY: Buffer.from(await crypto.subtle.exportKey("raw", pair.publicKey)).toString("base64url"),
   BOOKING_ALERT_VAPID_PRIVATE_KEY: (await crypto.subtle.exportKey("jwk", pair.privateKey)).d,
 };
+const EMAIL_ENV = {
+  ...ENV,
+  BOOKING_ALERT_EMAIL_ENABLED: "true",
+  BOOKING_ALERT_EMAIL_ACTIVATED_AT: "2026-09-25T09:00:00.000Z",
+  BOOKING_ALERT_RESEND_API_KEY: "re_fake_booking_test_key",
+  BOOKING_ALERT_EMAIL_SWEEP_SECRET: Buffer.alloc(32, 7).toString("base64url"),
+};
 const BODY = {
   patientName: "Booking Test",
   phone: "0000000000",
@@ -26,7 +33,7 @@ const BODY = {
   formElapsedMs: 2000,
 };
 
-function setup({ env = ENV, origin = ORIGIN, body = BODY, commitError, deliverPush, waitUntil = "capture" } = {}) {
+function setup({ env = ENV, origin = ORIGIN, body = BODY, commitError, deliverPush, deliverEmail, waitUntil = "capture" } = {}) {
   const calls = [];
   const promises = [];
   const handler = createBookingHandler({
@@ -39,6 +46,7 @@ function setup({ env = ENV, origin = ORIGIN, body = BODY, commitError, deliverPu
       calls.push(["committed"]);
     },
     deliverPush(...args) { calls.push(["deliver", ...args]); return deliverPush ? deliverPush(...args) : Promise.resolve({ status: "sent" }); },
+    deliverEmail(...args) { calls.push(["email", ...args]); return deliverEmail ? deliverEmail(...args) : Promise.resolve({ status: "accepted" }); },
   });
   const context = {
     env,
@@ -58,6 +66,10 @@ function setup({ env = ENV, origin = ORIGIN, body = BODY, commitError, deliverPu
 
 function outboxWrites(context) {
   return (context.calls.find(([name]) => name === "commit")?.[1] || []).filter((write) => write.update?.name.includes("/appointmentPushOutbox/"));
+}
+
+function emailOutboxWrites(context) {
+  return (context.calls.find(([name]) => name === "commit")?.[1] || []).filter((write) => write.update?.name.includes("/appointmentEmailOutbox/"));
 }
 
 test("production website bookings save a PHI-free outbox atomically and schedule only after commit", async () => {
@@ -172,4 +184,92 @@ test("rejected appointment validation never creates outbox records", async () =>
   const context = setup({ body: { ...BODY, privacyAccepted: false } });
   assert.equal((await context.run()).status, 400);
   assert.equal(context.calls.some(([name]) => ["commit", "deliver", "waitUntil"].includes(name)), false);
+});
+
+test("one production commit saves booking, slot and email outbox with no patient details duplicated", async () => {
+  for (const origin of [ORIGIN, "https://www.asherhealthcare.in"]) {
+    const context = setup({ env: { ...EMAIL_ENV, BOOKING_ALERTS_ENABLED: "false" }, origin });
+    const response = await context.run();
+    assert.equal(response.status, 201);
+    const { appointmentId, slotId } = await response.json();
+    await Promise.all(context.promises);
+    const commits = context.calls.filter(([name]) => name === "commit");
+    assert.equal(commits.length, 1);
+    assert.ok(commits[0][1].some((write) => write.update.name.endsWith(`/appointments/${appointmentId}`)));
+    assert.ok(commits[0][1].some((write) => write.update.name.endsWith(`/appointmentSlots/${slotId}`)));
+    const [outbox] = emailOutboxWrites(context);
+    assert.deepEqual(outbox.currentDocument, { exists: false });
+    assert.deepEqual(outbox.update.fields, {
+      appointmentId: { stringValue: appointmentId },
+      requestOrigin: { stringValue: origin },
+      createdAt: { timestampValue: NOW.toISOString() },
+      status: { stringValue: "pending" },
+      nextAttemptAt: { integerValue: String(NOW.getTime()) },
+    });
+    assert.equal(outboxWrites(context).length, 0);
+    const events = context.calls.map(([name]) => name);
+    assert.ok(events.indexOf("committed") < events.indexOf("email"));
+    assert.equal(context.calls.find(([name]) => name === "email")[2], appointmentId);
+  }
+});
+
+test("email backup never runs for preview, inactive or missing configuration, QA, or staff-created bookings", async () => {
+  for (const options of [
+    { origin: "https://feature-example.asher-healthcare.pages.dev", body: { ...BODY, requestOrigin: ORIGIN } },
+    { env: { ...EMAIL_ENV, FIREBASE_PROJECT_ID: "asher-healthcare-qa" } },
+    { env: { ...EMAIL_ENV, BOOKING_ALERT_EMAIL_ENABLED: "false" } },
+    { env: { ...EMAIL_ENV, BOOKING_ALERT_EMAIL_ACTIVATED_AT: "2026-09-25T10:01:00.000Z" } },
+    { env: { ...EMAIL_ENV, BOOKING_ALERT_RESEND_API_KEY: undefined } },
+    { env: { ...EMAIL_ENV, BOOKING_ALERT_EMAIL_SWEEP_SECRET: undefined } },
+    ...["reception", "phone", "walk-in"].map((source) => ({ body: { ...BODY, source } })),
+  ]) {
+    const context = setup({ env: EMAIL_ENV, ...options });
+    assert.equal((await context.run()).status, 201);
+    await Promise.all(context.promises);
+    assert.equal(emailOutboxWrites(context).length, 0);
+    assert.equal(context.calls.some(([name]) => name === "email"), false);
+  }
+});
+
+test("booking rejection or slot conflict cannot start email or push", async () => {
+  for (const options of [{ body: { ...BODY, privacyAccepted: false } }, { commitError: new HttpError(409, "Already booked") }]) {
+    const context = setup({ env: EMAIL_ENV, ...options });
+    assert.equal((await context.run()).status, options.commitError ? 409 : 400);
+    assert.equal(context.promises.length, 0);
+    assert.equal(context.calls.some(([name]) => name === "email" || name === "deliver"), false);
+  }
+});
+
+test("background email and Android failures cannot affect a saved booking or the other channel", async () => {
+  let releaseEmail;
+  const delayedEmail = new Promise((resolve) => { releaseEmail = resolve; });
+  const context = setup({
+    env: EMAIL_ENV,
+    deliverPush() { throw new Error("Push provider unavailable"); },
+    deliverEmail() { return delayedEmail; },
+  });
+  try {
+    assert.equal((await context.run()).status, 201);
+    assert.equal(emailOutboxWrites(context).length, 1);
+    assert.equal(outboxWrites(context).length, 1);
+    assert.equal(context.promises.length, 2);
+    assert.equal(context.calls.some(([name]) => name === "email"), true);
+  } finally {
+    releaseEmail();
+    await Promise.all(context.promises);
+  }
+  const emailFailed = setup({ env: EMAIL_ENV, deliverEmail: async () => { throw new Error("Email provider unavailable"); } });
+  assert.equal((await emailFailed.run()).status, 201);
+  await assert.doesNotReject(Promise.all(emailFailed.promises));
+  assert.equal(emailFailed.calls.some(([name]) => name === "deliver"), true);
+});
+
+test("when booking background dispatch is unavailable, the saved email is left for automatic recovery", async () => {
+  for (const waitUntil of ["missing", "throw"]) {
+    const context = setup({ env: EMAIL_ENV, waitUntil });
+    assert.equal((await context.run()).status, 201);
+    await Promise.all(context.promises);
+    assert.equal(emailOutboxWrites(context).length, 1);
+    assert.equal(context.calls.some(([name]) => name === "email"), false);
+  }
 });

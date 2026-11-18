@@ -27,6 +27,14 @@ const ENV = {
   BOOKING_ALERT_VAPID_PRIVATE_KEY: privateKey,
   BOOKING_ALERTS_ACTIVATED_AT: "2026-09-24T09:00:00Z",
 };
+const EMAIL_ENV = {
+  ...ENV,
+  BOOKING_ALERTS_ENABLED: "false",
+  BOOKING_ALERT_EMAIL_ENABLED: "true",
+  BOOKING_ALERT_EMAIL_ACTIVATED_AT: "2026-09-24T09:00:00Z",
+  BOOKING_ALERT_EMAIL_SWEEP_SECRET: Buffer.alloc(32, 7).toString("base64url"),
+  BOOKING_ALERT_RESEND_API_KEY: "re_syntheticBookingEmailKey0000000000000",
+};
 const SUBSCRIPTION = {
   endpoint: "https://fcm.googleapis.com/fcm/send/valid-device-token-0123456789:subscription",
   expirationTime: null,
@@ -49,12 +57,13 @@ function existingDevice(overrides = {}) {
   };
 }
 
-function setup({ document = null, actor = ADMIN, authError, commitError, env = ENV, listRows = [], listError, deliveryError, deliveryResult = { status: "sent", sent: 1, pending: 0, skipped: 0, failed: 0 } } = {}) {
+function setup({ document = null, actor = ADMIN, authError, commitError, env = ENV, listRows = [], listError, emailStatuses = [], emailError, deliveryError, deliveryResult = { status: "sent", sent: 1, pending: 0, skipped: 0, failed: 0 } } = {}) {
   const calls = [];
   const service = createBookingAlertService({
     async getDocument(_env, path) { calls.push(["get", path]); return document; },
     async commitWrites(_env, writes) { calls.push(["commit", writes]); if (commitError) throw commitError; },
     async listRecentOutbox() { calls.push(["list"]); if (listError) throw listError; return listRows; },
+    async listRecentEmailOutbox() { calls.push(["list-email"]); if (emailError) throw emailError; return emailStatuses; },
     async deliverPush(_env, appointmentId) { calls.push(["deliver", appointmentId]); if (deliveryError) throw deliveryError; return deliveryResult; },
     now: () => NOW,
   });
@@ -100,11 +109,14 @@ test("configuration is production-only and returns only explicitly configured ca
 });
 
 test("preview GET stays disabled even when production environment flags were copied", async () => {
-  const context = setup({ document: existingDevice() });
+  const context = setup({ document: existingDevice(), env: { ...EMAIL_ENV, BOOKING_ALERTS_ENABLED: "true" } });
   const response = await context.get({ origin: "https://preview.asher-healthcare.pages.dev", urlOrigin: "https://preview.asher-healthcare.pages.dev", query: `?deviceId=${DEVICE_ID}` });
   assert.equal(response.status, 200);
   const result = await response.json();
   assert.equal(result.enabled, false);
+  assert.equal(result.emailConfigured, false);
+  assert.equal(result.emailPaused, true);
+  assert.equal(result.emailDeliverySummary.available, false);
   assert.equal(result.deviceActive, false);
   assert.equal(result.vapidPublicKey, "");
   assert.deepEqual(context.calls, [["auth"]]);
@@ -354,11 +366,75 @@ test("push readiness requires exact enabled flags, valid keys and an explicit pa
 });
 
 test("email remains paused even if legacy email configuration is present", async () => {
-  const result = await (await setup().get()).json();
+  const context = setup();
+  const result = await (await context.get()).json();
   assert.equal(result.emailPaused, true);
   assert.equal(result.emailConfigured, false);
   assert.equal(result.pushDeliveryMethod, "cloudflare");
   assert.equal(JSON.stringify(result).includes(privateKey), false);
+  assert.equal(context.calls.some(([name]) => name === "list-email"), false);
+});
+
+test("email configuration and projected status totals work when Android alerts are disabled", async () => {
+  const context = setup({ env: EMAIL_ENV, emailStatuses: [
+    "pending", "processing", "needs_attention", "skipped", "accepted",
+    { status: "accepted", id: "PRIVATE-REFERENCE", patientName: "PRIVATE-NAME" },
+    ...Array.from({ length: 20 }, () => "accepted"),
+  ] });
+  const response = await context.get({ origin: null });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("Cache-Control"), "no-store");
+  const result = await response.json();
+  assert.equal(result.enabled, false);
+  assert.equal(result.pushConfigured, false);
+  assert.equal(result.emailConfigured, true);
+  assert.equal(result.emailPaused, false);
+  assert.equal(result.emailRecipient, "asherhealthcare100@gmail.com");
+  assert.deepEqual(result.emailDeliverySummary, {
+    available: true, limit: 20, checked: 20, pending: 2, accepted: 15, failed: 2, skipped: 1,
+  });
+  assert.deepEqual(context.calls, [["auth"], ["list-email"]]);
+  const json = JSON.stringify(result);
+  assert.doesNotMatch(json, /PRIVATE|patientName|appointmentId/);
+  assert.equal(json.includes(EMAIL_ENV.BOOKING_ALERT_RESEND_API_KEY), false);
+  assert.equal(json.includes(EMAIL_ENV.BOOKING_ALERT_EMAIL_SWEEP_SECRET), false);
+});
+
+test("email checks require canonical production, current email activation and admin access", async () => {
+  for (const env of [
+    { ...EMAIL_ENV, FIREBASE_PROJECT_ID: "asher-healthcare-qa" },
+    { ...EMAIL_ENV, BOOKING_ALERT_EMAIL_ENABLED: "false" },
+    { ...EMAIL_ENV, BOOKING_ALERT_EMAIL_ACTIVATED_AT: "2027-01-01T00:00:00Z" },
+    { ...EMAIL_ENV, BOOKING_ALERT_RESEND_API_KEY: undefined },
+    { ...EMAIL_ENV, BOOKING_ALERT_EMAIL_SWEEP_SECRET: undefined },
+  ]) {
+    const context = setup({ env });
+    const result = await (await context.get()).json();
+    assert.equal(result.emailConfigured, false);
+    assert.deepEqual(context.calls, [["auth"]]);
+  }
+  const www = "https://www.asherhealthcare.in";
+  const aliasContext = setup({ env: EMAIL_ENV });
+  assert.equal((await (await aliasContext.get({ origin: www, urlOrigin: www })).json()).emailConfigured, false);
+  assert.deepEqual(aliasContext.calls, [["auth"]]);
+  assert.equal(bookingAlertConfiguration(request({ origin: www }), EMAIL_ENV, NOW.getTime()).emailConfigured, false);
+  const nonAdmin = setup({ env: EMAIL_ENV, actor: { ...ADMIN, role: "reception" } });
+  assert.equal((await nonAdmin.get()).status, 403);
+  assert.deepEqual(nonAdmin.calls, [["auth"]]);
+});
+
+test("email history failure does not claim acceptance or hide working Android setup", async () => {
+  const context = setup({
+    env: { ...EMAIL_ENV, BOOKING_ALERTS_ENABLED: "true" },
+    document: existingDevice(),
+    emailError: new Error("Private storage failure"),
+  });
+  const result = await (await context.get({ query: `?deviceId=${DEVICE_ID}` })).json();
+  assert.equal(result.emailConfigured, true);
+  assert.equal(result.deviceActive, true);
+  assert.equal(result.deliverySummary.available, true);
+  assert.deepEqual(result.emailDeliverySummary, { available: false, limit: 20, checked: 0, pending: 0, accepted: 0, failed: 0, skipped: 0 });
+  assert.doesNotMatch(JSON.stringify(result), /Private storage failure/);
 });
 
 test("GET exposes only sanitized incomplete attempts from the newest 20 outbox records", async () => {

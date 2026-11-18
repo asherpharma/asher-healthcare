@@ -431,7 +431,7 @@ export default function AppointmentCTA() {
             </label>
           </fieldset>
           <p className="form-note">
-            We use these details to arrange your visit. <a href="/privacy">Read our privacy notice.</a>
+            We use these details to arrange your visit and may notify clinic staff by email. <a href="/privacy">Read our privacy notice.</a>
           </p>
           <button
             className="button button-primary booking-submit"

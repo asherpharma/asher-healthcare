@@ -7,7 +7,17 @@ import { useCallback, useEffect, useState } from "react";
 
 type AlertSetup = {
   enabled: boolean;
-  emailPaused?: boolean;
+  emailConfigured?: boolean;
+  emailRecipient?: string;
+  emailDeliverySummary?: {
+    available: boolean;
+    limit: number;
+    checked: number;
+    pending: number;
+    accepted: number;
+    failed: number;
+    skipped: number;
+  };
   pushConfigured: boolean;
   vapidPublicKey: string;
   deviceActive: boolean;
@@ -136,7 +146,7 @@ function AdminBookingAlerts() {
       const subscription = await registration?.pushManager.getSubscription();
       if (subscription) await subscription.unsubscribe();
       rememberDevice(user.uid, ""); setDeviceId(""); setEnabled(false);
-      setNotice("Booking notifications are off on this device. Email setup remains paused.");
+      setNotice("Booking notifications are off on this device. Clinic email settings are unchanged.");
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "Notifications could not be disabled. Please retry.");
     } finally { setBusy(false); }
@@ -177,13 +187,27 @@ function AdminBookingAlerts() {
       <div className="flex items-start gap-3"><BellRing className="mt-1 shrink-0 text-[#A8864A]" size={24} /><div>
         <p className="text-xs font-bold uppercase tracking-widest text-[#775A2A]">Administrator notifications</p>
         <h2 id="booking-alerts-title" className="mt-2 text-2xl font-bold text-[#233A59]">Know when a patient books</h2>
-        <p className="mt-2 text-sm leading-6 text-slate-600">Private Android alerts for new website appointment requests. Requests still need clinic confirmation. Email setup is paused.</p>
+        <p className="mt-2 text-sm leading-6 text-slate-600">Clinic email and Android alerts are separate ways to hear about new website appointment requests. Requests still need clinic confirmation.</p>
       </div></div>
       <div className="mt-5 grid gap-4 sm:grid-cols-2">
-        <div className="min-w-0 rounded-2xl bg-slate-50 p-4"><Mail size={20} className="text-[#233A59]" /><h3 className="mt-3 font-bold text-[#233A59]">Email alerts · Paused</h3><p className="mt-2 text-sm text-slate-600">We can set up email later. Android alerts do not require the email sending service.</p></div>
+        <div className="min-w-0 rounded-2xl bg-slate-50 p-4">
+          <Mail size={20} className="text-[#233A59]" />
+          <h3 className="mt-3 font-bold text-[#233A59]">Email alerts{setup ? (setup.emailConfigured ? " · Configured" : " · Setup needed") : ""}</h3>
+          {setup?.emailRecipient && <p className="mt-2 break-all text-sm text-slate-600">Clinic inbox: {setup.emailRecipient}</p>}
+          {!setup ? <p className="mt-2 text-sm text-slate-600">{busy ? "Checking email settings…" : "Email settings are unavailable. Refresh status to try again."}</p>
+            : !setup.emailConfigured ? <p className="mt-2 text-sm text-slate-600">Emails are not active here. Android alerts do not depend on email. Preview bookings never send alerts.</p>
+              : <>
+                <p className="mt-2 text-sm text-slate-600">Booking emails include the patient’s name, booking phone number, doctor, and requested date and time. They do not include the visit reason. Temporary delivery problems are retried automatically.</p>
+                {!setup.emailDeliverySummary?.available ? <p className="mt-3 text-sm text-amber-900">Email delivery checks are temporarily unavailable. Check the appointment desk and refresh status.</p>
+                  : <>
+                    <p className="mt-3 text-sm text-slate-600">Latest {setup.emailDeliverySummary.checked} records (up to {setup.emailDeliverySummary.limit}): {setup.emailDeliverySummary.accepted} accepted by the email service, {setup.emailDeliverySummary.pending} pending, {setup.emailDeliverySummary.failed} needing attention{setup.emailDeliverySummary.skipped > 0 ? `, ${setup.emailDeliverySummary.skipped} skipped` : ""}.</p>
+                    <p className="mt-2 text-xs leading-5 text-slate-500">Accepted by the email service does not confirm inbox arrival.</p>
+                  </>}
+              </>}
+        </div>
         <div className="min-w-0 rounded-2xl bg-slate-50 p-4"><BellRing size={20} className="text-[#233A59]" /><h3 className="mt-3 font-bold text-[#233A59]">This phone or browser</h3><p className="mt-2 text-sm text-slate-600">{enabled ? "Registered for booking alerts" : permission === "denied" ? "Blocked in browser settings" : "Not enabled on this device"}</p><p className="mt-2 text-xs leading-5 text-slate-500">On Android, open the staff app or Chrome and tap Enable below. Allow notifications when Chrome asks.</p></div>
       </div>
-      {setup && !setup.enabled && <p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">Alerts are not live in this environment. Server setup and a delivery test must be completed before activation. Preview bookings never send alerts.</p>}
+      {setup && !setup.enabled && <p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">Android alerts are not live in this environment. Server setup and a delivery test must be completed before activation. Preview bookings never send alerts.</p>}
       {setup?.enabled && !setup.pushConfigured && <p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">The push delivery service is not configured yet.</p>}
       {!busy && !supported && <p className="mt-4 text-sm text-slate-600">Push notifications are unavailable in this browser. Use the latest Chrome on your Android phone.</p>}
       <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
@@ -195,8 +219,8 @@ function AdminBookingAlerts() {
       {error && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm font-semibold text-red-800">{error}</p>}
       {notice && <p role="status" className="mt-4 rounded-xl bg-emerald-50 p-3 text-sm font-semibold text-emerald-800">{notice}</p>}
       {setup?.enabled && <div className="mt-6 rounded-2xl border border-slate-200 p-4">
-        <h3 className="font-bold text-[#233A59]">Recent delivery checks</h3>
-        <p className="mt-2 text-sm leading-6 text-slate-600">The server makes a short background delivery attempt. There are no automatic retries in this version. Saved appointments remain available even if an alert fails; you can retry the notification here.</p>
+        <h3 className="font-bold text-[#233A59]">Recent Android delivery checks</h3>
+        <p className="mt-2 text-sm leading-6 text-slate-600">The server makes a short background attempt for Android alerts. Android delivery is not retried automatically. Saved appointments remain available even if an alert fails; you can retry the phone notification here.</p>
         {!setup.deliverySummary?.available ? <p className="mt-3 text-sm text-amber-900">Delivery checks are temporarily unavailable. Check the appointment desk and refresh this page.</p> : <>
           <p className="mt-3 text-sm text-slate-600">Latest {setup.deliverySummary.checked} records (up to {setup.deliverySummary.limit}): {setup.deliverySummary.pending} pending, {setup.deliverySummary.failed} needing attention. These are not all-time totals.</p>
           {setup.deliverySummary.items.length === 0 ? <p className="mt-3 text-sm text-slate-600">No unfinished alerts in this recent check. This does not confirm receipt on every phone.</p> : <ul className="mt-3 space-y-3">

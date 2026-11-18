@@ -7,9 +7,10 @@ import {
   verifyDocumentWrite,
 } from "../razorpay/firebase.js";
 import { HttpError } from "../razorpay/http.js";
+import { BOOKING_ALERT_EMAIL_RECIPIENT, BOOKING_EMAIL_OUTBOX, bookingEmailReadiness } from "./email-delivery.js";
 
 export const BOOKING_ALERT_PRODUCTION_ORIGIN = "https://asherhealthcare.in";
-export const BOOKING_ALERT_EMAIL_RECIPIENT = "asherhealthcare100@gmail.com";
+export { BOOKING_ALERT_EMAIL_RECIPIENT };
 const PROJECT_ID = "asher-healthcare-clinic";
 const DELIVERY_WINDOW = 20;
 const DEVICE_ID_PATTERN = /^[a-f0-9]{64}$/u;
@@ -26,6 +27,7 @@ const DEFAULT_DEPENDENCIES = Object.freeze({
   updateDocumentWrite,
   verifyDocumentWrite,
   listRecentOutbox,
+  listRecentEmailOutbox,
   deliverPush: null,
   now: () => new Date(),
 });
@@ -86,18 +88,19 @@ export function prepareBookingPushOutbox(env, request, { appointmentId, source, 
 export function bookingAlertConfiguration(request, env, now = Date.now()) {
   const origin = new URL(request.url).origin;
   const suppliedOrigin = request.headers.get("Origin");
-  const enabled = env.BOOKING_ALERTS_ENABLED === "true"
-    && env.FIREBASE_PROJECT_ID === PROJECT_ID
+  const liveClinic = env.FIREBASE_PROJECT_ID === PROJECT_ID
     && origin === BOOKING_ALERT_PRODUCTION_ORIGIN
     && (!suppliedOrigin || suppliedOrigin === BOOKING_ALERT_PRODUCTION_ORIGIN);
+  const enabled = liveClinic && env.BOOKING_ALERTS_ENABLED === "true";
+  const emailConfigured = liveClinic && bookingEmailReadiness(env, now);
   const publicKey = typeof env.BOOKING_ALERT_VAPID_PUBLIC_KEY === "string"
     ? env.BOOKING_ALERT_VAPID_PUBLIC_KEY : "";
   const publicBytes = base64UrlBytes(publicKey, 65);
   const validPublicKey = publicBytes?.[0] === 4;
   return {
     emailRecipient: BOOKING_ALERT_EMAIL_RECIPIENT,
-    emailConfigured: false,
-    emailPaused: true,
+    emailConfigured,
+    emailPaused: !emailConfigured,
     pushDeliveryMethod: "cloudflare",
     pushConfigured: enabled && bookingPushReadiness(env, now) && validPublicKey === true,
     vapidPublicKey: enabled && validPublicKey ? publicKey : "",
@@ -126,6 +129,46 @@ async function listRecentOutbox(env) {
     status: document.fields?.status?.stringValue,
     createdAt: document.fields?.createdAt?.timestampValue || null,
   }));
+}
+
+async function listRecentEmailOutbox(env) {
+  const token = await serviceAccountAccessToken(env);
+  const response = await fetch(`https://firestore.googleapis.com/v1/projects/${encodeURIComponent(env.FIREBASE_PROJECT_ID)}/databases/(default)/documents:runQuery`, {
+    method: "POST", redirect: "manual",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ structuredQuery: {
+      from: [{ collectionId: BOOKING_EMAIL_OUTBOX }],
+      select: { fields: [{ fieldPath: "status" }, { fieldPath: "createdAt" }] },
+      orderBy: [{ field: { fieldPath: "createdAt" }, direction: "DESCENDING" }],
+      limit: DELIVERY_WINDOW,
+    } }),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!response.ok) throw new HttpError(503, "Recent email attempts could not be checked.");
+  const rows = await response.json();
+  if (!Array.isArray(rows)) throw new HttpError(503, "Recent email attempts could not be checked.");
+  return rows.filter((row) => row.document).slice(0, DELIVERY_WINDOW)
+    .map(({ document }) => document.fields?.status?.stringValue);
+}
+
+function emptyEmailDeliverySummary() {
+  return { available: false, limit: DELIVERY_WINDOW, checked: 0, pending: 0, accepted: 0, failed: 0, skipped: 0 };
+}
+
+async function emailDeliverySummary(dependencies, env) {
+  try {
+    const statuses = (await dependencies.listRecentEmailOutbox(env)).slice(0, DELIVERY_WINDOW);
+    const summary = { ...emptyEmailDeliverySummary(), available: true, checked: statuses.length };
+    for (const status of statuses) {
+      if (status === "pending" || status === "processing") summary.pending += 1;
+      else if (status === "accepted") summary.accepted += 1;
+      else if (status === "skipped") summary.skipped += 1;
+      else summary.failed += 1;
+    }
+    return summary;
+  } catch {
+    return emptyEmailDeliverySummary();
+  }
 }
 
 function emptyDeliverySummary() {
@@ -222,17 +265,19 @@ export function createBookingAlertService(overrides = {}) {
       const ids = new URL(request.url).searchParams.getAll("deviceId");
       if (ids.length > 1) throw new HttpError(400, "Provide only one notification device reference.");
       const deviceId = ids.length ? validateBookingAlertDeviceId(ids[0]) : null;
-      const [summary, document] = await Promise.all([
+      const [summary, document, emailSummary] = await Promise.all([
         config.enabled && config.pushConfigured
           ? deliverySummary(dependencies, env) : emptyDeliverySummary(),
         deviceId && config.enabled && config.pushConfigured
           ? dependencies.getDocument(env, `adminPushDevices/${deviceId}`) : null,
+        config.emailConfigured ? emailDeliverySummary(dependencies, env) : emptyEmailDeliverySummary(),
       ]);
       return {
         ...config,
         ...(deviceId ? { deviceId } : {}),
         deviceActive: isActiveOwnedDevice(document, administrator, dependencies.now()),
         deliverySummary: summary,
+        emailDeliverySummary: emailSummary,
       };
     },
     async post(request, env, administrator, body) {

@@ -108,20 +108,32 @@ test("notification panel is admin-only, permission is opt-in, status is server-v
   assert.match(panel, /signal: AbortSignal\.timeout\(timeoutMs\)/);
   assert.match(panel, /This is not an end-to-end delivery test/);
   assert.match(panel, /Preview bookings never send alerts/);
-  assert.match(panel, /Email alerts · Paused/);
+  assert.match(panel, /Email alerts\{setup \? \(setup\.emailConfigured \? " · Configured" : " · Setup needed"\)/);
 });
 
-test("Android-only panel exposes honest manual retry status without an email dependency", () => {
+test("Android panel exposes honest manual retry status without an email dependency", () => {
   const panel = readFileSync(new URL("../src/components/admin/BookingAlertsPanel.tsx", import.meta.url), "utf8");
-  assert.match(panel, /Email setup is paused/);
-  assert.match(panel, /Android alerts do not require the email sending service/);
+  assert.match(panel, /Android alerts do not depend on email/);
   assert.match(panel, /action: "retry", appointmentId/);
   assert.match(panel, /result\.retried !== true/);
-  assert.match(panel, /There are no automatic retries in this version/);
+  assert.match(panel, /Android delivery is not retried automatically/);
   assert.match(panel, /does not prove your phone displayed it/);
   assert.match(panel, /Delivery checks are temporarily unavailable/);
   assert.match(panel, /These are not all-time totals/);
-  assert.doesNotMatch(panel, /setup\??\.emailConfigured|setup\??\.emailRecipient/);
+});
+
+test("email status uses server readiness and tells the admin what acceptance means", () => {
+  const panel = readFileSync(new URL("../src/components/admin/BookingAlertsPanel.tsx", import.meta.url), "utf8");
+  assert.match(panel, /Clinic inbox: \{setup\.emailRecipient\}/);
+  assert.match(panel, /Emails are not active here/);
+  assert.match(panel, /Booking emails include the patient’s name, booking phone number, doctor, and requested date and time/);
+  assert.match(panel, /They do not include the visit reason/);
+  assert.match(panel, /Temporary delivery problems are retried automatically/);
+  assert.match(panel, /does not confirm inbox arrival/);
+  assert.match(panel, /Email delivery checks are temporarily unavailable/);
+  assert.match(panel, /setup\.emailDeliverySummary\.pending/);
+  assert.match(panel, /setup\.emailDeliverySummary\.failed/);
+  assert.doesNotMatch(panel, /BOOKING_ALERT_RESEND_API_KEY|BOOKING_ALERT_EMAIL_SWEEP_SECRET|emailDeliverySummary\.items/);
 });
 
 test("paused alerts retain the current subscription for opt-out when local storage is missing", () => {

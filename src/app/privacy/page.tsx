@@ -13,7 +13,7 @@ export default function PrivacyPage() {
       eyebrow="Privacy & trust"
       title="Privacy policy"
       introduction="We treat health information with care and collect only what is needed to provide clinic services, manage appointments and maintain authorised records."
-      updated="27 October 2026"
+      updated="18 November 2026"
     >
       <section>
         <h2>Information we collect</h2>
@@ -34,6 +34,7 @@ export default function PrivacyPage() {
       <section>
         <h2>Messages and reminders</h2>
         <p>Appointment, follow-up, vaccination or report-availability reminders are sent only through approved contact channels and use neutral wording. We keep care-related communications separate from optional promotional messages. You may ask the clinic to change or stop a communication channel, although essential service messages may still be needed to deliver requested care.</p>
+        <p>When clinic booking email alerts are enabled, we use Resend to deliver an internal alert to the clinic’s authorised inbox. To help staff review a new website request, the email includes the patient’s name, booking mobile number, doctor, and appointment date and time. It does not include the reason for the visit, clinical notes or reports. This is for appointment administration only, not advertising. Mobile push alerts do not display these details.</p>
       </section>
       <section>
         <h2>Service providers</h2>

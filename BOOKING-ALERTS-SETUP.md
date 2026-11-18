@@ -1,9 +1,9 @@
 # Appointment email and Android admin notifications
 
 > HISTORICAL / PAUSED DESIGN (2026-09-25): The user deferred email setup.
-> Follow `ANDROID-BOOKING-ALERTS.md` for the current Cloudflare Android-only
-> path. Do not deploy the Firebase function or resume Resend/billing setup.
-> The instructions below are retained for later review, not active setup steps.
+> The original Firebase-based approach below is retired. Keep that function
+> disabled. Follow `ANDROID-BOOKING-ALERTS.md` for Android push and
+> `BOOKING-EMAIL-BACKUP.md` for the separate Cloudflare email release.
 
 Status: implementation in an isolated working branch; NOT published or activated.
 

@@ -21,12 +21,18 @@ import {
 import { validDocumentId } from "../../../server/razorpay/payments.js";
 import { prepareBookingPushOutbox } from "../../../server/notifications/booking-alerts.js";
 import { createPushDeliveryService } from "../../../server/notifications/push-delivery.js";
+import {
+  createBookingEmailDeliveryService,
+  prepareBookingEmailOutbox,
+} from "../../../server/notifications/email-delivery.js";
 
 const pushDelivery = createPushDeliveryService();
+const emailDelivery = createBookingEmailDeliveryService();
 const BOOKING_DEPENDENCIES = {
   commitWrites, getDocument, requireActiveStaff,
   now: () => new Date(),
   deliverPush: (env, id) => pushDelivery.deliver(env, id),
+  deliverEmail: (env, id) => emailDelivery.deliver(env, id),
 };
 
 const DOCTORS = ["pediatrics", "obg"];
@@ -120,6 +126,18 @@ function clinicClock(now = new Date()) {
 export function createBookingHandler(overrides = {}) {
   const dependencies = { ...BOOKING_DEPENDENCIES, ...overrides };
   return (context) => handleBooking(context, dependencies);
+}
+
+function scheduleAlert(context, deliver, appointmentId) {
+  if (typeof context.waitUntil !== "function") return;
+  let scheduled = false;
+  const attempt = Promise.resolve()
+    .then(() => scheduled ? deliver(context.env, appointmentId) : undefined)
+    .catch(() => undefined);
+  try {
+    context.waitUntil(attempt);
+    scheduled = true;
+  } catch { /* The saved outbox remains available for recovery. */ }
 }
 
 async function handleBooking(context, dependencies) {
@@ -238,10 +256,13 @@ async function handleBooking(context, dependencies) {
           createDocumentWrite(context.env, guard.path, guard.data)
         ))
       : [];
-    const pushOutboxWrite = prepareBookingPushOutbox(context.env, context.request, { appointmentId, source, now });
+    const alert = { appointmentId, source, now };
+    const pushOutboxWrite = prepareBookingPushOutbox(context.env, context.request, alert);
+    const emailOutboxWrite = prepareBookingEmailOutbox(context.env, context.request, alert);
     await dependencies.commitWrites(context.env, [
       ...guardWrites,
       ...(pushOutboxWrite ? [pushOutboxWrite] : []),
+      ...(emailOutboxWrite ? [emailOutboxWrite] : []),
       ...(patientId && patientDocument
         ? [verifyDocumentWrite(
             context.env,
@@ -280,17 +301,10 @@ async function handleBooking(context, dependencies) {
       }),
     ]);
 
-    // The outbox was saved atomically. Delivery never blocks the booking response.
-    if (pushOutboxWrite && typeof context.waitUntil === "function") {
-      let scheduled = false;
-      const attempt = Promise.resolve()
-        .then(() => scheduled ? dependencies.deliverPush(context.env, appointmentId) : undefined)
-        .catch(() => undefined);
-      try {
-        context.waitUntil(attempt);
-        scheduled = true;
-      } catch { /* An administrator can retry the pending outbox later. */ }
-    }
+    // Both channels are independent after the atomic save. No provider call is
+    // awaited by the booking response; the email sweep also picks up missed jobs.
+    if (pushOutboxWrite) scheduleAlert(context, dependencies.deliverPush, appointmentId);
+    if (emailOutboxWrite) scheduleAlert(context, dependencies.deliverEmail, appointmentId);
 
     return json({ appointmentId, slotId, status }, 201);
   } catch (error) {

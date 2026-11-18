@@ -67,6 +67,7 @@ test("notification subscriptions and delivery ledgers are server-only even for a
     "appointmentAlerts/appointment-test/devices/device-test",
     "appointmentPushOutbox/appointment-test",
     "appointmentPushOutbox/appointment-test/devices/device-test",
+    "appointmentEmailOutbox/appointment-test",
   ];
   await seedDocuments(paths.map((path) => [path, { active: true }]));
   for (const database of [testEnv.unauthenticatedContext().firestore(), staffDb("admin"), staffDb("reception"), staffDb("pediatrics")]) {

@@ -1,0 +1,8 @@
+{
+  "name": "asher-booking-email-scheduler",
+  "main": "index.mjs",
+  "compatibility_date": "2026-11-18",
+  "workers_dev": false,
+  "preview_urls": false
+  // A new Worker has no schedule. Add the approved cron only at activation.
+}
