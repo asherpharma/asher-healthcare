@@ -7,7 +7,9 @@ import {
   verifyDocumentWrite,
 } from "../razorpay/firebase.js";
 import { HttpError } from "../razorpay/http.js";
-import { BOOKING_ALERT_EMAIL_RECIPIENT, BOOKING_EMAIL_OUTBOX, bookingEmailReadiness } from "./email-delivery.js";
+import {
+  BOOKING_ALERT_EMAIL_RECIPIENT, BOOKING_EMAIL_OUTBOX, bookingEmailReadiness, bookingEmailTestReady, sendBookingEmailTest,
+} from "./email-delivery.js";
 
 export const BOOKING_ALERT_PRODUCTION_ORIGIN = "https://asherhealthcare.in";
 export { BOOKING_ALERT_EMAIL_RECIPIENT };
@@ -28,6 +30,7 @@ const DEFAULT_DEPENDENCIES = Object.freeze({
   verifyDocumentWrite,
   listRecentOutbox,
   listRecentEmailOutbox,
+  sendBookingEmailTest,
   deliverPush: null,
   now: () => new Date(),
 });
@@ -100,6 +103,7 @@ export function bookingAlertConfiguration(request, env, now = Date.now()) {
   return {
     emailRecipient: BOOKING_ALERT_EMAIL_RECIPIENT,
     emailConfigured,
+    emailTestAvailable: liveClinic && bookingEmailTestReady(env, now),
     emailPaused: !emailConfigured,
     pushDeliveryMethod: "cloudflare",
     pushConfigured: enabled && bookingPushReadiness(env, now) && validPublicKey === true,
@@ -289,6 +293,14 @@ export function createBookingAlertService(overrides = {}) {
         throw new HttpError(403, "Appointment notifications can only be managed on the live clinic site.");
       }
       assertOnlyKeys(body, ["action", "subscription", "deviceId", "appointmentId"]);
+      if (body.action === "test-email") {
+        assertOnlyKeys(body, ["action"]);
+        if (!config.emailTestAvailable) throw new HttpError(403, "The booking email test window is not open.");
+        if (!await dependencies.sendBookingEmailTest(env)) {
+          throw new HttpError(503, "Email service acceptance was not confirmed. Check the clinic inbox and sender setup.");
+        }
+        return { testEmailAccepted: true };
+      }
       if (!["subscribe", "unsubscribe", "retry"].includes(body.action)) {
         throw new HttpError(400, "Choose a valid notification action.");
       }

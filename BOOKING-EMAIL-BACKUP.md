@@ -64,7 +64,15 @@ Firestore deny-by-default rule protects it against browser access.
    and no Firebase or Resend key. Use the production Pages function and
    existing service identity; no Firebase rules, indexes, or billing changes
    are required for setup. Check quotas before launch; existing usage may apply.
-5. With explicit approval, verify the sender and actual clinic Gmail receipt
+5. For an approved pre-activation test, leave `BOOKING_ALERT_EMAIL_ENABLED=false`.
+   Set `BOOKING_ALERT_EMAIL_TEST_UNTIL` to a UTC ISO timestamp less than one
+   hour ahead and apply the production configuration. While signed in as an
+   active admin on the canonical live site, go to **Settings → Booking alerts
+   → Send fictional test email**. No appointment, slot, push or retry job is
+   created. The fixed subject is `[TEST] Asher Healthcare booking email — no appointment`.
+   Repeat taps in this test window use one provider idempotency key. Remove the
+   test window after the check; enabling real email disables this test action.
+6. With explicit approval, verify the sender and actual clinic Gmail receipt
    using only fake booking details. Check both inbox/spam and signed-in
    appointment links. Verify the Pages runtime, the scheduled retry path and
    the staff delivery panel before relying on the channel. Do not replay a

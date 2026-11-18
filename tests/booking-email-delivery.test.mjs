@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   BOOKING_EMAIL_OUTBOX, bookingEmailReadiness, createBookingEmailDeliveryService, prepareBookingEmailOutbox,
+  bookingEmailTestReady, sendBookingEmailTest,
 } from "../server/notifications/email-delivery.js";
 
 const TICK = Date.parse("2026-11-18T09:00:00.000Z");
@@ -24,6 +25,43 @@ const BOOKING = {
   reason: "Private test reason should never leave database", patientId: "private-fixture-id", appointmentId: ID,
 };
 const ACCEPTED = () => Response.json({ id: "814fc7bd-180d-4c58-9caf-831fe007642d" });
+
+test("preflight is time-limited, disabled for active bookings, and sends only a fixed synthetic specimen", async () => {
+  const env = {
+    FIREBASE_PROJECT_ID: ENV.FIREBASE_PROJECT_ID, BOOKING_ALERT_RESEND_API_KEY: ENV.BOOKING_ALERT_RESEND_API_KEY,
+    BOOKING_ALERT_EMAIL_ENABLED: "false", BOOKING_ALERT_EMAIL_TEST_UNTIL: "2026-11-18T09:30:00Z",
+  };
+  const sends = [];
+  const opts = { now: () => TICK, async fetchRequest(url, request) { sends.push([url, request]); return ACCEPTED(); } };
+  for (const overrides of [
+    { BOOKING_ALERT_EMAIL_ENABLED: undefined }, { BOOKING_ALERT_EMAIL_ENABLED: "true" },
+    { BOOKING_ALERT_EMAIL_TEST_UNTIL: new Date(TICK).toISOString() }, { BOOKING_ALERT_EMAIL_TEST_UNTIL: "invalid" },
+    { BOOKING_ALERT_EMAIL_TEST_UNTIL: new Date(TICK + 3_600_001).toISOString() },
+    { BOOKING_ALERT_EMAIL_TEST_UNTIL: undefined }, { BOOKING_ALERT_RESEND_API_KEY: undefined },
+    { FIREBASE_PROJECT_ID: "asher-healthcare-qa" },
+  ]) {
+    assert.equal(bookingEmailTestReady({ ...env, ...overrides }, TICK), false);
+    assert.equal(await sendBookingEmailTest({ ...env, ...overrides }, opts), false);
+  }
+  assert.equal(sends.length, 0);
+  assert.equal(bookingEmailReadiness(env, TICK), false);
+  assert.equal(await sendBookingEmailTest(env, opts), true);
+  assert.equal(await sendBookingEmailTest(env, opts), true);
+  assert.equal(sends.length, 2);
+  const [url, request] = sends[0];
+  assert.equal(url, "https://api.resend.com/emails");
+  assert.equal(request.redirect, "manual");
+  assert.equal(request.method, "POST");
+  assert.equal(request.headers["Idempotency-Key"], sends[1][1].headers["Idempotency-Key"]);
+  assert.equal(request.body, sends[1][1].body);
+  const body = JSON.parse(request.body);
+  assert.equal(body.subject, "[TEST] Asher Healthcare booking email — no appointment");
+  assert.equal(body.from, "booking-alerts@notify.asherhealthcare.in");
+  assert.deepEqual(body.to, ["asherhealthcare100@gmail.com"]);
+  assert.match(body.text, /^TEST ONLY: Fictional details/u);
+  assert.match(body.text, /Patient: Clinic Delivery Test\nBooking mobile: 0000000000\nDoctor: Dr\. Lt Col Shafi Ahamad\nAppointment: 4 January 2030 at 5:30 PM IST/u);
+  assert.equal(await sendBookingEmailTest(env, { now: () => TICK, fetchRequest: () => new Response(null, { status: 302 }) }), false);
+});
 
 function harness({ outbox = OUTBOX, booking = BOOKING, answer = ACCEPTED, budgetMs, mutationFailure } = {}) {
   let now = TICK;

@@ -64,6 +64,7 @@ function setup({ document = null, actor = ADMIN, authError, commitError, env = E
     async commitWrites(_env, writes) { calls.push(["commit", writes]); if (commitError) throw commitError; },
     async listRecentOutbox() { calls.push(["list"]); if (listError) throw listError; return listRows; },
     async listRecentEmailOutbox() { calls.push(["list-email"]); if (emailError) throw emailError; return emailStatuses; },
+    async sendBookingEmailTest() { calls.push(["test-email"]); return !emailError; },
     async deliverPush(_env, appointmentId) { calls.push(["deliver", appointmentId]); if (deliveryError) throw deliveryError; return deliveryResult; },
     now: () => NOW,
   });
@@ -85,6 +86,7 @@ test("configuration is production-only and returns only explicitly configured ca
   assert.deepEqual(bookingAlertConfiguration(request(), ENV, NOW.getTime()), {
     emailRecipient: "asherhealthcare100@gmail.com",
     emailConfigured: false,
+    emailTestAvailable: false,
     emailPaused: true,
     pushDeliveryMethod: "cloudflare",
     pushConfigured: true,
@@ -373,6 +375,32 @@ test("email remains paused even if legacy email configuration is present", async
   assert.equal(result.pushDeliveryMethod, "cloudflare");
   assert.equal(JSON.stringify(result).includes(privateKey), false);
   assert.equal(context.calls.some(([name]) => name === "list-email"), false);
+});
+
+test("only an active admin at the live site can manually send a fixed test in its window", async () => {
+  const env = { ...EMAIL_ENV, BOOKING_ALERT_EMAIL_ENABLED: "false", BOOKING_ALERT_EMAIL_TEST_UNTIL: "2026-09-24T10:30:00Z" };
+  const action = { action: "test-email" };
+  const success = setup({ env });
+  assert.equal((await (await success.get()).json()).emailTestAvailable, true);
+  assert.deepEqual(await (await success.post(action)).json(), { testEmailAccepted: true });
+  assert.deepEqual(success.calls, [["auth"], ["auth"], ["test-email"]]);
+  for (const [options, body, req, status] of [
+    [{ env, actor: { ...ADMIN, role: "reception" } }, action, {}, 403],
+    [{ env, actor: { ...ADMIN, role: "doctor" } }, action, {}, 403],
+    [{ env, authError: new HttpError(401, "Sign in.") }, action, {}, 401],
+    [{ env: { ...env, BOOKING_ALERT_EMAIL_ENABLED: "true" } }, action, {}, 403],
+    [{ env }, action, { urlOrigin: "https://feature.example.test", origin: "https://feature.example.test" }, 403],
+    [{ env }, action, { origin: null }, 403],
+    [{ env }, { ...action, to: "other@invalid.example" }, {}, 400],
+    [{ env }, { ...action, appointmentId: "record" }, {}, 400],
+    [{ env }, { ...action, subject: "changed" }, {}, 400],
+  ]) {
+    const ctx = setup(options);
+    assert.equal((await ctx.post(body, req)).status, status);
+    assert.ok(ctx.calls.every(([key]) => key === "auth"));
+  }
+  const declined = setup({ env, emailError: new Error("private detail") });
+  assert.equal((await declined.post(action)).status, 503);
 });
 
 test("email configuration and projected status totals work when Android alerts are disabled", async () => {

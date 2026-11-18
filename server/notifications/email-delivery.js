@@ -32,8 +32,7 @@ function timestamp(value) {
   return value instanceof Date ? value.getTime() : typeof value === "string" ? Date.parse(value) : NaN;
 }
 
-function activationTime(env) {
-  const value = env?.BOOKING_ALERT_EMAIL_ACTIVATED_AT;
+function utcTime(value) {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(value)) return NaN;
   const time = Date.parse(value);
   if (!Number.isFinite(time)) return NaN;
@@ -41,12 +40,23 @@ function activationTime(env) {
   return time > 0 && (value === iso || value === iso.replace(/\.000Z$/u, "Z")) ? time : NaN;
 }
 
+function activationTime(env) { return utcTime(env?.BOOKING_ALERT_EMAIL_ACTIVATED_AT); }
+function validSendingKey(env) {
+  const key = env?.BOOKING_ALERT_RESEND_API_KEY;
+  return typeof key === "string" && KEY.test(key) && !PLACEHOLDER.test(key);
+}
+
+export function bookingEmailTestReady(env, now = Date.now()) {
+  const until = utcTime(env?.BOOKING_ALERT_EMAIL_TEST_UNTIL);
+  return env?.FIREBASE_PROJECT_ID === PROJECT && env.BOOKING_ALERT_EMAIL_ENABLED === "false"
+    && validSendingKey(env) && Number.isFinite(now) && until > now && until - now <= 3_600_000;
+}
+
 export function bookingEmailReadiness(env, now = Date.now()) {
   return env?.FIREBASE_PROJECT_ID === PROJECT
     && env.BOOKING_ALERT_EMAIL_ENABLED === "true"
     && Number.isFinite(now) && activationTime(env) <= now
-    && typeof env.BOOKING_ALERT_RESEND_API_KEY === "string"
-    && KEY.test(env.BOOKING_ALERT_RESEND_API_KEY) && !PLACEHOLDER.test(env.BOOKING_ALERT_RESEND_API_KEY)
+    && validSendingKey(env)
     && typeof env.BOOKING_ALERT_EMAIL_SWEEP_SECRET === "string"
     && SWEEP_SECRET.test(env.BOOKING_ALERT_EMAIL_SWEEP_SECRET);
 }
@@ -130,7 +140,7 @@ function genuineWebsiteRequest(record, appointment, activation) {
     && appointment.privacyAccepted === true && ACTIVE_BOOKING_STATES.has(appointment.status);
 }
 
-function safeEmailBody(appointment) {
+function safeEmailBody(appointment, test = false) {
   // Plain text only. Strip controls/formatting and keep common name punctuation.
   // Spacing dots within words prevents a name value from creating a second URL.
   const name = typeof appointment.patientName === "string" ? appointment.patientName.slice(0, 160).normalize("NFKC")
@@ -158,9 +168,10 @@ function safeEmailBody(appointment) {
   return JSON.stringify({
     from: "booking-alerts@notify.asherhealthcare.in",
     to: [BOOKING_ALERT_EMAIL_RECIPIENT],
-    subject: "Asher Healthcare — new website appointment request",
+    subject: test ? "[TEST] Asher Healthcare booking email — no appointment" : "Asher Healthcare — new website appointment request",
     text: [
-      "A new appointment request was submitted on the Asher Healthcare website.", "",
+      test ? "TEST ONLY: Fictional details. No appointment or slot was created. No action is needed."
+        : "A new appointment request was submitted on the Asher Healthcare website.", "",
       `Patient: ${safeName}`, `Booking mobile: ${safePhone}`,
       `Doctor: ${doctor}`, `Appointment: ${formatted}`, "",
       `Sign in to review it: ${ORIGIN}/admin/appointments`,
@@ -224,6 +235,21 @@ async function sendEmail(fetchRequest, apiKey, key, body, signal, now) {
     retryable: status === 408 || status === 409 || status === 425 || status === 429 || (status >= 500 && status <= 599),
     retryAfter: retryAfter(response.headers.get("Retry-After"), now()),
   };
+}
+
+// Synthetic-only preflight: intentionally no Firestore dependency or input fields.
+export async function sendBookingEmailTest(env, { now = Date.now, fetchRequest = fetch } = {}) {
+  if (!bookingEmailTestReady(env, now())) return false;
+  const body = safeEmailBody({
+    patientName: "Clinic Delivery Test", phone: "0000000000",
+    doctorId: "pediatrics", preferredDate: "2030-01-04", preferredTime: "17:30",
+  }, true);
+  const key = `asher-booking-email-test-v1/${utcTime(env.BOOKING_ALERT_EMAIL_TEST_UNTIL)}`;
+  const timeout = deadline(now, PROVIDER_BUDGET_MS);
+  try {
+    const response = await timeout.run(() => sendEmail(fetchRequest, env.BOOKING_ALERT_RESEND_API_KEY, key, body, timeout.signal, now));
+    return response.accepted === true;
+  } catch { return false; } finally { timeout.close(); }
 }
 
 function failurePatch(sent, claimed, tick) {

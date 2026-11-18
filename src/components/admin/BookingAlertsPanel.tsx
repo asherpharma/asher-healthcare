@@ -9,6 +9,7 @@ type AlertSetup = {
   enabled: boolean;
   emailConfigured?: boolean;
   emailRecipient?: string;
+  emailTestAvailable?: boolean;
   emailDeliverySummary?: {
     available: boolean;
     limit: number;
@@ -182,6 +183,18 @@ function AdminBookingAlerts() {
     } finally { setBusy(false); }
   }
 
+  async function sendTestEmail() {
+    if (!setup?.emailTestAvailable) return;
+    setBusy(true); setNotice(""); setError("");
+    try {
+      const result = await api({ action: "test-email" });
+      if (result.testEmailAccepted !== true) throw new Error("Email service acceptance was not confirmed.");
+      setNotice("The email service accepted the test. Check the clinic inbox and Spam for “[TEST] Asher Healthcare booking email — no appointment”. No slot was booked.");
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Could not confirm the test email.");
+    } finally { setBusy(false); }
+  }
+
   return (
     <section id="booking-alerts" aria-labelledby="booking-alerts-title" className="scroll-mt-24 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200 sm:p-7">
       <div className="flex items-start gap-3"><BellRing className="mt-1 shrink-0 text-[#A8864A]" size={24} /><div>
@@ -194,6 +207,7 @@ function AdminBookingAlerts() {
           <Mail size={20} className="text-[#233A59]" />
           <h3 className="mt-3 font-bold text-[#233A59]">Email alerts{setup ? (setup.emailConfigured ? " · Configured" : " · Setup needed") : ""}</h3>
           {setup?.emailRecipient && <p className="mt-2 break-all text-sm text-slate-600">Clinic inbox: {setup.emailRecipient}</p>}
+          {setup?.emailTestAvailable && <button type="button" className={`mt-3 ${buttonClass}`} disabled={busy} onClick={() => void sendTestEmail()}>Send fictional test email</button>}
           {!setup ? <p className="mt-2 text-sm text-slate-600">{busy ? "Checking email settings…" : "Email settings are unavailable. Refresh status to try again."}</p>
             : !setup.emailConfigured ? <p className="mt-2 text-sm text-slate-600">Emails are not active here. Android alerts do not depend on email. Preview bookings never send alerts.</p>
               : <>
