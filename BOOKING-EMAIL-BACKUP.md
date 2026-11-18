@@ -15,7 +15,7 @@ Preview, QA, reception, declined form submissions and slot conflicts never
 send an alert. Activation does not send for old bookings.
 
 The only email destination is `asherhealthcare100@gmail.com`; the sender is
-`booking-alerts@notify.asherhealthcare.in`. The subject is generic. The body
+`booking-alerts@bookings.asherhealthcare.in`. The subject is generic. The body
 includes the patient’s name, booking mobile number, assigned doctor and
 appointment date/time in India time, plus a link to the signed-in appointments
 desk. The request is not itself staff confirmation. No reason for visit,
@@ -42,10 +42,11 @@ Firestore deny-by-default rule protects it against browser access.
    that. Check the clinic's obligations and provider terms before enabling
    detailed email. If this setup is not suitable, keep patient identifiers
    in the signed-in clinic portal and use a link-only alert instead.
-2. Recheck `notify.asherhealthcare.in` in Resend. It was previously verified.
-   Confirm outbound sender verification and both open and click tracking off.
-   Preserve DNS, receiving email and existing records; no new paid plan is
-   part of this change.
+2. Verify `bookings.asherhealthcare.in` for outbound sending in the clinic's
+   current Resend team. Add only the required DNS records for that subdomain;
+   preserve existing DNS and receiving email. Confirm the new domain shows
+   verified and both open and click tracking are off before testing. No new
+   paid plan is part of this change.
 3. After release approval, stage the website with email off. Keep all new
    configuration production-only. Use a sending-only Resend key restricted to
    the verified domain, and a separate random 32-byte sweep secret. Paste keys

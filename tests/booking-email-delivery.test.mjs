@@ -56,7 +56,7 @@ test("preflight is time-limited, disabled for active bookings, and sends only a 
   assert.equal(request.body, sends[1][1].body);
   const body = JSON.parse(request.body);
   assert.equal(body.subject, "[TEST] Asher Healthcare booking email — no appointment");
-  assert.equal(body.from, "booking-alerts@notify.asherhealthcare.in");
+  assert.equal(body.from, "booking-alerts@bookings.asherhealthcare.in");
   assert.deepEqual(body.to, ["asherhealthcare100@gmail.com"]);
   assert.match(body.text, /^TEST ONLY: Fictional details/u);
   assert.match(body.text, /Patient: Clinic Delivery Test\nBooking mobile: 0000000000\nDoctor: Dr\. Lt Col Shafi Ahamad\nAppointment: 4 January 2030 at 5:30 PM IST/u);
@@ -155,7 +155,7 @@ test("on an active saved request, sends only the approved booking details to the
   assert.match(headers["Idempotency-Key"], /^asher-pages-booking-email-v1\/[a-f0-9]{64}$/u);
   assert.ok(!headers["Idempotency-Key"].includes(ID));
   assert.deepEqual(JSON.parse(body), {
-    from: "booking-alerts@notify.asherhealthcare.in", to: ["asherhealthcare100@gmail.com"],
+    from: "booking-alerts@bookings.asherhealthcare.in", to: ["asherhealthcare100@gmail.com"],
     subject: "Asher Healthcare — new website appointment request",
     text: "A new appointment request was submitted on the Asher Healthcare website.\n\nPatient: Maya D’Costa Example. test\nBooking mobile: +910000001234\nDoctor: Dr. Lt Col Shafi Ahamad\nAppointment: 19 November 2026 at 5:30 PM IST (India time)\n\nSign in to review it: https://asherhealthcare.in/admin/appointments",
   });

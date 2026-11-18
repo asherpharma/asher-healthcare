@@ -166,7 +166,7 @@ function safeEmailBody(appointment, test = false) {
   // Keep the format stable for all in-flight jobs. The payload digest is pinned
   // internally to fail closed if the immutable provider body would change.
   return JSON.stringify({
-    from: "booking-alerts@notify.asherhealthcare.in",
+    from: "booking-alerts@bookings.asherhealthcare.in",
     to: [BOOKING_ALERT_EMAIL_RECIPIENT],
     subject: test ? "[TEST] Asher Healthcare booking email — no appointment" : "Asher Healthcare — new website appointment request",
     text: [
