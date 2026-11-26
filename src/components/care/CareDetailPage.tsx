@@ -56,6 +56,17 @@ export default function CareDetailPage({ journey }: { journey: CareJourney }) {
                 <span><Clock3 /> {journey.appointmentHours}</span>
                 <span><Stethoscope /> {journey.doctorRole}</span>
               </div>
+              {journey.id === "pediatrics" && (
+                <a
+                  className={styles.visitShortcut}
+                  href={clinicVisit.directionsHref}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <MapPin aria-hidden="true" />
+                  <span>RK Hegde Nagar · Thanisandra Main Road — <u>Directions</u></span>
+                </a>
+              )}
             </div>
 
             <div>
