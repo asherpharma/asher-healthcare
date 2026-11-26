@@ -120,6 +120,26 @@ test("three visible care choices preserve specialist booking and general-care ph
   for (const link of descendants(tree, "a")) assert.equal(link.props.onClick, undefined, "care detail and phone links must stay native");
 });
 
+test("only pediatrics repeats the clinic map link beside the hero hours", async () => {
+  const Detail = await loadPublicComponent("src/components/care/CareDetailPage.tsx", {}, {
+    "./CareDetailPage.module.css": { default: {} },
+    "@/components/layout/Navbar": { default: "Navbar" },
+    "@/components/layout/Footer": { default: "Footer" },
+    "@/lib/general-care": { clinicVisit },
+  });
+  for (const id of ["pediatrics", "obg"]) {
+    const tree = Detail({ journey: { id, reasons: [], preparation: [] } });
+    const heroCopy = descendants(tree, "div").find(n => n.props.className === "care-detail-hero-copy");
+    const directions = node => descendants(node, "a").filter(a => a.props.href === clinicVisit.directionsHref);
+    assert.equal(directions(heroCopy).length, id === "pediatrics" ? 1 : 0);
+    assert.equal(directions(tree).length, id === "pediatrics" ? 2 : 1);
+    for (const a of directions(tree)) {
+      assert.equal(a.props.onClick, undefined);
+      assert.equal(a.props.rel, "noreferrer");
+    }
+  }
+});
+
 test("doctor cards pair the correct clinician, hours and booking selection", async () => {
   const Doctors = await loadPublicComponent("src/components/home/Doctors.tsx");
   const cards = descendants(Doctors(), "article");

@@ -157,6 +157,21 @@
 }
 .directionsLink svg { width: 16px; height: 16px; }
 
+.visitShortcut {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 44px;
+  max-width: 100%;
+  color: var(--navy);
+  font-size: .875rem;
+  font-weight: 650;
+  line-height: 1.4;
+  text-underline-offset: .15em;
+}
+.visitShortcut svg { flex: 0 0 17px; width: 17px; height: 17px; color: var(--teal); }
+.visitShortcut:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+
 @media (max-width: 800px) { .doctorPortrait { min-height: 520px; } }
 @media (max-width: 540px) {
   .doctorPortrait { min-height: 400px; border-radius: 120px 120px 22px 22px; }
